@@ -36,7 +36,7 @@ Responde SOLO con el JSON, sin explicaciones adicionales. Si no puedes extraer a
 
   try {
     const { text } = await generateText({
-      model: getModel(provider, model, apiKey),
+      model: getModel(provider, model, apiKey) as any,
       messages: [
         {
           role: "user",

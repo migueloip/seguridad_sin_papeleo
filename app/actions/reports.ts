@@ -1,9 +1,12 @@
 "use server"
 
 import { sql } from "@/lib/db"
+import type { Report as DbReport } from "@/lib/db"
 import { generateText } from "ai"
+import type { LanguageModelV1 } from "ai"
 import { getSetting } from "./settings"
 import { getModel } from "@/lib/ai"
+import { getCurrentUserId } from "@/lib/auth"
 
 export interface ReportData {
   period: string
@@ -53,6 +56,19 @@ export interface GeneratedReportSummary {
 }
 
 export async function getReportData(period: string): Promise<ReportData> {
+  const userId = await getCurrentUserId()
+  if (!userId) {
+    return {
+      period,
+      dateFrom: "",
+      dateTo: "",
+      documents: { total: 0, valid: 0, expiring: 0, expired: 0 },
+      findings: { total: 0, open: 0, resolved: 0, critical: 0, high: 0, medium: 0, low: 0 },
+      workers: { total: 0, withCompleteDocs: 0, withExpiredDocs: 0 },
+      recentFindings: [],
+      expiringDocuments: [],
+    }
+  }
   let dateFrom: Date
   let dateTo = new Date()
 
@@ -76,13 +92,13 @@ export async function getReportData(period: string): Promise<ReportData> {
   }
 
   const [documentsResult, findingsResult, workersResult, recentFindingsResult, expiringDocsResult] = await Promise.all([
-    sql`SELECT 
+    sql<{ total: number; valid: number; expiring: number; expired: number }>`SELECT 
           COUNT(*) as total,
           COUNT(*) FILTER (WHERE status = 'valid') as valid,
           COUNT(*) FILTER (WHERE status = 'expiring') as expiring,
           COUNT(*) FILTER (WHERE status = 'expired') as expired
-        FROM documents`,
-    sql`SELECT 
+        FROM documents WHERE user_id = ${userId}`,
+    sql<{ total: number; open: number; resolved: number; critical: number; high: number; medium: number; low: number }>`SELECT 
           COUNT(*) as total,
           COUNT(*) FILTER (WHERE status = 'open') as open,
           COUNT(*) FILTER (WHERE status = 'resolved') as resolved,
@@ -91,23 +107,24 @@ export async function getReportData(period: string): Promise<ReportData> {
           COUNT(*) FILTER (WHERE severity = 'medium') as medium,
           COUNT(*) FILTER (WHERE severity = 'low') as low
         FROM findings
-        WHERE created_at >= ${dateFrom.toISOString()} AND created_at <= ${dateTo.toISOString()}`,
-    sql`SELECT 
+        WHERE user_id = ${userId} AND created_at >= ${dateFrom} AND created_at <= ${dateTo}`,
+    sql<{ total: number; with_complete_docs: number; with_expired_docs: number }>`SELECT 
           COUNT(*) as total,
           COUNT(DISTINCT w.id) FILTER (WHERE d.status = 'valid') as with_complete_docs,
           COUNT(DISTINCT w.id) FILTER (WHERE d.status = 'expired') as with_expired_docs
         FROM workers w
-        LEFT JOIN documents d ON w.id = d.worker_id`,
-    sql`SELECT title, severity, status, location, created_at
+        LEFT JOIN documents d ON w.id = d.worker_id
+        WHERE w.user_id = ${userId}`,
+    sql<{ title: string; severity: string; status: string; location: string; created_at: string }>`SELECT title, severity, status, location, created_at
         FROM findings
-        WHERE created_at >= ${dateFrom.toISOString()} AND created_at <= ${dateTo.toISOString()}
+        WHERE user_id = ${userId} AND created_at >= ${dateFrom} AND created_at <= ${dateTo}
         ORDER BY created_at DESC
         LIMIT 10`,
-    sql`SELECT CONCAT(w.first_name, ' ', w.last_name) as worker_name, dt.name as document_type, d.expiry_date
+    sql<{ worker_name: string; document_type: string; expiry_date: string }>`SELECT CONCAT(w.first_name, ' ', w.last_name) as worker_name, dt.name as document_type, d.expiry_date
         FROM documents d
         JOIN workers w ON d.worker_id = w.id
         LEFT JOIN document_types dt ON d.document_type_id = dt.id
-        WHERE d.expiry_date <= CURRENT_DATE + INTERVAL '30 days' AND d.expiry_date >= CURRENT_DATE
+        WHERE d.user_id = ${userId} AND d.expiry_date <= CURRENT_DATE + INTERVAL '30 days' AND d.expiry_date >= CURRENT_DATE
         ORDER BY d.expiry_date ASC
         LIMIT 10`,
   ])
@@ -145,6 +162,7 @@ export async function generateAIReport(
   reportType: string,
   data: ReportData,
 ): Promise<{ content: string; title: string; id: number }> {
+  const userId = await getCurrentUserId()
   const apiKey = await getSetting("ai_api_key")
   const aiModel = (await getSetting("ai_model")) || "gpt-4o-mini"
   const aiProvider = (await getSetting("ai_provider")) || "openai"
@@ -202,15 +220,18 @@ Genera un informe estructurado con:
 El informe debe ser profesional, conciso y orientado a la accion. Usa formato Markdown.`
 
   try {
-    const { text } = await generateText({ model: getModel(aiProvider, aiModel, apiKey), prompt })
+    const model = getModel(aiProvider, aiModel, apiKey) as LanguageModelV1
+    const { text } = await generateText({ model, prompt })
 
-    const inserted = await sql`
+    const inserted = await sql<{ id: number }>`
       INSERT INTO reports (report_type, title, date_from, date_to, content, generated_by)
-      VALUES (${reportType}, ${title}, ${data.dateFrom}, ${data.dateTo}, ${JSON.stringify({ markdown: text })}, 'Sistema')
+      VALUES (${reportType}, ${title}, ${new Date(data.dateFrom)}, ${new Date(data.dateTo)}, ${JSON.stringify({ markdown: text })}::jsonb, 'Sistema')
       RETURNING id
     `
+    const idNum = Number(inserted[0].id)
+    await sql`UPDATE reports SET user_id = ${userId} WHERE id = ${idNum}`
 
-    return { content: text, title, id: Number(inserted[0].id) }
+    return { content: text, title, id: idNum }
   } catch (error) {
     console.error("Error generating AI report:", error)
     throw new Error("Error al generar el informe con IA. Verifica tu API Key en Configuracion.")
@@ -218,16 +239,19 @@ El informe debe ser profesional, conciso y orientado a la accion. Usa formato Ma
 }
 
 export async function getGeneratedReports() {
-  const result = await sql`
+  const userId = await getCurrentUserId()
+  const result = await sql<GeneratedReportSummary>`
     SELECT id, report_type, title, date_from, date_to, created_at
     FROM reports
+    WHERE user_id = ${userId}
     ORDER BY created_at DESC
     LIMIT 20
   `
-  return result as GeneratedReportSummary[]
+  return result
 }
 
 export async function getReportById(id: number) {
-  const result = await sql`SELECT * FROM reports WHERE id = ${id}`
+  const userId = await getCurrentUserId()
+  const result = await sql<DbReport>`SELECT * FROM reports WHERE id = ${id} AND user_id = ${userId}`
   return result[0]
 }

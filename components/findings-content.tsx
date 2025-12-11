@@ -131,7 +131,7 @@ export function FindingsContent({ initialFindings }: { initialFindings: Finding[
         due_date: newFinding.due_date || undefined,
       })
 
-      setFindings((prev) => [{ ...created, project_name: null }, ...prev])
+      setFindings((prev) => [{ ...(created as any), project_name: null } as any, ...prev])
       setNewFinding({
         title: "",
         description: "",

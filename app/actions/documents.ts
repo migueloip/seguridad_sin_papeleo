@@ -1,31 +1,38 @@
 "use server"
 
 import { sql } from "@/lib/db"
+import type { Worker, DocumentType, Document } from "@/lib/db"
+import { getCurrentUserId } from "@/lib/auth"
 import { revalidatePath } from "next/cache"
 
-export async function getDocuments(workerId?: number) {
+export async function getDocuments(workerId?: number): Promise<
+  Array<Document & { first_name: string; last_name: string; rut: string | null; document_type: string }>
+> {
+  const userId = await getCurrentUserId()
+  if (!userId) return []
   if (workerId) {
-    return sql`
+    return sql<Document & { first_name: string; last_name: string; rut: string | null; document_type: string }>`
       SELECT d.*, w.first_name, w.last_name, w.rut, dt.name as document_type
       FROM documents d
       JOIN workers w ON d.worker_id = w.id
       LEFT JOIN document_types dt ON d.document_type_id = dt.id
-      WHERE d.worker_id = ${workerId}
+      WHERE d.worker_id = ${workerId} AND d.user_id = ${userId}
       ORDER BY d.expiry_date ASC
     `
   }
 
-  return sql`
+  return sql<Document & { first_name: string; last_name: string; rut: string | null; document_type: string }>`
     SELECT d.*, w.first_name, w.last_name, w.rut, dt.name as document_type
     FROM documents d
     JOIN workers w ON d.worker_id = w.id
     LEFT JOIN document_types dt ON d.document_type_id = dt.id
+    WHERE d.user_id = ${userId}
     ORDER BY d.expiry_date ASC
   `
 }
 
-export async function getDocumentTypes() {
-  return sql`SELECT * FROM document_types ORDER BY name`
+export async function getDocumentTypes(): Promise<DocumentType[]> {
+  return sql<DocumentType>`SELECT * FROM document_types ORDER BY name`
 }
 
 export async function createDocument(data: {
@@ -36,7 +43,7 @@ export async function createDocument(data: {
   issue_date?: string
   expiry_date?: string
   extracted_data?: Record<string, unknown>
-}) {
+}): Promise<Document> {
   // Calculate status based on expiry date
   let status = "valid"
   if (data.expiry_date) {
@@ -51,10 +58,11 @@ export async function createDocument(data: {
     }
   }
 
-  const result = await sql`
-    INSERT INTO documents (worker_id, document_type_id, file_name, file_url, issue_date, expiry_date, status, extracted_data)
+  const userId = await getCurrentUserId()
+  const result = await sql<Document>`
+    INSERT INTO documents (worker_id, document_type_id, file_name, file_url, issue_date, expiry_date, status, extracted_data, user_id)
     VALUES (${data.worker_id}, ${data.document_type_id}, ${data.file_name}, ${data.file_url || null},
-            ${data.issue_date || null}, ${data.expiry_date || null}, ${status}, ${JSON.stringify(data.extracted_data) || null})
+            ${data.issue_date || null}, ${data.expiry_date || null}, ${status}, ${JSON.stringify(data.extracted_data) || null}, ${userId})
     RETURNING *
   `
   revalidatePath("/documentos")
@@ -69,10 +77,11 @@ export async function findOrCreateWorkerByRut(data: {
   last_name: string
   company?: string
   role?: string
-}) {
+}): Promise<Worker> {
   // First try to find existing worker
-  const existing = await sql`
-    SELECT * FROM workers WHERE rut = ${data.rut} LIMIT 1
+  const userId = await getCurrentUserId()
+  const existing = await sql<Worker>`
+    SELECT * FROM workers WHERE rut = ${data.rut} AND user_id = ${userId} LIMIT 1
   `
 
   if (existing.length > 0) {
@@ -80,17 +89,17 @@ export async function findOrCreateWorkerByRut(data: {
   }
 
   // Create new worker
-  const result = await sql`
-    INSERT INTO workers (rut, first_name, last_name, company, role)
-    VALUES (${data.rut}, ${data.first_name}, ${data.last_name}, ${data.company || null}, ${data.role || null})
+  const result = await sql<Worker>`
+    INSERT INTO workers (rut, first_name, last_name, company, role, user_id)
+    VALUES (${data.rut}, ${data.first_name}, ${data.last_name}, ${data.company || null}, ${data.role || null}, ${userId})
     RETURNING *
   `
   revalidatePath("/personal")
   return result[0]
 }
 
-export async function findDocumentTypeByName(name: string) {
-  const result = await sql`
+export async function findDocumentTypeByName(name: string): Promise<DocumentType | null> {
+  const result = await sql<DocumentType>`
     SELECT * FROM document_types 
     WHERE LOWER(name) LIKE ${`%${name.toLowerCase()}%`}
     LIMIT 1
@@ -99,6 +108,7 @@ export async function findDocumentTypeByName(name: string) {
 }
 
 export async function updateDocumentStatus() {
+  const userId = await getCurrentUserId()
   await sql`
     UPDATE documents
     SET status = CASE
@@ -108,13 +118,14 @@ export async function updateDocumentStatus() {
       ELSE 'valid'
     END,
     updated_at = CURRENT_TIMESTAMP
-    WHERE expiry_date IS NOT NULL
+    WHERE expiry_date IS NOT NULL AND user_id = ${userId}
   `
   revalidatePath("/documentos")
 }
 
 export async function deleteDocument(id: number) {
-  await sql`DELETE FROM documents WHERE id = ${id}`
+  const userId = await getCurrentUserId()
+  await sql`DELETE FROM documents WHERE id = ${id} AND user_id = ${userId}`
   revalidatePath("/documentos")
 }
 
@@ -131,6 +142,7 @@ export async function updateDocument(
   }>,
 ) {
   // Recalculate status if expiry_date provided
+  const userId = await getCurrentUserId()
   const result = await sql`
     UPDATE documents
     SET 
@@ -148,7 +160,7 @@ export async function updateDocument(
       END,
       extracted_data = COALESCE(${data.extracted_data ? JSON.stringify(data.extracted_data) : null}, extracted_data),
       updated_at = CURRENT_TIMESTAMP
-    WHERE id = ${id}
+    WHERE id = ${id} AND user_id = ${userId}
     RETURNING *
   `
   revalidatePath("/documentos")

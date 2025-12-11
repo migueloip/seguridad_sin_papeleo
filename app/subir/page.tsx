@@ -1,13 +1,12 @@
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { UploadContent } from "@/components/upload-content"
-import { getDocumentTypes } from "@/app/actions/documents"
+import { getSession } from "@/lib/auth"
 
 export default async function UploadPage() {
-  const documentTypes = await getDocumentTypes()
-
+  const session = await getSession()
   return (
-    <DashboardLayout>
-      <UploadContent documentTypes={documentTypes} />
+    <DashboardLayout user={session as any}>
+      <UploadContent />
     </DashboardLayout>
   )
 }

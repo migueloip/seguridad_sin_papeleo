@@ -1,9 +1,13 @@
 "use server"
 
 import { sql } from "@/lib/db"
+import type { Worker } from "@/lib/db"
+import { getCurrentUserId } from "@/lib/auth"
 import { revalidatePath } from "next/cache"
 
 export async function getWorkers(projectId?: number) {
+  const userId = await getCurrentUserId()
+  if (!userId) return []
   if (projectId) {
     return sql`
       SELECT w.*, p.name as project_name,
@@ -12,7 +16,7 @@ export async function getWorkers(projectId?: number) {
         (SELECT COUNT(*) FROM documents d WHERE d.worker_id = w.id AND d.status = 'expired') as expired_docs
       FROM workers w
       LEFT JOIN projects p ON w.project_id = p.id
-      WHERE w.project_id = ${projectId}
+      WHERE w.project_id = ${projectId} AND w.user_id = ${userId}
       ORDER BY w.last_name, w.first_name
     `
   }
@@ -24,16 +28,18 @@ export async function getWorkers(projectId?: number) {
       (SELECT COUNT(*) FROM documents d WHERE d.worker_id = w.id AND d.status = 'expired') as expired_docs
     FROM workers w
     LEFT JOIN projects p ON w.project_id = p.id
+    WHERE w.user_id = ${userId}
     ORDER BY w.last_name, w.first_name
   `
 }
 
-export async function getWorkerById(id: number) {
-  const result = await sql`
+export async function getWorkerById(id: number): Promise<Worker | undefined> {
+  const userId = await getCurrentUserId()
+  const result = await sql<Worker>`
     SELECT w.*, p.name as project_name
     FROM workers w
     LEFT JOIN projects p ON w.project_id = p.id
-    WHERE w.id = ${id}
+    WHERE w.id = ${id} AND w.user_id = ${userId}
   `
   return result[0]
 }
@@ -48,10 +54,11 @@ export async function createWorker(data: {
   email?: string
   project_id?: number
 }) {
+  const userId = await getCurrentUserId()
   const result = await sql`
-    INSERT INTO workers (rut, first_name, last_name, role, company, phone, email, project_id)
+    INSERT INTO workers (rut, first_name, last_name, role, company, phone, email, project_id, user_id)
     VALUES (${data.rut}, ${data.first_name}, ${data.last_name}, ${data.role || null}, 
-            ${data.company || null}, ${data.phone || null}, ${data.email || null}, ${data.project_id || null})
+            ${data.company || null}, ${data.phone || null}, ${data.email || null}, ${data.project_id || null}, ${userId})
     RETURNING *
   `
   revalidatePath("/personal")
@@ -73,6 +80,7 @@ export async function updateWorker(
     status: string
   }>,
 ) {
+  const userId = await getCurrentUserId()
   const result = await sql`
     UPDATE workers
     SET 
@@ -86,7 +94,7 @@ export async function updateWorker(
       project_id = COALESCE(${data.project_id || null}, project_id),
       status = COALESCE(${data.status || null}, status),
       updated_at = CURRENT_TIMESTAMP
-    WHERE id = ${id}
+    WHERE id = ${id} AND user_id = ${userId}
     RETURNING *
   `
   revalidatePath("/personal")
@@ -94,6 +102,7 @@ export async function updateWorker(
 }
 
 export async function deleteWorker(id: number) {
-  await sql`DELETE FROM workers WHERE id = ${id}`
+  const userId = await getCurrentUserId()
+  await sql`DELETE FROM workers WHERE id = ${id} AND user_id = ${userId}`
   revalidatePath("/personal")
 }

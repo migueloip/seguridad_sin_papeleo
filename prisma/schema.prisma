@@ -1,0 +1,227 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            Int       @id @default(autoincrement())
+  email         String    @unique
+  name          String?
+  password_hash String
+  role          String    @default("user")
+  created_at    DateTime  @default(now())
+  sessions      Session[]
+  projects      Project[]
+  workers       Worker[]
+  documents     Document[]
+  findings      Finding[]
+  completed     CompletedChecklist[]
+  reports       Report[]
+  checklistCategories ChecklistCategory[]
+  checklistTemplates  ChecklistTemplate[]
+
+  @@map("users")
+}
+
+model Session {
+  id         Int      @id @default(autoincrement())
+  user_id    Int
+  token      String   @unique
+  created_at DateTime @default(now())
+  expires_at DateTime
+  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model Project {
+  id         Int       @id @default(autoincrement())
+  user_id    Int?
+  name       String
+  location   String?
+  client     String?
+  start_date DateTime?
+  end_date   DateTime?
+  status     String    @default("active")
+  created_at DateTime  @default(now())
+  updated_at DateTime  @default(now())
+  user       User?     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  workers    Worker[]
+  findings   Finding[]
+  reports    Report[]
+  completed  CompletedChecklist[]
+
+  @@map("projects")
+}
+
+model Worker {
+  id          Int       @id @default(autoincrement())
+  user_id     Int?
+  rut         String    @unique
+  first_name  String
+  last_name   String
+  role        String?
+  company     String?
+  phone       String?
+  email       String?
+  project_id  Int?
+  status      String    @default("active")
+  created_at  DateTime  @default(now())
+  updated_at  DateTime  @default(now())
+  user        User?     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  project     Project?  @relation(fields: [project_id], references: [id], onDelete: SetNull)
+  documents   Document[]
+
+  @@map("workers")
+}
+
+model DocumentType {
+  id            Int      @id @default(autoincrement())
+  name          String
+  description   String?
+  validity_days Int?
+  is_mandatory  Boolean  @default(false)
+  created_at    DateTime @default(now())
+  documents     Document[]
+
+  @@map("document_types")
+}
+
+model Document {
+  id               Int       @id @default(autoincrement())
+  user_id          Int?
+  worker_id        Int
+  document_type_id Int?
+  file_name        String
+  file_url         String?
+  issue_date       DateTime?
+  expiry_date      DateTime?
+  status           String
+  extracted_data   Json?
+  created_at       DateTime  @default(now())
+  updated_at       DateTime  @default(now())
+  user             User?     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  worker           Worker    @relation(fields: [worker_id], references: [id], onDelete: Cascade)
+  document_type    DocumentType? @relation(fields: [document_type_id], references: [id], onDelete: SetNull)
+
+  @@map("documents")
+}
+
+model ChecklistCategory {
+  id          Int      @id @default(autoincrement())
+  user_id     Int?
+  name        String
+  description String?
+  created_at  DateTime @default(now())
+  user        User?    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  templates   ChecklistTemplate[]
+
+  @@map("checklist_categories")
+}
+
+model ChecklistTemplate {
+  id          Int      @id @default(autoincrement())
+  user_id     Int?
+  category_id Int?
+  name        String
+  description String?
+  items       Json
+  created_at  DateTime @default(now())
+  updated_at  DateTime @default(now())
+  user        User?    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  category    ChecklistCategory? @relation(fields: [category_id], references: [id], onDelete: SetNull)
+  completed   CompletedChecklist[]
+
+  @@map("checklist_templates")
+}
+
+model CompletedChecklist {
+  id            Int      @id @default(autoincrement())
+  user_id       Int?
+  template_id   Int?
+  project_id    Int?
+  inspector_name String?
+  location      String?
+  completed_at  DateTime @default(now())
+  responses     Json
+  notes         String?
+  status        String   @default("completed")
+  created_at    DateTime @default(now())
+  user          User?    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  template      ChecklistTemplate? @relation(fields: [template_id], references: [id], onDelete: SetNull)
+  project       Project? @relation(fields: [project_id], references: [id], onDelete: SetNull)
+  findings      Finding[]
+
+  @@map("completed_checklists")
+}
+
+model Finding {
+  id               Int      @id @default(autoincrement())
+  user_id          Int?
+  checklist_id     Int?
+  project_id       Int?
+  title            String
+  description      String?
+  severity         String
+  location         String?
+  responsible_person String?
+  due_date         DateTime?
+  resolved_at      DateTime?
+  resolution_notes String?
+  photos           Json?
+  status           String   @default("open")
+  created_at       DateTime @default(now())
+  updated_at       DateTime @default(now())
+  user             User?    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  checklist        CompletedChecklist? @relation(fields: [checklist_id], references: [id], onDelete: SetNull)
+  project          Project? @relation(fields: [project_id], references: [id], onDelete: SetNull)
+
+  @@map("findings")
+}
+
+model Report {
+  id          Int      @id @default(autoincrement())
+  user_id     Int?
+  project_id  Int?
+  report_type String
+  title       String
+  date_from   DateTime?
+  date_to     DateTime?
+  content     Json?
+  file_url    String?
+  generated_by String?
+  created_at  DateTime @default(now())
+  user        User?    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  project     Project? @relation(fields: [project_id], references: [id], onDelete: SetNull)
+
+  @@map("reports")
+}
+
+model Notification {
+  id           Int      @id @default(autoincrement())
+  type         String
+  title        String
+  message      String?
+  related_id   Int?
+  related_type String?
+  is_read      Boolean  @default(false)
+  created_at   DateTime @default(now())
+
+  @@map("notifications")
+}
+
+model Setting {
+  id          Int      @id @default(autoincrement())
+  key         String   @unique
+  value       String?
+  description String?
+  created_at  DateTime @default(now())
+  updated_at  DateTime @default(now())
+
+  @@map("settings")
+}
+

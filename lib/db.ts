@@ -1,12 +1,22 @@
-import { neon } from "@neondatabase/serverless"
+import { PrismaClient } from "@prisma/client"
 
-export const sql = neon(process.env.DATABASE_URL!, {
-  disableWarningInBrowsers: true,
+const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient }
+
+export const prisma = globalForPrisma.prisma ?? new PrismaClient({
+  log: ["error", "warn"],
 })
+
+if (!globalForPrisma.prisma) globalForPrisma.prisma = prisma
+
+export const sql = prisma.$queryRaw.bind(prisma) as unknown as <T = unknown>(
+  strings: TemplateStringsArray,
+  ...values: unknown[]
+) => Promise<T[]>
 
 // Types
 export interface Project {
   id: number
+  user_id: number
   name: string
   location: string | null
   client: string | null
@@ -19,6 +29,7 @@ export interface Project {
 
 export interface Worker {
   id: number
+  user_id: number
   rut: string
   first_name: string
   last_name: string
@@ -43,6 +54,7 @@ export interface DocumentType {
 
 export interface Document {
   id: number
+  user_id: number
   worker_id: number
   document_type_id: number | null
   file_name: string
@@ -80,6 +92,7 @@ export interface ChecklistItem {
 
 export interface CompletedChecklist {
   id: number
+  user_id: number
   template_id: number | null
   project_id: number | null
   inspector_name: string | null
@@ -93,6 +106,7 @@ export interface CompletedChecklist {
 
 export interface Finding {
   id: number
+  user_id: number
   checklist_id: number | null
   project_id: number | null
   title: string
@@ -111,6 +125,7 @@ export interface Finding {
 
 export interface Report {
   id: number
+  user_id: number
   project_id: number | null
   report_type: string
   title: string
@@ -131,4 +146,21 @@ export interface Notification {
   related_type: string | null
   is_read: boolean
   created_at: string
+}
+
+export interface User {
+  id: number
+  email: string
+  name: string | null
+  password_hash: string
+  role: string
+  created_at: string
+}
+
+export interface Session {
+  id: number
+  user_id: number
+  token: string
+  created_at: string
+  expires_at: string
 }

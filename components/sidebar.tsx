@@ -29,12 +29,13 @@ const navigation = [
 
 const secondaryNavigation = [{ name: "Configuración", href: "/configuracion", icon: Settings }]
 
-interface SidebarProps {
+interface SidebarComponentProps {
   open: boolean
   onClose: () => void
+  user?: { email: string; name?: string | null; role?: string | null }
 }
 
-export function Sidebar({ open, onClose }: SidebarProps) {
+export function Sidebar({ open, onClose, user }: SidebarComponentProps) {
   const pathname = usePathname()
 
   return (
@@ -103,7 +104,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                 Sistema
               </span>
             </div>
-            {secondaryNavigation.map((item) => {
+            {(user?.role === "admin" ? [{ name: "Admin", href: "/admin", icon: Settings }, ...secondaryNavigation] : secondaryNavigation).map((item) => {
               const isActive = pathname === item.href
               return (
                 <Link
@@ -128,11 +129,13 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           <div className="border-t border-sidebar-border p-4">
             <div className="flex items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-sidebar-accent">
-                <span className="text-sm font-medium text-sidebar-accent-foreground">JM</span>
+                <span className="text-sm font-medium text-sidebar-accent-foreground">
+                  {(user?.name || user?.email || "U").slice(0, 2).toUpperCase()}
+                </span>
               </div>
               <div className="flex-1">
-                <p className="text-sm font-medium text-sidebar-foreground">Juan Martínez</p>
-                <p className="text-xs text-sidebar-foreground/60">Prevencionista</p>
+                <p className="text-sm font-medium text-sidebar-foreground">{user?.name || user?.email}</p>
+                <p className="text-xs text-sidebar-foreground/60">{user?.role || "usuario"}</p>
               </div>
             </div>
           </div>

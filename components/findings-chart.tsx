@@ -3,14 +3,9 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts"
 
-const data = [
-  { semana: "Sem 1", abiertos: 12, cerrados: 10 },
-  { semana: "Sem 2", abiertos: 8, cerrados: 14 },
-  { semana: "Sem 3", abiertos: 15, cerrados: 11 },
-  { semana: "Sem 4", abiertos: 6, cerrados: 9 },
-]
+type WeeklyItem = { semana: string; abiertos: number; cerrados: number }
 
-export function FindingsChart() {
+export function FindingsChart({ data }: { data: WeeklyItem[] }) {
   return (
     <Card>
       <CardHeader>

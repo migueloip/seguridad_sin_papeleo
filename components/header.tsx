@@ -12,12 +12,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Badge } from "@/components/ui/badge"
+import { logout } from "@/app/actions/auth"
 
-interface HeaderProps {
+interface HeaderComponentProps {
   onMenuClick: () => void
+  user?: { email: string; name?: string | null; role?: string | null }
 }
 
-export function Header({ onMenuClick }: HeaderProps) {
+export function Header({ onMenuClick, user }: HeaderComponentProps) {
   return (
     <header className="sticky top-0 z-30 flex h-16 items-center gap-4 border-b border-border bg-card px-4 md:px-6">
       <Button variant="ghost" size="icon" className="lg:hidden" onClick={onMenuClick}>
@@ -32,7 +34,10 @@ export function Header({ onMenuClick }: HeaderProps) {
         </div>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-3">
+        <div className="hidden md:flex items-center text-sm text-muted-foreground">
+          {user?.name || user?.email}
+        </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon" className="relative">
@@ -58,6 +63,10 @@ export function Header({ onMenuClick }: HeaderProps) {
               <span className="font-medium">Nuevo checklist completado</span>
               <span className="text-xs text-muted-foreground">Inspección diaria - Sector A</span>
             </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <form action={logout}>
+              <Button variant="outline" className="w-full">Cerrar sesión</Button>
+            </form>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

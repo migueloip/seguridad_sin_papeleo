@@ -42,7 +42,7 @@ export async function extractDocumentData(base64Image: string, mimeType: string)
 
   try {
     const { text } = await generateText({
-      model: getModel(aiProvider, aiModel, apiKey),
+      model: getModel(aiProvider, aiModel, apiKey) as any,
       messages: [
         {
           role: "user",

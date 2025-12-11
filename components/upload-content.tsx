@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Progress } from "@/components/ui/progress"
 import { createDocument, findOrCreateWorkerByRut, findDocumentTypeByName } from "@/app/actions/documents"
+import { getWorkers, getWorkerById } from "@/app/actions/workers"
 import { getOcrMethod } from "@/app/actions/ocr"
 import { extractDocumentData } from "@/app/actions/document-processing"
 import { documentTypes } from "@/app/data/document-types"
@@ -36,6 +37,7 @@ interface UploadedFile {
   isEditing?: boolean
   file?: File
   error?: string
+  selectedWorkerId?: number
 }
 
 function extractDataFromText(text: string): ExtractedData {
@@ -82,6 +84,7 @@ function extractDataFromText(text: string): ExtractedData {
 export function UploadContent() {
   const [files, setFiles] = useState<UploadedFile[]>([])
   const [ocrMethod, setOcrMethod] = useState<string>("tesseract")
+  const [workers, setWorkers] = useState<Array<{ id: number; first_name: string; last_name: string; rut: string | null }>>([])
   
   // Load default OCR method from server settings
   useEffect(() => {
@@ -90,6 +93,15 @@ export function UploadContent() {
       try {
         const method = await getOcrMethod()
         if (active && method) setOcrMethod(method)
+      } catch {}
+      try {
+        const list = await getWorkers()
+        if (active && Array.isArray(list)) {
+          const casted = list as Array<{ id: number; first_name: string; last_name: string; rut: string | null }>
+          setWorkers(
+            casted.map((w) => ({ id: Number(w.id), first_name: String(w.first_name), last_name: String(w.last_name), rut: w.rut })),
+          )
+        }
       } catch {}
     })()
     return () => {
@@ -223,7 +235,18 @@ export function UploadContent() {
               ),
             )
           } catch {
-            await processWithTesseract(file, id)
+            setFiles((prev) =>
+              prev.map((f) =>
+                f.id === id
+                  ? {
+                      ...f,
+                      status: "error",
+                      error:
+                        "Error con IA: configure la API de IA en Configuración o vuelva a intentar con una imagen compatible.",
+                    }
+                  : f,
+              ),
+            )
           }
         }
         reader.readAsDataURL(file)
@@ -292,10 +315,14 @@ export function UploadContent() {
     )
   }
 
+  const updateSelectedWorker = (id: string, workerId: number | null) => {
+    setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, selectedWorkerId: workerId ?? undefined } : f)))
+  }
+
   const saveDocument = async (fileData: UploadedFile) => {
     const data = fileData.editedData || fileData.extractedData
-    if (!data?.rut || !data?.nombre) {
-      alert("Se requiere RUT y nombre para guardar el documento")
+    if (!fileData.selectedWorkerId && (!data?.rut || !data?.nombre)) {
+      alert("Seleccione un trabajador o proporcione RUT y nombre")
       return
     }
 
@@ -303,7 +330,7 @@ export function UploadContent() {
 
     try {
       let documentTypeId = 1
-      if (data.tipoDocumento) {
+      if (data?.tipoDocumento) {
         const serverDocType = await findDocumentTypeByName(data.tipoDocumento)
         if (serverDocType?.id) {
           documentTypeId = serverDocType.id
@@ -315,23 +342,29 @@ export function UploadContent() {
         }
       }
 
-      const rut = normalizeRut(data.rut!)
-      if (!isValidRut(rut)) {
-        alert("RUT inválido")
-        setFiles((prev) => prev.map((f) => (f.id === fileData.id ? { ...f, status: "completed" } : f)))
-        return
+      let workerId: number
+      if (fileData.selectedWorkerId) {
+        const existing = await getWorkerById(fileData.selectedWorkerId)
+        workerId = Number(existing?.id as number)
+      } else {
+        const rut = normalizeRut((data!.rut as string))
+        if (!isValidRut(rut)) {
+          alert("RUT inválido")
+          setFiles((prev) => prev.map((f) => (f.id === fileData.id ? { ...f, status: "completed" } : f)))
+          return
+        }
+        const nameParts = (String(data!.nombre || "")).trim().split(/\s+/)
+        const firstName = nameParts[0] || ""
+        const lastName = nameParts.slice(1).join(" ") || ""
+        const worker = await findOrCreateWorkerByRut({
+          rut,
+          first_name: firstName,
+          last_name: lastName || firstName,
+          company: (data!.empresa as string) || undefined,
+          role: (data!.cargo as string) || undefined,
+        })
+        workerId = Number(worker.id as number)
       }
-
-      const nameParts = (data.nombre || "").trim().split(/\s+/)
-      const firstName = nameParts[0] || ""
-      const lastName = nameParts.slice(1).join(" ") || ""
-      const worker = await findOrCreateWorkerByRut({
-        rut,
-        first_name: firstName,
-        last_name: lastName || firstName,
-        company: data.empresa || undefined,
-        role: data.cargo || undefined,
-      })
 
       let fileUrl: string | undefined
       if (fileData.file) {
@@ -344,13 +377,13 @@ export function UploadContent() {
       }
 
       await createDocument({
-        worker_id: worker.id,
+        worker_id: workerId,
         document_type_id: documentTypeId,
         file_name: fileData.name,
         file_url: fileUrl,
-        issue_date: normalizeDate(data.fechaEmision),
-        expiry_date: normalizeDate(data.fechaVencimiento),
-        extracted_data: (data as unknown as Record<string, unknown>),
+        issue_date: normalizeDate(((data?.fechaEmision as string) || null) as string | null),
+        expiry_date: normalizeDate(((data?.fechaVencimiento as string) || null) as string | null),
+        extracted_data: ((data || {}) as unknown as Record<string, unknown>),
       })
 
       setFiles((prev) => prev.map((f) => (f.id === fileData.id ? { ...f, status: "saved" } : f)))
@@ -522,6 +555,24 @@ export function UploadContent() {
                               onChange={(e) => updateEditedData(file.id, "nombre", e.target.value)}
                               className="mt-1 h-8"
                             />
+                          </div>
+                          <div>
+                            <Label className="text-xs">Trabajador</Label>
+                            <Select
+                              value={file.selectedWorkerId ? String(file.selectedWorkerId) : ""}
+                              onValueChange={(value) => updateSelectedWorker(file.id, value ? Number(value) : null)}
+                            >
+                              <SelectTrigger className="mt-1 h-8">
+                                <SelectValue placeholder="Seleccionar trabajador (opcional)" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {workers.map((w) => (
+                                  <SelectItem key={w.id} value={String(w.id)}>
+                                    {w.first_name} {w.last_name} {w.rut ? `(${w.rut})` : ""}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
                           </div>
                           <div>
                             <Label className="text-xs">Fecha Vencimiento</Label>

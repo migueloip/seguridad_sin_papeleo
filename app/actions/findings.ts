@@ -1,15 +1,18 @@
 "use server"
 
 import { sql } from "@/lib/db"
+import { getCurrentUserId } from "@/lib/auth"
 import { revalidatePath } from "next/cache"
 
 export async function getFindings(projectId?: number, status?: string) {
+  const userId = await getCurrentUserId()
+  if (!userId) return []
   if (projectId && status) {
     return sql`
       SELECT f.*, p.name as project_name
       FROM findings f
       LEFT JOIN projects p ON f.project_id = p.id
-      WHERE f.project_id = ${projectId} AND f.status = ${status}
+      WHERE f.project_id = ${projectId} AND f.status = ${status} AND f.user_id = ${userId}
       ORDER BY 
         CASE f.severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END,
         f.created_at DESC
@@ -21,7 +24,7 @@ export async function getFindings(projectId?: number, status?: string) {
       SELECT f.*, p.name as project_name
       FROM findings f
       LEFT JOIN projects p ON f.project_id = p.id
-      WHERE f.project_id = ${projectId}
+      WHERE f.project_id = ${projectId} AND f.user_id = ${userId}
       ORDER BY 
         CASE f.severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END,
         f.created_at DESC
@@ -33,7 +36,7 @@ export async function getFindings(projectId?: number, status?: string) {
       SELECT f.*, p.name as project_name
       FROM findings f
       LEFT JOIN projects p ON f.project_id = p.id
-      WHERE f.status = ${status}
+      WHERE f.status = ${status} AND f.user_id = ${userId}
       ORDER BY 
         CASE f.severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END,
         f.created_at DESC
@@ -44,6 +47,7 @@ export async function getFindings(projectId?: number, status?: string) {
     SELECT f.*, p.name as project_name
     FROM findings f
     LEFT JOIN projects p ON f.project_id = p.id
+    WHERE f.user_id = ${userId}
     ORDER BY 
       CASE f.severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END,
       f.created_at DESC
@@ -61,16 +65,20 @@ export async function createFinding(data: {
   due_date?: string
   photos?: string[]
 }) {
+  const userId = await getCurrentUserId()
   const result = await sql`
     INSERT INTO findings (project_id, checklist_id, title, description, severity, location, responsible_person, due_date, photos)
     VALUES (${data.project_id || null}, ${data.checklist_id || null}, ${data.title}, ${data.description || null},
             ${data.severity}, ${data.location || null}, ${data.responsible_person || null}, 
             ${data.due_date || null}, ${data.photos ? JSON.stringify(data.photos) : null})
-    RETURNING *
+    RETURNING id
   `
+  const findingId = Number(result[0].id)
+  await sql`UPDATE findings SET user_id = ${userId} WHERE id = ${findingId}`
+  const inserted = await sql`SELECT * FROM findings WHERE id = ${findingId}`
   revalidatePath("/hallazgos")
   revalidatePath("/")
-  return result[0]
+  return inserted[0]
 }
 
 export async function updateFinding(
@@ -86,6 +94,7 @@ export async function updateFinding(
     resolution_notes: string
   }>,
 ) {
+  const userId = await getCurrentUserId()
   const result = await sql`
     UPDATE findings
     SET 
@@ -99,7 +108,7 @@ export async function updateFinding(
       resolution_notes = COALESCE(${data.resolution_notes || null}, resolution_notes),
       resolved_at = CASE WHEN ${data.status || null} = 'resolved' THEN CURRENT_TIMESTAMP ELSE resolved_at END,
       updated_at = CURRENT_TIMESTAMP
-    WHERE id = ${id}
+    WHERE id = ${id} AND user_id = ${userId}
     RETURNING *
   `
   revalidatePath("/hallazgos")
@@ -108,6 +117,7 @@ export async function updateFinding(
 }
 
 export async function deleteFinding(id: number) {
-  await sql`DELETE FROM findings WHERE id = ${id}`
+  const userId = await getCurrentUserId()
+  await sql`DELETE FROM findings WHERE id = ${id} AND user_id = ${userId}`
   revalidatePath("/hallazgos")
 }

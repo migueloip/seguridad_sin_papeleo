@@ -137,12 +137,12 @@ export function PersonnelContent({ initialWorkers }: { initialWorkers: Worker[] 
 
       setWorkers((prev) => [
         {
-          ...created,
+          ...(created as any),
           valid_docs: 0,
           expiring_docs: 0,
           expired_docs: 0,
           project_name: null,
-        },
+        } as any,
         ...prev,
       ])
       setNewWorker({

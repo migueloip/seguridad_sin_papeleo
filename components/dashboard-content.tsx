@@ -24,7 +24,13 @@ interface DashboardStats {
   }>
 }
 
-export function DashboardContent({ stats }: { stats: DashboardStats }) {
+interface WeeklyFindingsItem {
+  semana: string
+  abiertos: number
+  cerrados: number
+}
+
+export function DashboardContent({ stats, weeklyFindings }: { stats: DashboardStats; weeklyFindings: WeeklyFindingsItem[] }) {
   return (
     <div className="space-y-6">
       <div>
@@ -35,7 +41,7 @@ export function DashboardContent({ stats }: { stats: DashboardStats }) {
       <KpiCards documents={stats.documents} findings={stats.findings} workers={stats.workers} />
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <FindingsChart />
+        <FindingsChart data={weeklyFindings} />
         <UpcomingExpirations expirations={stats.expiringDocs} />
       </div>
 
