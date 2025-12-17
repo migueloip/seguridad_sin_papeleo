@@ -1,5 +1,5 @@
 import { DashboardLayout } from "@/components/dashboard-layout"
-import { ReportsContent } from "@/components/reports-content"
+import ReportsContentClient from "@/components/reports-content-client"
 import { getGeneratedReports } from "@/app/actions/reports"
 import { getSession } from "@/lib/auth"
 import { redirect } from "next/navigation"
@@ -11,7 +11,7 @@ export default async function ReportsPage() {
 
   return (
     <DashboardLayout user={session as any}>
-      <ReportsContent initialReports={reports} />
+      <ReportsContentClient initialReports={reports} />
     </DashboardLayout>
   )
 }

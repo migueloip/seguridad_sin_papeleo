@@ -128,7 +128,7 @@ export async function extractChecklistFromImage(base64Image: string, mimeType: s
   items?: { items: Array<{ id?: string; text: string; checked?: boolean; hasIssue?: boolean; note?: string }> }
 }> {
   const apiKey = await getSetting("ai_api_key")
-  if (!apiKey) throw new Error("API Key de IA no configurada")
+  if (!apiKey) return {}
   const provider = "google"
   const model = (await getSetting("ai_model")) || "gemini-2.5-flash"
   const prompt =

@@ -1,6 +1,7 @@
 "use client"
 
-import { useState, useTransition } from "react"
+import { useEffect, useState, useTransition } from "react"
+import { useRouter } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -16,6 +17,7 @@ interface SettingsContentProps {
 }
 
 export function SettingsContent({ initialSettings }: SettingsContentProps) {
+  const router = useRouter()
   const [settings, setSettings] = useState<Record<string, string>>(
     initialSettings.reduce((acc, s) => ({ ...acc, [s.key]: s.value || "" }), {} as Record<string, string>),
   )
@@ -23,12 +25,18 @@ export function SettingsContent({ initialSettings }: SettingsContentProps) {
   const [saved, setSaved] = useState(false)
   const [showApiKey, setShowApiKey] = useState(false)
 
+  useEffect(() => {
+    setSettings(initialSettings.reduce((acc, s) => ({ ...acc, [s.key]: s.value || "" }), {} as Record<string, string>))
+    setSaved(false)
+  }, [initialSettings])
+
   const handleSave = () => {
     startTransition(async () => {
       const settingsArray = Object.entries(settings).map(([key, value]) => ({ key, value }))
       await updateSettings(settingsArray)
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)
+      router.refresh()
     })
   }
 

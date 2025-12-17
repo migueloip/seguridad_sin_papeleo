@@ -21,7 +21,7 @@ export interface FloorItem {
 
 export async function extractZonesFromPlan(base64Image: string, mimeType: string): Promise<{ floors: FloorItem[] }> {
   const apiKey = await getSetting("ai_api_key")
-  if (!apiKey) throw new Error("API Key de IA no configurada")
+  if (!apiKey) return { floors: [{ name: "General", zones: [] }] }
   const provider = "google"
   const model = (await getSetting("ai_model")) || "gemini-2.5-flash"
   const prompt =

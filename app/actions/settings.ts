@@ -41,27 +41,45 @@ function decryptIfNeeded(key: string, value: string | null): string | null {
 
 export async function getSettings(): Promise<Setting[]> {
   try {
-    const rows = await prisma.setting.findMany({ orderBy: { key: "asc" } })
     const userId = await getCurrentUserId()
-    let overrides: Record<string, string | null> = {}
-    if (userId) {
-      const urows = await sql<{ key: string; value: string | null }>`
-        SELECT key, value FROM user_settings WHERE user_id = ${userId}
-      `
-      overrides = Object.fromEntries(
-        (urows || []).map((r) => [r.key, decryptIfNeeded(r.key, r.value)]),
-      )
-    }
-    return rows.map((s: { id: number; key: string; value: string | null; description: string | null }): Setting => {
-      const ov = overrides[s.key]
-      const v = ov !== undefined ? ov : s.value ?? null
-      return {
+    const defaults = await sql<{ id: number; key: string; value: string | null; description: string | null }>`
+      SELECT id, key, value, description FROM settings WHERE user_id IS NULL ORDER BY key ASC
+    `
+    const overrides = userId
+      ? await sql<{ id: number; key: string; value: string | null; description: string | null }>`
+          SELECT id, key, value, description FROM settings WHERE user_id = ${userId}
+        `
+      : []
+    const byKey = new Map<string, Setting>()
+    for (const s of defaults) {
+      const v = decryptIfNeeded(s.key, s.value ?? null)
+      byKey.set(s.key, {
         id: s.id,
         key: s.key,
         value: s.key === "ai_api_key" && v ? "__MASKED__" : v,
         description: s.description ?? null,
+      })
+    }
+    for (const o of overrides || []) {
+      const v = decryptIfNeeded(o.key, o.value ?? null)
+      const ex = byKey.get(o.key)
+      if (ex) {
+        byKey.set(o.key, {
+          id: ex.id,
+          key: ex.key,
+          value: o.key === "ai_api_key" && v ? "__MASKED__" : v,
+          description: ex.description,
+        })
+      } else {
+        byKey.set(o.key, {
+          id: o.id,
+          key: o.key,
+          value: o.key === "ai_api_key" && v ? "__MASKED__" : v,
+          description: o.description ?? null,
+        })
       }
-    })
+    }
+    return Array.from(byKey.values()).sort((a, b) => a.key.localeCompare(b.key))
   } catch {
     return []
   }
@@ -72,14 +90,16 @@ export async function getSetting(key: string): Promise<string | null> {
     const userId = await getCurrentUserId()
     if (userId) {
       const u = await sql<{ value: string | null }>`
-        SELECT value FROM user_settings WHERE user_id = ${userId} AND key = ${key} LIMIT 1
+        SELECT value FROM settings WHERE user_id = ${userId} AND key = ${key} LIMIT 1
       `
       if (u[0]) {
         return decryptIfNeeded(key, u[0].value ?? null)
       }
     }
-    const row = await prisma.setting.findUnique({ where: { key } })
-    const raw = row?.value ?? null
+    const d = await sql<{ value: string | null }>`
+      SELECT value FROM settings WHERE user_id IS NULL AND key = ${key} LIMIT 1
+    `
+    const raw = d[0]?.value ?? null
     return decryptIfNeeded(key, raw)
   } catch {
     return null
@@ -89,44 +109,26 @@ export async function getSetting(key: string): Promise<string | null> {
 export async function updateSetting(key: string, value: string): Promise<void> {
   const toStore = encryptIfNeeded(key, value)
   const userId = await getCurrentUserId()
-  if (userId) {
-    await sql`
-      INSERT INTO user_settings (user_id, key, value, created_at, updated_at)
-      VALUES (${userId}, ${key}, ${toStore}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      ON CONFLICT (user_id, key) DO UPDATE SET value = ${toStore}, updated_at = CURRENT_TIMESTAMP
-    `
-  } else {
-    await prisma.setting.upsert({
-      where: { key },
-      update: { value: toStore, updated_at: new Date() },
-      create: { key, value: toStore, created_at: new Date(), updated_at: new Date() },
-    })
-  }
+  if (!userId) return
+  await sql`
+    INSERT INTO settings (user_id, key, value, created_at, updated_at)
+    VALUES (${userId}, ${key}, ${toStore}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    ON CONFLICT (user_id, key) DO UPDATE SET value = ${toStore}, updated_at = CURRENT_TIMESTAMP
+  `
   revalidatePath("/configuracion")
 }
 
 export async function updateSettings(settings: { key: string; value: string }[]): Promise<void> {
   const userId = await getCurrentUserId()
-  if (userId) {
-    for (const setting of settings) {
-      if (setting.key === "ai_api_key" && setting.value === "__MASKED__") continue
-      const toStore = encryptIfNeeded(setting.key, setting.value)
-      await sql`
-        INSERT INTO user_settings (user_id, key, value, created_at, updated_at)
-        VALUES (${userId}, ${setting.key}, ${toStore}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        ON CONFLICT (user_id, key) DO UPDATE SET value = ${toStore}, updated_at = CURRENT_TIMESTAMP
-      `
-    }
-  } else {
-    for (const setting of settings) {
-      if (setting.key === "ai_api_key" && setting.value === "__MASKED__") continue
-      const toStore = encryptIfNeeded(setting.key, setting.value)
-      await prisma.setting.upsert({
-        where: { key: setting.key },
-        update: { value: toStore, updated_at: new Date() },
-        create: { key: setting.key, value: toStore, created_at: new Date(), updated_at: new Date() },
-      })
-    }
+  if (!userId) return
+  for (const setting of settings) {
+    if (setting.key === "ai_api_key" && setting.value === "__MASKED__") continue
+    const toStore = encryptIfNeeded(setting.key, setting.value)
+    await sql`
+      INSERT INTO settings (user_id, key, value, created_at, updated_at)
+      VALUES (${userId}, ${setting.key}, ${toStore}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ON CONFLICT (user_id, key) DO UPDATE SET value = ${toStore}, updated_at = CURRENT_TIMESTAMP
+    `
   }
   revalidatePath("/configuracion")
 }

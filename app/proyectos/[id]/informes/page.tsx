@@ -1,5 +1,5 @@
 import { DashboardLayout } from "@/components/dashboard-layout"
-import { ReportsContent } from "@/components/reports-content"
+import ReportsContentClient from "@/components/reports-content-client"
 import { getProjectById } from "@/app/actions/projects"
 import { getGeneratedReports } from "@/app/actions/reports"
 import { getSession } from "@/lib/auth"
@@ -21,7 +21,7 @@ export default async function ProjectReportsPage({ params }: { params: Promise<{
     <DashboardLayout
       user={session ? { email: String(session.email), name: session.name ?? null, role: session.role ?? null } : undefined}
     >
-      <ReportsContent initialReports={reports} projectId={id} />
+      <ReportsContentClient initialReports={reports} projectId={id} />
     </DashboardLayout>
   )
 }

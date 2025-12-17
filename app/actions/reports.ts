@@ -211,7 +211,49 @@ export async function generateAIReport(
   const aiProvider = "google"
 
   if (!apiKey) {
-    throw new Error("No se ha configurado la API Key de IA. Ve a Configuracion para agregarla.")
+    const reportTypeMap: Record<string, string> = {
+      weekly: "Reporte Semanal de Seguridad",
+      monthly: "Informe Mensual de Seguridad",
+      findings: "Reporte de Hallazgos",
+      docs: "Estado de Documentacion del Personal",
+    }
+    const title = reportTypeMap[reportType] || "Informe de Seguridad"
+    const content =
+      `# ${title}\n\n` +
+      `Periodo: ${data.dateFrom} al ${data.dateTo}\n\n` +
+      `## Resumen Ejecutivo\n` +
+      `- Documentos totales: ${data.documents.total}\n` +
+      `  - Vigentes: ${data.documents.valid}\n` +
+      `  - Por vencer: ${data.documents.expiring}\n` +
+      `  - Vencidos: ${data.documents.expired}\n\n` +
+      `- Hallazgos en el periodo: ${data.findings.total}\n` +
+      `  - Abiertos: ${data.findings.open}\n` +
+      `  - Resueltos: ${data.findings.resolved}\n` +
+      `  - Criticos: ${data.findings.critical}\n` +
+      `  - Altos: ${data.findings.high}\n` +
+      `  - Medios: ${data.findings.medium}\n` +
+      `  - Bajos: ${data.findings.low}\n\n` +
+      `- Personal registrado: ${data.workers.total}\n` +
+      `  - Con documentacion completa: ${data.workers.withCompleteDocs}\n` +
+      `  - Con documentos vencidos: ${data.workers.withExpiredDocs}\n\n` +
+      `## Hallazgos Relevantes\n` +
+      `${data.recentFindings.length ? data.recentFindings.map((f) => `- ${f.title} (${f.severity}) - ${f.status} - ${f.location}`).join("\n") : "- Sin hallazgos recientes"}\n\n` +
+      `## Documentos por Vencer\n` +
+      `${data.expiringDocuments.length ? data.expiringDocuments.map((d) => `- ${d.worker_name}: ${d.document_type} vence el ${d.expiry_date}`).join("\n") : "- Sin documentos por vencer en el periodo"}\n\n` +
+      `## Recomendaciones\n` +
+      `- Revisar hallazgos abiertos y asignar responsables.\n` +
+      `- Planificar acciones para documentos próximos a vencer.\n` +
+      `- Configurar la API de IA en Configuracion para informes enriquecidos.\n\n` +
+      `## Conclusion\n` +
+      `Se recomienda mantener la vigilancia sobre los indicadores y ejecutar acciones correctivas oportunas.`
+    const inserted = await sql<{ id: number }>`
+      INSERT INTO reports (report_type, title, date_from, date_to, content, generated_by, project_id)
+      VALUES (${reportType}, ${title}, ${new Date(data.dateFrom)}, ${new Date(data.dateTo)}, ${JSON.stringify({ markdown: content })}::jsonb, 'Sistema (sin IA)', ${projectId || null})
+      RETURNING id
+    `
+    const idNum = Number(inserted[0].id)
+    await sql`UPDATE reports SET user_id = ${userId} WHERE id = ${idNum}`
+    return { content, title, id: idNum }
   }
 
   const reportTypeMap: Record<string, string> = {
@@ -305,4 +347,42 @@ export async function getReportById(id: number) {
   const userId = await getCurrentUserId()
   const result = await sql<DbReport>`SELECT * FROM reports WHERE id = ${id} AND user_id = ${userId}`
   return result[0]
+}
+
+export async function createManualReport(
+  title: string,
+  dateFrom: string,
+  dateTo: string,
+  markdown: string,
+  projectId?: number,
+) {
+  const userId = await getCurrentUserId()
+  if (!userId) return null
+  const inserted = await sql<{ id: number }>`
+    INSERT INTO reports (report_type, title, date_from, date_to, content, generated_by, project_id, user_id)
+    VALUES ('manual', ${title}, ${new Date(dateFrom)}, ${new Date(dateTo)}, ${JSON.stringify({ markdown })}::jsonb, 'Usuario', ${projectId || null}, ${userId})
+    RETURNING id
+  `
+  return inserted[0]?.id ?? null
+}
+
+export async function updateReport(
+  id: number,
+  fields: { title?: string; markdown?: string },
+) {
+  const userId = await getCurrentUserId()
+  if (!userId) return false
+  const current = await sql<DbReport>`SELECT * FROM reports WHERE id = ${id} AND user_id = ${userId} LIMIT 1`
+  if (!current[0]) return false
+  const nextTitle = fields.title ?? current[0].title
+  const nextContent =
+    fields.markdown !== undefined
+      ? JSON.stringify({ markdown: fields.markdown })
+      : JSON.stringify(current[0].content || { markdown: "" })
+  await sql`
+    UPDATE reports
+    SET title = ${nextTitle}, content = ${nextContent}::jsonb
+    WHERE id = ${id} AND user_id = ${userId}
+  `
+  return true
 }
