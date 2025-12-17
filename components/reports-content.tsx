@@ -33,6 +33,17 @@ interface GeneratedReport {
   created_at: string
 }
 
+type FindingRow = {
+  id: number
+  title: string
+  description: string | null
+  severity: string
+  status: string
+  location: string | null
+  created_at: string
+  photos?: string[] | null
+}
+
 const reportTemplates = [
   {
     id: "weekly",
@@ -165,19 +176,29 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
       year: "numeric",
     })
   }
-  const toHtml = (md: string) => {
+  const toHtml = (md: string, meta?: GeneratedReport) => {
     let html = md || ""
     html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img alt="$1" src="$2" style="max-width:100%;height:auto"/>')
     html = html.replace(/^### (.*)$/gm, "<h3>$1</h3>")
     html = html.replace(/^## (.*)$/gm, "<h2>$1</h2>")
     html = html.replace(/^# (.*)$/gm, "<h1>$1</h1>")
     html = html.replace(/^(?!<h[1-6]>|<img)(.+)$/gm, "<p>$1</p>")
+    const title = viewingReport?.title || editTitle || meta?.title || "Informe"
+    const sub =
+      meta?.date_from && meta?.date_to
+        ? `Periodo: ${formatDate(meta.date_from)} - ${formatDate(meta.date_to)}`
+        : new Date().toLocaleDateString("es-CL")
     const header =
-      `<header style="display:flex;align-items:center;gap:12px;margin-bottom:24px;border-bottom:1px solid #ddd;padding-bottom:12px">
-        ${brandLogo ? `<img src="${brandLogo}" alt="Logo" style="height:48px;width:auto;object-fit:contain"/>` : ""}
-        <div>
-          <div style="font-size:18px;font-weight:600">${brandName || "Informe"}</div>
-          <div style="font-size:12px;color:#666">${new Date().toLocaleDateString("es-CL")}</div>
+      `<header style="display:flex;align-items:center;justify-between;margin-bottom:24px;border-bottom:1px solid #e5e7eb;padding-bottom:12px">
+        <div style="display:flex;align-items:center;gap:12px">
+          ${brandLogo ? `<img src="${brandLogo}" alt="Logo" style="height:56px;width:auto;object-fit:contain"/>` : ""}
+          <div>
+            <div style="font-size:20px;font-weight:600">${brandName || ""}</div>
+            <div style="font-size:12px;color:#666">${sub}</div>
+          </div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:18px;font-weight:600">${title}</div>
         </div>
       </header>`
     return `${header}${html}`
@@ -264,8 +285,9 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
               variant="secondary"
               onClick={() => {
                 const text = viewingReport?.content || editContent || ""
-                const body = toHtml(text)
-                const html = `<!doctype html><html><head><meta charset=\"utf-8\"><title>${viewingReport?.title || editTitle || "informe"}</title><style>body{font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:40px;line-height:1.6}img{display:block;margin:8px 0}</style></head><body>${body}</body></html>`
+                const meta = generatedReports.find((r) => r.id === viewingId)
+                const body = toHtml(text, meta)
+                const html = `<!doctype html><html><head><meta charset=\"utf-8\"><title>${viewingReport?.title || editTitle || "informe"}</title><style>body{font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:40px;line-height:1.7;color:#111827}img{display:block;margin:8px 0;max-width:100%;height:auto}h1{font-size:22px;margin:16px 0 8px}h2{font-size:18px;margin:12px 0 6px}h3{font-size:16px;margin:8px 0 4px}@page{size:A4;margin:20mm}*{-webkit-print-color-adjust:exact;print-color-adjust:exact}</style></head><body>${body}</body></html>`
                 const blob = new Blob([html], { type: "text/html" })
                 const url = URL.createObjectURL(blob)
                 const a = document.createElement("a")
@@ -283,12 +305,27 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
                 const w = window.open("", "_blank")
                 if (!w) return
                 const text = viewingReport?.content || editContent || ""
-                const body = toHtml(text)
-                w.document.write(`<!doctype html><html><head><meta charset=\"utf-8\"><title>${viewingReport?.title || editTitle || "informe"}</title><style>body{font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:40px;line-height:1.6}img{display:block;margin:8px 0}</style></head><body>${body}<script>window.print()</script></body></html>`)
+                const meta = generatedReports.find((r) => r.id === viewingId)
+                const body = toHtml(text, meta)
+                w.document.write(`<!doctype html><html><head><meta charset=\"utf-8\"><title>${viewingReport?.title || editTitle || "informe"}</title><style>body{font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:40px;line-height:1.7;color:#111827}img{display:block;margin:8px 0;max-width:100%;height:auto}h1{font-size:22px;margin:16px 0 8px}h2{font-size:18px;margin:12px 0 6px}h3{font-size:16px;margin:8px 0 4px}@page{size:A4;margin:20mm}*{-webkit-print-color-adjust:exact;print-color-adjust:exact}</style></head><body>${body}<script>setTimeout(function(){window.print()},100)</script></body></html>`)
                 w.document.close()
               }}
             >
               Imprimir
+            </Button>
+            <Button
+              onClick={() => {
+                const w = window.open("", "_blank")
+                if (!w) return
+                const text = viewingReport?.content || editContent || ""
+                const meta = generatedReports.find((r) => r.id === viewingId)
+                const body = toHtml(text, meta)
+                w.document.write(`<!doctype html><html><head><meta charset=\"utf-8\"><title>${viewingReport?.title || editTitle || "informe"}</title><style>body{font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:40px;line-height:1.7;color:#111827}img{display:block;margin:8px 0;max-width:100%;height:auto}h1{font-size:22px;margin:16px 0 8px}h2{font-size:18px;margin:12px 0 6px}h3{font-size:16px;margin:8px 0 4px}@page{size:A4;margin:20mm}*{-webkit-print-color-adjust:exact;print-color-adjust:exact}</style></head><body>${body}<script>setTimeout(function(){window.print()},100)</script></body></html>`)
+                w.document.close()
+              }}
+            >
+              <Download className="mr-2 h-4 w-4" />
+              Descargar PDF
             </Button>
           </div>
         </DialogContent>
@@ -418,9 +455,9 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
                         setFindingsLoading(true)
                         startTransition(async () => {
                           try {
-                            const items = (await getFindings(projectId)) as any
+                            const items = (await getFindings(projectId)) as unknown as FindingRow[]
                             setFindingsList(
-                              (items || []).map((f: any) => ({
+                              (items || []).map((f) => ({
                                 id: f.id,
                                 title: f.title,
                                 description: f.description ?? null,
