@@ -11,7 +11,8 @@ export function proxy(req: NextRequest) {
     pathname.startsWith("/_next") ||
     pathname.startsWith("/public") ||
     pathname.startsWith("/api/health") ||
-    pathname.startsWith("/api/diagnostics")
+    pathname.startsWith("/api/diagnostics") ||
+    pathname.startsWith("/admin")
   ) {
     return NextResponse.next()
   }

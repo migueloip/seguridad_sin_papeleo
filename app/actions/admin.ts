@@ -23,7 +23,7 @@ export async function adminLogin(formData: FormData) {
   const password = String(formData.get("password") || "")
   const { hash, plain } = getAdminSecret()
   if (!hash && !plain) {
-    throw new Error("ADMIN_PASSWORD_HASH o ADMIN_PASSWORD no configurados")
+    return redirect("/admin?error=not_configured")
   }
   let ok = false
   if (hash) {
@@ -32,7 +32,7 @@ export async function adminLogin(formData: FormData) {
     ok = password === plain
   }
   if (!ok) {
-    throw new Error("Contraseña inválida")
+    return redirect("/admin?error=invalid")
   }
   const cookieStore = await cookies()
   cookieStore.set("admin_auth", crypto.randomUUID(), {

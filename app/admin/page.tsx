@@ -5,8 +5,10 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import Link from "next/link"
 
-export default async function AdminPage() {
+export default async function AdminPage({ searchParams }: { searchParams?: Promise<Record<string, string>> }) {
   const authed = await isAdminAuthenticated()
+  const sp = (await searchParams) || {}
+  const error = sp.error
 
   return (
     <DashboardLayout>
@@ -23,6 +25,10 @@ export default async function AdminPage() {
       ) : (
         <div className="mx-auto w-full max-w-sm rounded-lg border border-border bg-card p-6">
           <h1 className="mb-4 text-xl font-semibold">Acceso Administrador</h1>
+          {error === "invalid" && <p className="mb-2 text-sm text-destructive">Contraseña inválida</p>}
+          {error === "not_configured" && (
+            <p className="mb-2 text-sm text-destructive">ADMIN_PASSWORD_HASH o ADMIN_PASSWORD no configurados</p>
+          )}
           <form action={adminLogin} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="password">Contraseña</Label>
