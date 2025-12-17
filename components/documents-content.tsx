@@ -153,7 +153,7 @@ export function DocumentsContent({
       const docType = documentTypes.find((dt) => dt.id === Number.parseInt(newDocument.document_type_id))
 
       const newDoc: Document = {
-        ...(created as Document),
+        ...(created as unknown as Document),
         first_name: worker?.first_name || "",
         last_name: worker?.last_name || "",
         rut: worker?.rut || "",
@@ -218,7 +218,8 @@ export function DocumentsContent({
         issue_date: editDoc.issue_date || undefined,
         expiry_date: editDoc.expiry_date || undefined,
       })
-      setDocuments((prev) => prev.map((d) => (d.id === updated.id ? { ...d, ...updated } : d)))
+      const updatedDoc = updated as unknown as Document
+      setDocuments((prev) => prev.map((d) => (d.id === updatedDoc.id ? { ...d, ...updatedDoc } : d)))
       setIsEditOpen(false)
       setEditDoc(null)
       router.refresh()

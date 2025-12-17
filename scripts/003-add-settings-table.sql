@@ -10,8 +10,8 @@ CREATE TABLE IF NOT EXISTS settings (
 
 -- Insertar configuracion por defecto
 INSERT INTO settings (key, value, description) VALUES 
-  ('ai_provider', 'openai', 'Proveedor de IA para OCR e informes'),
-  ('ai_model', 'gpt-4o-mini', 'Modelo de IA a usar'),
+  ('ai_provider', 'google', 'Proveedor de IA para OCR e informes'),
+  ('ai_model', 'gemini-2.5-flash', 'Modelo de IA a usar'),
   ('ai_api_key', '', 'API Key del proveedor de IA'),
   ('ocr_method', 'tesseract', 'Metodo de OCR: tesseract o ai'),
   ('company_name', 'SafeWork Pro', 'Nombre de la empresa'),

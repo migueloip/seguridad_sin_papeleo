@@ -4,6 +4,7 @@ import { sql } from "@/lib/db"
 import type { Worker } from "@/lib/db"
 import { getCurrentUserId } from "@/lib/auth"
 import { revalidatePath } from "next/cache"
+import { formatRut, normalizeRut } from "@/lib/utils"
 
 export async function getWorkers(projectId?: number) {
   const userId = await getCurrentUserId()
@@ -57,7 +58,7 @@ export async function createWorker(data: {
   const userId = await getCurrentUserId()
   const result = await sql`
     INSERT INTO workers (rut, first_name, last_name, role, company, phone, email, project_id, user_id)
-    VALUES (${data.rut}, ${data.first_name}, ${data.last_name}, ${data.role || null}, 
+    VALUES (${formatRut(normalizeRut(data.rut))}, ${data.first_name}, ${data.last_name}, ${data.role || null}, 
             ${data.company || null}, ${data.phone || null}, ${data.email || null}, ${data.project_id || null}, ${userId})
     RETURNING *
   `
@@ -84,7 +85,7 @@ export async function updateWorker(
   const result = await sql`
     UPDATE workers
     SET 
-      rut = COALESCE(${data.rut || null}, rut),
+      rut = COALESCE(${data.rut ? formatRut(normalizeRut(data.rut)) : null}, rut),
       first_name = COALESCE(${data.first_name || null}, first_name),
       last_name = COALESCE(${data.last_name || null}, last_name),
       role = COALESCE(${data.role || null}, role),

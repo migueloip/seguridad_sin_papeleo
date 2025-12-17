@@ -13,6 +13,10 @@ export async function POST() {
     await sql`CREATE TABLE IF NOT EXISTS findings (id SERIAL PRIMARY KEY, checklist_id INTEGER REFERENCES completed_checklists(id) ON DELETE SET NULL, project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL, title VARCHAR(255) NOT NULL, description TEXT, severity VARCHAR(50) NOT NULL, location VARCHAR(255), responsible_person VARCHAR(255), due_date DATE, resolved_at TIMESTAMP, resolution_notes TEXT, photos JSONB, status VARCHAR(50) DEFAULT 'open', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`
     await sql`CREATE TABLE IF NOT EXISTS reports (id SERIAL PRIMARY KEY, project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL, report_type VARCHAR(50) NOT NULL, title VARCHAR(255) NOT NULL, date_from DATE, date_to DATE, content JSONB, file_url TEXT, generated_by VARCHAR(255), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`
     await sql`CREATE TABLE IF NOT EXISTS notifications (id SERIAL PRIMARY KEY, type VARCHAR(50) NOT NULL, title VARCHAR(255) NOT NULL, message TEXT, related_id INTEGER, related_type VARCHAR(50), is_read BOOLEAN DEFAULT false, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`
+    await sql`CREATE TABLE IF NOT EXISTS settings (id SERIAL PRIMARY KEY, key VARCHAR(100) UNIQUE NOT NULL, value TEXT, description TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`
+    await sql`CREATE TABLE IF NOT EXISTS plans (id SERIAL PRIMARY KEY, project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL, name VARCHAR(255) NOT NULL, plan_type VARCHAR(50) NOT NULL, file_name VARCHAR(255) NOT NULL, file_url TEXT, mime_type VARCHAR(100), extracted JSONB, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`
+    await sql`CREATE TABLE IF NOT EXISTS plan_floors (id SERIAL PRIMARY KEY, plan_id INTEGER REFERENCES plans(id) ON DELETE CASCADE, name VARCHAR(100) NOT NULL, level INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`
+    await sql`CREATE TABLE IF NOT EXISTS plan_zones (id SERIAL PRIMARY KEY, plan_id INTEGER REFERENCES plans(id) ON DELETE CASCADE, floor_id INTEGER REFERENCES plan_floors(id) ON DELETE SET NULL, name VARCHAR(100) NOT NULL, code VARCHAR(50), zone_type VARCHAR(50), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`
     await sql`CREATE INDEX IF NOT EXISTS idx_workers_project ON workers(project_id)`
     await sql`CREATE INDEX IF NOT EXISTS idx_workers_rut ON workers(rut)`
     await sql`CREATE INDEX IF NOT EXISTS idx_documents_worker ON documents(worker_id)`
@@ -36,14 +40,39 @@ export async function POST() {
     await sql`ALTER TABLE IF EXISTS findings ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`
     await sql`ALTER TABLE IF EXISTS completed_checklists ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`
     await sql`ALTER TABLE IF EXISTS reports ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`
+    await sql`ALTER TABLE IF EXISTS plans ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`
+    await sql`ALTER TABLE IF EXISTS plan_floors ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`
+    await sql`ALTER TABLE IF EXISTS plan_zones ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`
     await sql`CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id)`
     await sql`CREATE INDEX IF NOT EXISTS idx_workers_user ON workers(user_id)`
     await sql`CREATE INDEX IF NOT EXISTS idx_documents_user ON documents(user_id)`
     await sql`CREATE INDEX IF NOT EXISTS idx_findings_user ON findings(user_id)`
     await sql`CREATE INDEX IF NOT EXISTS idx_completed_checklists_user ON completed_checklists(user_id)`
     await sql`CREATE INDEX IF NOT EXISTS idx_reports_user ON reports(user_id)`
+    await sql`CREATE INDEX IF NOT EXISTS idx_plans_user ON plans(user_id)`
+    await sql`CREATE INDEX IF NOT EXISTS idx_plan_floors_user ON plan_floors(user_id)`
+    await sql`CREATE INDEX IF NOT EXISTS idx_plan_zones_user ON plan_zones(user_id)`
+    await sql`INSERT INTO settings (key, value, description) VALUES 
+      ('ai_provider', 'google', 'Proveedor de IA para OCR e informes'),
+      ('ai_model', 'gemini-2.5-flash', 'Modelo de IA a usar'),
+      ('ai_api_key', '', 'API Key del proveedor de IA'),
+      ('ocr_method', 'tesseract', 'Metodo de OCR: tesseract o ai'),
+      ('company_name', 'SafeWork Pro', 'Nombre de la empresa'),
+      ('company_logo', '', 'URL del logo de la empresa')
+    ON CONFLICT (key) DO NOTHING`
+    const workers = await sql<{ id: number; rut: string | null }>`SELECT id, rut FROM workers WHERE rut IS NOT NULL`
+    for (const w of workers) {
+      const cleaned = String(w.rut || "")
+      const body = cleaned.replace(/[^0-9kK]/gi, "").slice(0, -1).toUpperCase()
+      const dv = cleaned.replace(/[^0-9kK]/gi, "").slice(-1).toUpperCase()
+      if (!body || !dv) continue
+      const withDots = body.replace(/\B(?=(\d{3})+(?!\d))/g, ".")
+      const formatted = `${withDots}-${dv}`
+      await sql`UPDATE workers SET rut = ${formatted} WHERE id = ${w.id}`
+    }
     return NextResponse.json({ ok: true })
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message || "migration error" }, { status: 500 })
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : "migration error"
+    return NextResponse.json({ error: message }, { status: 500 })
   }
 }

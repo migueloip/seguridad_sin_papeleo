@@ -12,6 +12,13 @@ export function normalizeRut(rut: string) {
   return `${body}-${dv}`
 }
 
+export function formatRut(rut: string) {
+  const normalized = normalizeRut(rut)
+  const [body, dv] = normalized.split("-")
+  const withDots = body.replace(/\B(?=(\d{3})+(?!\d))/g, ".")
+  return `${withDots}-${dv}`
+}
+
 export function isValidRut(rut: string) {
   const m = rut.match(/^([0-9]+)-([0-9K])$/)
   if (!m) return false
@@ -46,4 +53,22 @@ export function normalizeDate(input: string | null) {
     return `${y}-${m}-${d}`
   }
   return s
+}
+
+export function toOptionalDate(input?: string | Date | null): Date | null {
+  if (input === undefined || input === null) return null
+  if (input instanceof Date) {
+    return Number.isNaN(input.getTime()) ? null : input
+  }
+  const normalized = normalizeDate(String(input)) || String(input)
+  const m = normalized.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (m) {
+    const y = Number(m[1])
+    const mo = Number(m[2]) - 1
+    const d = Number(m[3])
+    const date = new Date(y, mo, d)
+    return Number.isNaN(date.getTime()) ? null : date
+  }
+  const date = new Date(normalized)
+  return Number.isNaN(date.getTime()) ? null : date
 }

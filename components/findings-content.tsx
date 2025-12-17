@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useTransition } from "react"
+import { useState, useTransition, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -16,8 +16,8 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { AlertTriangle, Plus, Clock, CheckCircle, MapPin, User, Calendar } from "lucide-react"
-import { updateFinding, createFinding } from "@/app/actions/findings"
+import { AlertTriangle, Plus, Clock, CheckCircle, MapPin, User, Calendar, Edit2, Trash2 } from "lucide-react"
+import { updateFinding, createFinding, scanFindingImage, generateCorrectiveAction, deleteFinding } from "@/app/actions/findings"
 import { useRouter } from "next/navigation"
 
 interface Finding {
@@ -30,6 +30,8 @@ interface Finding {
   status: string
   project_name: string | null
   due_date: string | null
+  resolution_notes?: string | null
+  photos?: string[] | null
   created_at: string
 }
 
@@ -48,6 +50,30 @@ export function FindingsContent({ initialFindings }: { initialFindings: Finding[
     responsible_person: "",
     due_date: "",
   })
+  const [imageDataUrl, setImageDataUrl] = useState<string>("")
+  const [imageMimeType, setImageMimeType] = useState<string>("")
+  const [isScanning, setIsScanning] = useState(false)
+  const [correctiveById, setCorrectiveById] = useState<Record<number, string>>({})
+  const [genPendingById, setGenPendingById] = useState<Record<number, boolean>>({})
+  const [isEditOpen, setIsEditOpen] = useState(false)
+  const [editFinding, setEditFinding] = useState<Finding | null>(null)
+  const [editForm, setEditForm] = useState<{
+    title: string
+    description: string
+    severity: "low" | "medium" | "high" | "critical"
+    location: string
+    responsible_person: string
+    due_date: string
+    resolution_notes: string
+  }>({
+    title: "",
+    description: "",
+    severity: "medium",
+    location: "",
+    responsible_person: "",
+    due_date: "",
+    resolution_notes: "",
+  })
 
   const filteredFindings = findings.filter((f) => {
     if (filter === "todos") return true
@@ -65,6 +91,14 @@ export function FindingsContent({ initialFindings }: { initialFindings: Finding[
     const now = new Date()
     return Math.floor((now.getTime() - created.getTime()) / (1000 * 60 * 60 * 24))
   }
+
+  useEffect(() => {
+    const map: Record<number, string> = {}
+    for (const f of initialFindings) {
+      if (f.resolution_notes) map[f.id] = String(f.resolution_notes || "")
+    }
+    setCorrectiveById(map)
+  }, [initialFindings])
 
   const getPriorityBadge = (severity: string) => {
     switch (severity) {
@@ -110,8 +144,54 @@ export function FindingsContent({ initialFindings }: { initialFindings: Finding[
 
   const closeFinding = (id: number) => {
     startTransition(async () => {
-      await updateFinding(id, { status: "resolved" })
-      setFindings((prev) => prev.map((f) => (f.id === id ? { ...f, status: "resolved" } : f)))
+      const notes = correctiveById[id] ?? ""
+      const updated = await updateFinding(id, { status: "resolved", resolution_notes: notes || undefined })
+      setFindings((prev) =>
+        prev.map((f) => (f.id === id ? { ...f, status: "resolved", resolution_notes: (updated as any).resolution_notes } : f)),
+      )
+    })
+  }
+
+  const reopenFinding = (id: number) => {
+    startTransition(async () => {
+      const updated = await updateFinding(id, { status: "open" })
+      setFindings((prev) => prev.map((f) => (f.id === id ? { ...f, status: "open" } : f)))
+    })
+  }
+
+  const openEdit = (f: Finding) => {
+    setEditFinding(f)
+    setEditForm({
+      title: f.title || "",
+      description: f.description || "",
+      severity: (f.severity as "low" | "medium" | "high" | "critical") || "medium",
+      location: f.location || "",
+      responsible_person: f.responsible_person || "",
+      due_date: f.due_date || "",
+      resolution_notes: f.resolution_notes || "",
+    })
+    setIsEditOpen(true)
+  }
+
+  const saveEdit = () => {
+    if (!editFinding) return
+    startTransition(async () => {
+      const updated = await updateFinding(editFinding.id, {
+        title: editForm.title || undefined,
+        description: editForm.description || undefined,
+        severity: editForm.severity || undefined,
+        location: editForm.location || undefined,
+        responsible_person: editForm.responsible_person || undefined,
+        due_date: editForm.due_date || undefined,
+        resolution_notes: editForm.resolution_notes || undefined,
+      })
+      setFindings((prev) =>
+        prev.map((f) => (f.id === editFinding.id ? ({ ...(updated as any), project_name: f.project_name } as any) : f)),
+      )
+      setCorrectiveById((prev) => ({ ...prev, [editFinding.id]: editForm.resolution_notes }))
+      setIsEditOpen(false)
+      setEditFinding(null)
+      router.refresh()
     })
   }
 
@@ -129,6 +209,7 @@ export function FindingsContent({ initialFindings }: { initialFindings: Finding[
         location: newFinding.location || undefined,
         responsible_person: newFinding.responsible_person || undefined,
         due_date: newFinding.due_date || undefined,
+        photos: imageDataUrl ? [imageDataUrl] : undefined,
       })
 
       setFindings((prev) => [{ ...(created as any), project_name: null } as any, ...prev])
@@ -140,6 +221,8 @@ export function FindingsContent({ initialFindings }: { initialFindings: Finding[
         responsible_person: "",
         due_date: "",
       })
+      setImageDataUrl("")
+      setImageMimeType("")
       setIsCreateOpen(false)
       router.refresh()
     })
@@ -166,7 +249,7 @@ export function FindingsContent({ initialFindings }: { initialFindings: Finding[
               Nuevo Hallazgo
             </Button>
           </DialogTrigger>
-          <DialogContent className="sm:max-w-[500px]">
+          <DialogContent className="sm:max-w-[500px] max-h-[85vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Nuevo Hallazgo</DialogTitle>
               <DialogDescription>Registra un nuevo hallazgo de seguridad</DialogDescription>
@@ -188,6 +271,7 @@ export function FindingsContent({ initialFindings }: { initialFindings: Finding[
                   value={newFinding.description}
                   onChange={(e) => setNewFinding({ ...newFinding, description: e.target.value })}
                   placeholder="Describe el hallazgo en detalle..."
+                  className="min-h-[140px]"
                 />
               </div>
               <div className="grid grid-cols-2 gap-4">
@@ -219,6 +303,55 @@ export function FindingsContent({ initialFindings }: { initialFindings: Finding[
                     onChange={(e) => setNewFinding({ ...newFinding, due_date: e.target.value })}
                   />
                 </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="photo">Foto del hallazgo</Label>
+                <Input
+                  id="photo"
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0]
+                    if (!f) return
+                    setImageMimeType(f.type)
+                    const reader = new FileReader()
+                    reader.onload = () => {
+                      const url = String(reader.result || "")
+                      setImageDataUrl(url)
+                    }
+                    reader.readAsDataURL(f)
+                  }}
+                />
+                    {imageDataUrl && (
+                      <div className="flex items-center gap-2">
+                        <img src={imageDataUrl} alt="hallazgo" className="h-16 w-16 rounded object-cover" />
+                        <Button
+                          type="button"
+                          variant="secondary"
+                      disabled={isScanning}
+                      onClick={async () => {
+                        if (!imageDataUrl || !imageMimeType) return
+                        setIsScanning(true)
+                        try {
+                          const base64 = imageDataUrl.split(",")[1] || ""
+                          const result = await scanFindingImage(base64, imageMimeType)
+                          setNewFinding((prev) => ({
+                            title: prev.title || result.title || "",
+                            description: prev.description || result.description || "",
+                            severity: (result.severity || prev.severity) as "low" | "medium" | "high" | "critical",
+                            location: prev.location || result.location || "",
+                            responsible_person: prev.responsible_person || result.responsible_person || "",
+                            due_date: prev.due_date || result.due_date || "",
+                          }))
+                        } finally {
+                          setIsScanning(false)
+                        }
+                      }}
+                    >
+                      {isScanning ? "Escaneando..." : "Escanear con IA"}
+                    </Button>
+                  </div>
+                )}
               </div>
               <div>
                 <Label htmlFor="location">Ubicacion</Label>
@@ -363,14 +496,14 @@ export function FindingsContent({ initialFindings }: { initialFindings: Finding[
                     <p className="mb-4 text-sm text-destructive">Abierto hace {daysOpen} dias</p>
                   )}
 
-                  <div className="flex gap-2">
+                  <div className="flex items-center gap-2">
                     <Dialog>
                       <DialogTrigger asChild>
                         <Button variant="outline" className="flex-1 bg-transparent">
                           Ver Detalles
                         </Button>
                       </DialogTrigger>
-                      <DialogContent>
+                      <DialogContent className="max-h-[85vh] overflow-y-auto">
                         <DialogHeader>
                           <DialogTitle>Hallazgo #{finding.id}</DialogTitle>
                           <DialogDescription>{finding.title}</DialogDescription>
@@ -380,38 +513,140 @@ export function FindingsContent({ initialFindings }: { initialFindings: Finding[
                             <p className="mb-1 text-sm font-medium">Descripcion</p>
                             <p className="text-sm text-muted-foreground">{finding.description || "Sin descripcion"}</p>
                           </div>
-                          <div className="grid grid-cols-2 gap-4">
-                            <div>
-                              <p className="mb-1 text-sm font-medium">Ubicacion</p>
-                              <p className="text-sm text-muted-foreground">{finding.location || "-"}</p>
-                            </div>
-                            <div>
-                              <p className="mb-1 text-sm font-medium">Responsable</p>
-                              <p className="text-sm text-muted-foreground">{finding.responsible_person || "-"}</p>
-                            </div>
-                            <div>
-                              <p className="mb-1 text-sm font-medium">Severidad</p>
-                              {getPriorityBadge(finding.severity)}
-                            </div>
-                            <div>
-                              <p className="mb-1 text-sm font-medium">Estado</p>
-                              {getStatusBadge(finding.status)}
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <p className="mb-1 text-sm font-medium">Ubicacion</p>
+                            <p className="text-sm text-muted-foreground">{finding.location || "-"}</p>
+                          </div>
+                          <div>
+                            <p className="mb-1 text-sm font-medium">Responsable</p>
+                            <p className="text-sm text-muted-foreground">{finding.responsible_person || "-"}</p>
+                          </div>
+                          <div>
+                            <p className="mb-1 text-sm font-medium">Severidad</p>
+                            {getPriorityBadge(finding.severity)}
+                          </div>
+                          <div>
+                            <p className="mb-1 text-sm font-medium">Estado</p>
+                            {getStatusBadge(finding.status)}
+                          </div>
+                        </div>
+                        {Array.isArray(finding.photos) && finding.photos.length > 0 && (
+                          <div>
+                            <p className="mb-2 text-sm font-medium">Fotos</p>
+                            <div className="grid grid-cols-3 gap-2">
+                              {finding.photos.map((url, idx) => (
+                                <a key={idx} href={url} target="_blank" rel="noreferrer">
+                                  <img
+                                    src={url}
+                                    alt={`Foto ${idx + 1}`}
+                                    className="h-24 w-full rounded object-cover"
+                                  />
+                                </a>
+                              ))}
                             </div>
                           </div>
-                          {isOpen && (
-                            <div>
-                              <p className="mb-2 text-sm font-medium">Accion correctiva</p>
-                              <Textarea placeholder="Describe la accion tomada..." />
-                            </div>
+                        )}
+                        <div>
+                          <p className="mb-2 text-sm font-medium">Accion correctiva</p>
+                          {isOpen ? (
+                            <>
+                              <Textarea
+                                placeholder="Describe la accion tomada..."
+                                value={correctiveById[finding.id] ?? ""}
+                                onChange={(e) =>
+                                  setCorrectiveById((prev) => ({ ...prev, [finding.id]: e.target.value }))
+                                }
+                              />
+                              <div className="mt-2 flex gap-2">
+                                <Button
+                                  type="button"
+                                  variant="secondary"
+                                  disabled={!!genPendingById[finding.id]}
+                                  onClick={async () => {
+                                    setGenPendingById((prev) => ({ ...prev, [finding.id]: true }))
+                                    try {
+                                      const text = await generateCorrectiveAction({
+                                        title: finding.title,
+                                        description: finding.description || undefined,
+                                        severity:
+                                          (finding.severity as "low" | "medium" | "high" | "critical") || "medium",
+                                        location: finding.location || undefined,
+                                        photos:
+                                          Array.isArray(finding.photos) && finding.photos.length > 0
+                                            ? [finding.photos[0]]
+                                            : undefined,
+                                      })
+                                      setCorrectiveById((prev) => ({ ...prev, [finding.id]: text || "" }))
+                                    } finally {
+                                      setGenPendingById((prev) => ({ ...prev, [finding.id]: false }))
+                                    }
+                                  }}
+                                >
+                                  {genPendingById[finding.id] ? "Generando..." : "Generar con IA"}
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  onClick={() => {
+                                    const notes = correctiveById[finding.id] ?? ""
+                                    startTransition(async () => {
+                                      const updated = await updateFinding(finding.id, {
+                                        resolution_notes: notes || undefined,
+                                      })
+                                      setFindings((prev) =>
+                                        prev.map((f) =>
+                                          f.id === finding.id
+                                            ? { ...f, resolution_notes: (updated as any).resolution_notes }
+                                            : f,
+                                        ),
+                                      )
+                                    })
+                                  }}
+                                >
+                                  Guardar Accion
+                                </Button>
+                              </div>
+                            </>
+                          ) : (
+                            <p className="text-sm text-muted-foreground">
+                              {finding.resolution_notes || "Sin accion correctiva"}
+                            </p>
                           )}
                         </div>
-                        {isOpen && (
-                          <Button className="w-full" onClick={() => closeFinding(finding.id)} disabled={isPending}>
-                            {isPending ? "Cerrando..." : "Cerrar Hallazgo"}
-                          </Button>
-                        )}
+                        </div>
+                        <div className="sticky bottom-0 mt-4 bg-background/80 p-2 backdrop-blur">
+                          {isOpen ? (
+                            <Button className="w-full" onClick={() => closeFinding(finding.id)} disabled={isPending}>
+                              {isPending ? "Cerrando..." : "Cerrar Hallazgo"}
+                            </Button>
+                          ) : (
+                            <Button className="w-full" onClick={() => reopenFinding(finding.id)} disabled={isPending}>
+                              {isPending ? "Reabriendo..." : "Reabrir Hallazgo"}
+                            </Button>
+                          )}
+                        </div>
                       </DialogContent>
                     </Dialog>
+                    <Button variant="outline" className="flex-1 bg-transparent" onClick={() => openEdit(finding)}>
+                      <Edit2 className="mr-2 h-4 w-4" />
+                      Editar
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="flex-1 bg-transparent text-destructive hover:text-destructive"
+                      onClick={() => {
+                        if (!confirm("¿Eliminar hallazgo? Esta accion no se puede deshacer.")) return
+                        startTransition(async () => {
+                          await deleteFinding(finding.id)
+                          setFindings((prev) => prev.filter((f) => f.id !== finding.id))
+                          router.refresh()
+                        })
+                      }}
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      Eliminar
+                    </Button>
                     {isOpen && (
                       <Button
                         variant="default"
@@ -422,6 +657,16 @@ export function FindingsContent({ initialFindings }: { initialFindings: Finding[
                         Cerrar
                       </Button>
                     )}
+                    {!isOpen && (
+                      <Button
+                        variant="default"
+                        className="flex-1"
+                        onClick={() => reopenFinding(finding.id)}
+                        disabled={isPending}
+                      >
+                        Reabrir
+                      </Button>
+                    )}
                   </div>
                 </CardContent>
               </Card>
@@ -429,6 +674,98 @@ export function FindingsContent({ initialFindings }: { initialFindings: Finding[
           })
         )}
       </div>
+
+      <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
+        <DialogContent className="sm:max-w-[500px] max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Editar Hallazgo</DialogTitle>
+            <DialogDescription>Actualiza los datos del hallazgo</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div>
+              <Label htmlFor="edit_title">Titulo</Label>
+              <Input
+                id="edit_title"
+                value={editForm.title}
+                onChange={(e) => setEditForm((prev) => ({ ...prev, title: e.target.value }))}
+              />
+            </div>
+            <div>
+              <Label htmlFor="edit_description">Descripcion</Label>
+              <Textarea
+                id="edit_description"
+                value={editForm.description}
+                onChange={(e) => setEditForm((prev) => ({ ...prev, description: e.target.value }))}
+                className="min-h-[140px]"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="edit_severity">Severidad</Label>
+                <Select
+                  value={editForm.severity}
+                  onValueChange={(value: "low" | "medium" | "high" | "critical") =>
+                    setEditForm((prev) => ({ ...prev, severity: value }))
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="low">Bajo</SelectItem>
+                    <SelectItem value="medium">Medio</SelectItem>
+                    <SelectItem value="high">Alto</SelectItem>
+                    <SelectItem value="critical">Critico</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label htmlFor="edit_due">Fecha Limite</Label>
+                <Input
+                  id="edit_due"
+                  type="date"
+                  value={editForm.due_date}
+                  onChange={(e) => setEditForm((prev) => ({ ...prev, due_date: e.target.value }))}
+                />
+              </div>
+            </div>
+            <div>
+              <Label htmlFor="edit_location">Ubicacion</Label>
+              <Input
+                id="edit_location"
+                value={editForm.location}
+                onChange={(e) => setEditForm((prev) => ({ ...prev, location: e.target.value }))}
+                placeholder="Ej: Piso 3, Sector A"
+              />
+            </div>
+            <div>
+              <Label htmlFor="edit_resp">Responsable</Label>
+              <Input
+                id="edit_resp"
+                value={editForm.responsible_person}
+                onChange={(e) => setEditForm((prev) => ({ ...prev, responsible_person: e.target.value }))}
+              />
+            </div>
+            <div>
+              <Label htmlFor="edit_notes">Accion correctiva</Label>
+              <Textarea
+                id="edit_notes"
+                value={editForm.resolution_notes}
+                onChange={(e) => setEditForm((prev) => ({ ...prev, resolution_notes: e.target.value }))}
+                className="min-h-[120px]"
+              />
+            </div>
+          </div>
+          <div className="sticky bottom-0 mt-4 flex justify-end gap-2 bg-background/80 p-2 backdrop-blur">
+            <Button variant="outline" onClick={() => setIsEditOpen(false)}>
+              Cancelar
+            </Button>
+            <Button onClick={saveEdit} disabled={isPending}>
+              {isPending ? "Guardando..." : "Guardar Cambios"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

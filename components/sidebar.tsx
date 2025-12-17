@@ -2,30 +2,24 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
+import { useEffect, useState } from "react"
 import { cn } from "@/lib/utils"
-import {
-  LayoutDashboard,
-  FileText,
-  Upload,
-  ClipboardCheck,
-  FileBarChart,
-  AlertTriangle,
-  Users,
-  Settings,
-  HardHat,
-  X,
-} from "lucide-react"
+import { LayoutDashboard, FileText, ClipboardCheck, FileBarChart, AlertTriangle, Users, Settings, HardHat, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { logout } from "@/app/actions/auth"
 
-const navigation = [
-  { name: "Dashboard", href: "/", icon: LayoutDashboard },
-  { name: "Documentos", href: "/documentos", icon: FileText },
-  { name: "Subir Archivos", href: "/subir", icon: Upload },
-  { name: "Checklists", href: "/checklists", icon: ClipboardCheck },
-  { name: "Informes", href: "/informes", icon: FileBarChart },
-  { name: "Hallazgos", href: "/hallazgos", icon: AlertTriangle },
-  { name: "Personal", href: "/personal", icon: Users },
-]
+function buildNavigation(pathname: string) {
+  const m = pathname.match(/^\/proyectos\/(\d+)/)
+  const base = m ? `/proyectos/${m[1]}` : ""
+  return [
+    { name: "Dashboard", href: base || "/", icon: LayoutDashboard },
+    { name: "Documentos", href: `${base}/documentos`, icon: FileText },
+    { name: "Checklists", href: `${base}/checklists`, icon: ClipboardCheck },
+    { name: "Informes", href: `${base}/informes`, icon: FileBarChart },
+    { name: "Hallazgos", href: `${base}/hallazgos`, icon: AlertTriangle },
+    { name: "Personal", href: `${base}/personal`, icon: Users },
+  ]
+}
 
 const secondaryNavigation = [{ name: "Configuración", href: "/configuracion", icon: Settings }]
 
@@ -37,6 +31,21 @@ interface SidebarComponentProps {
 
 export function Sidebar({ open, onClose, user }: SidebarComponentProps) {
   const pathname = usePathname()
+  const [companyName, setCompanyName] = useState<string | null>(null)
+  useEffect(() => {
+    ;(async () => {
+      try {
+        const res = await fetch("/api/settings/company-name", { cache: "no-store" })
+        const data = await res.json()
+        const name = typeof data?.company_name === "string" ? data.company_name : null
+        setCompanyName(name)
+      } catch {}
+    })()
+  }, [])
+  const secondaryText =
+    companyName && companyName.trim().toLowerCase() !== "safework pro" && companyName.trim().length > 0
+      ? companyName
+      : "La seguridad es lo primero"
 
   return (
     <>
@@ -58,8 +67,8 @@ export function Sidebar({ open, onClose, user }: SidebarComponentProps) {
                 <HardHat className="h-5 w-5 text-sidebar-primary-foreground" />
               </div>
               <div className="flex flex-col">
-                <span className="text-lg font-semibold text-sidebar-foreground">SafeWork</span>
-                <span className="text-xs text-sidebar-foreground/60">Pro</span>
+                <span className="text-lg font-semibold text-sidebar-foreground">Easysecure</span>
+                <span className="text-xs text-sidebar-foreground/60">{secondaryText}</span>
               </div>
             </Link>
             <Button
@@ -79,7 +88,7 @@ export function Sidebar({ open, onClose, user }: SidebarComponentProps) {
                 Principal
               </span>
             </div>
-            {navigation.map((item) => {
+            {buildNavigation(pathname).map((item) => {
               const isActive = pathname === item.href
               return (
                 <Link
@@ -138,6 +147,11 @@ export function Sidebar({ open, onClose, user }: SidebarComponentProps) {
                 <p className="text-xs text-sidebar-foreground/60">{user?.role || "usuario"}</p>
               </div>
             </div>
+            <form action={logout} className="mt-3">
+              <Button variant="outline" className="w-full">
+                Cerrar sesión
+              </Button>
+            </form>
           </div>
         </div>
       </aside>

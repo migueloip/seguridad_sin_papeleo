@@ -1,7 +1,19 @@
 "use client"
 import { useState, useCallback, useEffect } from "react"
 import { useDropzone } from "react-dropzone"
-import { Upload, CheckCircle, AlertCircle, Loader2, X, Edit2, Save, FileText, ImageIcon } from "lucide-react"
+import {
+  Upload,
+  CheckCircle,
+  AlertCircle,
+  Loader2,
+  X,
+  Edit2,
+  Save,
+  FileText,
+  ImageIcon,
+  AlertTriangle,
+  ClipboardCheck,
+} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -11,7 +23,11 @@ import { Progress } from "@/components/ui/progress"
 import { createDocument, findOrCreateWorkerByRut, findDocumentTypeByName } from "@/app/actions/documents"
 import { getWorkers, getWorkerById } from "@/app/actions/workers"
 import { getOcrMethod } from "@/app/actions/ocr"
-import { extractDocumentData } from "@/app/actions/document-processing"
+import { extractDocumentData, classifyUpload } from "@/app/actions/document-processing"
+import { scanFindingImage } from "@/app/actions/findings"
+import { extractChecklistFromImage } from "@/app/actions/checklists"
+import { createFinding } from "@/app/actions/findings"
+import { createChecklistTemplate } from "@/app/actions/checklists"
 import { documentTypes } from "@/app/data/document-types"
 import { normalizeRut, isValidRut, normalizeDate } from "@/lib/utils"
 
@@ -38,6 +54,23 @@ interface UploadedFile {
   file?: File
   error?: string
   selectedWorkerId?: number
+  target?: "document" | "finding" | "checklist"
+  dataUrl?: string
+  targetData?: {
+    finding?: {
+      title?: string
+      description?: string
+      severity?: "low" | "medium" | "high" | "critical"
+      location?: string
+      responsible_person?: string
+      due_date?: string
+    }
+    checklist?: {
+      name?: string
+      description?: string
+      items?: { items: Array<{ id?: string; text: string; checked?: boolean; hasIssue?: boolean; note?: string }> }
+    }
+  }
 }
 
 function extractDataFromText(text: string): ExtractedData {
@@ -178,6 +211,8 @@ export function UploadContent() {
       })
 
       const extractedData = extractDataFromText(result.data.text)
+      const nRut = extractedData.rut ? normalizeRut(extractedData.rut) : null
+      const found = nRut ? workers.find((w) => (w.rut ? normalizeRut(w.rut) : "") === nRut) : undefined
 
       setFiles((prev) =>
         prev.map((f) =>
@@ -188,6 +223,9 @@ export function UploadContent() {
                 progress: 100,
                 extractedData,
                 editedData: { ...extractedData },
+                selectedWorkerId: found?.id ?? f.selectedWorkerId,
+                target: "document",
+                dataUrl: base64DataUrl,
               }
             : f,
         ),
@@ -217,10 +255,76 @@ export function UploadContent() {
       } else {
         const reader = new FileReader()
         reader.onload = async (e) => {
-          const base64 = (e.target?.result as string).split(",")[1]
+          let base64 = (e.target?.result as string).split(",")[1]
+          let mime = file.type
+          let dataUrl = e.target?.result as string
+
+          // If PDF, render first page to PNG for Vision models
+          if (file.type === "application/pdf") {
+            try {
+              const pdfjs = (await import("pdfjs-dist")) as typeof import("pdfjs-dist")
+              try { pdfjs.GlobalWorkerOptions.workerSrc = "https://unpkg.com/pdfjs-dist@4/build/pdf.worker.min.mjs" } catch {}
+              // pdfjs.getDocument expects an ArrayBuffer
+              const buf = await file.arrayBuffer()
+              const loadingTask = pdfjs.getDocument({ data: new Uint8Array(buf) })
+              const pdf = await loadingTask.promise
+              const page = await pdf.getPage(1)
+              const viewport = page.getViewport({ scale: 1.5 })
+              const canvas = document.createElement("canvas")
+              const ctx = canvas.getContext("2d")!
+              canvas.width = viewport.width
+              canvas.height = viewport.height
+              await page.render({ canvasContext: ctx, viewport }).promise
+              base64 = canvas.toDataURL("image/png").split(",")[1]
+              mime = "image/png"
+              dataUrl = `data:${mime};base64,${base64}`
+            } catch {
+              setFiles((prev) =>
+                prev.map((f) =>
+                  f.id === id
+                    ? {
+                        ...f,
+                        status: "error",
+                        error: "No se pudo procesar el PDF para IA. Intente con una imagen.",
+                      }
+                    : f,
+                ),
+              )
+              return
+            }
+          }
 
           try {
-            const extractedData = await extractDocumentData(base64, file.type)
+            const classification = await classifyUpload(base64, mime)
+            const target = (classification.target || "document") as "document" | "finding" | "checklist"
+            let autoWorkerId: number | undefined = undefined
+            if (classification?.rut) {
+              const n = normalizeRut(classification.rut as string)
+              const found = workers.find((w) => (w.rut ? normalizeRut(w.rut) : "") === n)
+              if (found) autoWorkerId = found.id
+            }
+            const extractedData = await extractDocumentData(base64, mime)
+            let targetData: UploadedFile["targetData"] = undefined
+            if (target === "finding") {
+              try {
+                const fd = await scanFindingImage(base64, mime)
+                targetData = { finding: fd }
+              } catch {}
+            } else if (target === "checklist") {
+              try {
+                const cd = await extractChecklistFromImage(base64, mime)
+                targetData = { checklist: cd }
+              } catch {}
+            }
+            const mergedEdited: ExtractedData = {
+              rut: extractedData.rut || classification.rut || null,
+              nombre: extractedData.nombre,
+              fechaEmision: extractedData.fechaEmision,
+              fechaVencimiento: extractedData.fechaVencimiento,
+              tipoDocumento: extractedData.tipoDocumento || classification.documentType || null,
+              empresa: extractedData.empresa,
+              cargo: extractedData.cargo,
+            }
             setFiles((prev) =>
               prev.map((f) =>
                 f.id === id
@@ -229,20 +333,25 @@ export function UploadContent() {
                       status: "completed",
                       progress: 100,
                       extractedData,
-                      editedData: { ...extractedData },
+                      editedData: { ...mergedEdited },
+                      target,
+                      selectedWorkerId: autoWorkerId ?? f.selectedWorkerId,
+                      dataUrl,
+                      targetData,
                     }
                   : f,
               ),
             )
-          } catch {
+          } catch (err) {
             setFiles((prev) =>
               prev.map((f) =>
                 f.id === id
                   ? {
                       ...f,
                       status: "error",
-                      error:
-                        "Error con IA: configure la API de IA en Configuración o vuelva a intentar con una imagen compatible.",
+                      error: `Error con IA: ${
+                        err instanceof Error ? err.message : "verifique su configuración de IA"
+                      }. Configure la API de IA en Configuración o vuelva a intentar con una imagen compatible.`,
                     }
                   : f,
               ),
@@ -252,7 +361,7 @@ export function UploadContent() {
         reader.readAsDataURL(file)
       }
     },
-    [ocrMethod, processWithTesseract],
+    [ocrMethod, processWithTesseract, workers],
   )
 
   const handleUpload = useCallback(
@@ -317,6 +426,10 @@ export function UploadContent() {
 
   const updateSelectedWorker = (id: string, workerId: number | null) => {
     setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, selectedWorkerId: workerId ?? undefined } : f)))
+  }
+
+  const updateTarget = (id: string, target: "document" | "finding" | "checklist") => {
+    setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, target } : f)))
   }
 
   const saveDocument = async (fileData: UploadedFile) => {
@@ -391,6 +504,62 @@ export function UploadContent() {
       console.error("Error saving document:", error)
       setFiles((prev) => prev.map((f) => (f.id === fileData.id ? { ...f, status: "completed" } : f)))
       alert("Error al guardar el documento")
+    }
+  }
+
+  const saveFinding = async (fileData: UploadedFile) => {
+    setFiles((prev) => prev.map((f) => (f.id === fileData.id ? { ...f, status: "saving" } : f)))
+    try {
+      const ai = fileData.targetData?.finding
+      const title = (ai?.title && String(ai.title)) || fileData.name.replace(/\.[^/.]+$/, "")
+      const description =
+        (ai?.description && String(ai.description)) ||
+        ((fileData.editedData?.tipoDocumento ? String(fileData.editedData?.tipoDocumento) + " - " : "") +
+          (fileData.editedData?.nombre ? String(fileData.editedData?.nombre) : ""))
+      const photos = fileData.dataUrl ? [fileData.dataUrl] : undefined
+      await createFinding({
+        title,
+        description: description || undefined,
+        severity: (ai?.severity as any) || "medium",
+        location: ai?.location || undefined,
+        responsible_person: ai?.responsible_person || undefined,
+        due_date: ai?.due_date || undefined,
+        photos,
+      })
+      setFiles((prev) => prev.map((f) => (f.id === fileData.id ? { ...f, status: "saved" } : f)))
+    } catch (error) {
+      console.error("Error creating finding:", error)
+      setFiles((prev) => prev.map((f) => (f.id === fileData.id ? { ...f, status: "completed" } : f)))
+      alert("Error al crear el hallazgo")
+    }
+  }
+
+  const saveChecklist = async (fileData: UploadedFile) => {
+    setFiles((prev) => prev.map((f) => (f.id === fileData.id ? { ...f, status: "saving" } : f)))
+    try {
+      const ai = fileData.targetData?.checklist
+      const name = (ai?.name && String(ai.name)) || fileData.name.replace(/\.[^/.]+$/, "")
+      const description =
+        (ai?.description && String(ai.description)) ||
+        (fileData.editedData?.empresa ? String(fileData.editedData?.empresa) : "") ||
+        (fileData.editedData?.tipoDocumento ? String(fileData.editedData?.tipoDocumento) : "")
+      const items = ai?.items || {
+        items: [
+          { id: "auto-1", text: "Revisar EPP", checked: false, hasIssue: false },
+          { id: "auto-2", text: "Verificar señalización", checked: false, hasIssue: false },
+          { id: "auto-3", text: "Registro fotográfico", checked: false, hasIssue: false },
+        ],
+      }
+      await createChecklistTemplate({
+        name,
+        description: description || undefined,
+        items,
+      })
+      setFiles((prev) => prev.map((f) => (f.id === fileData.id ? { ...f, status: "saved" } : f)))
+    } catch (error) {
+      console.error("Error creating checklist:", error)
+      setFiles((prev) => prev.map((f) => (f.id === fileData.id ? { ...f, status: "completed" } : f)))
+      alert("Error al crear el checklist")
     }
   }
 
@@ -519,6 +688,42 @@ export function UploadContent() {
                         </Button>
                       </div>
 
+                      <div className="mb-4 grid gap-3 sm:grid-cols-3">
+                        <div className="sm:col-span-1">
+                          <Label className="text-xs">Destino</Label>
+                          <Select
+                            value={file.target || "document"}
+                            onValueChange={(value) =>
+                              updateTarget(file.id, value as "document" | "finding" | "checklist")
+                            }
+                          >
+                            <SelectTrigger className="mt-1 h-8">
+                              <SelectValue placeholder="Seleccionar destino" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="document">
+                                <span className="inline-flex items-center gap-2">
+                                  <FileText className="h-3 w-3" />
+                                  Documentos
+                                </span>
+                              </SelectItem>
+                              <SelectItem value="finding">
+                                <span className="inline-flex items-center gap-2">
+                                  <AlertTriangle className="h-3 w-3" />
+                                  Hallazgos
+                                </span>
+                              </SelectItem>
+                              <SelectItem value="checklist">
+                                <span className="inline-flex items-center gap-2">
+                                  <ClipboardCheck className="h-3 w-3" />
+                                  Checklists
+                                </span>
+                              </SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+
                       {file.isEditing ? (
                         <div className="grid gap-3 sm:grid-cols-2">
                           <div>
@@ -622,10 +827,24 @@ export function UploadContent() {
                       )}
 
                       <div className="mt-4 flex gap-2">
-                        <Button size="sm" onClick={() => saveDocument(file)} disabled={file.status === "saving"}>
-                          <Save className="mr-1 h-3 w-3" />
-                          {file.status === "saving" ? "Guardando..." : "Guardar Documento"}
-                        </Button>
+                        {(!file.target || file.target === "document") && (
+                          <Button size="sm" onClick={() => saveDocument(file)} disabled={file.status === "saving"}>
+                            <Save className="mr-1 h-3 w-3" />
+                            {file.status === "saving" ? "Guardando..." : "Guardar Documento"}
+                          </Button>
+                        )}
+                        {file.target === "finding" && (
+                          <Button size="sm" onClick={() => saveFinding(file)} disabled={file.status === "saving"}>
+                            <AlertTriangle className="mr-1 h-3 w-3" />
+                            {file.status === "saving" ? "Creando..." : "Crear Hallazgo"}
+                          </Button>
+                        )}
+                        {file.target === "checklist" && (
+                          <Button size="sm" onClick={() => saveChecklist(file)} disabled={file.status === "saving"}>
+                            <ClipboardCheck className="mr-1 h-3 w-3" />
+                            {file.status === "saving" ? "Creando..." : "Crear Checklist"}
+                          </Button>
+                        )}
                       </div>
                     </div>
                   )}

@@ -3,6 +3,10 @@
 import { sql } from "@/lib/db"
 import { getCurrentUserId } from "@/lib/auth"
 import { revalidatePath } from "next/cache"
+import { generateText } from "ai"
+import type { LanguageModel } from "ai"
+import { getSetting } from "./settings"
+import { getModel } from "@/lib/ai"
 
 export async function getChecklistCategories(): Promise<
   Array<{ id: number; user_id?: number; name: string; description: string | null; created_at: string }>
@@ -116,4 +120,56 @@ export async function createChecklistTemplate(input: {
     RETURNING id
   `
   return rows[0] as { id: number }
+}
+
+export async function extractChecklistFromImage(base64Image: string, mimeType: string): Promise<{
+  name?: string
+  description?: string
+  items?: { items: Array<{ id?: string; text: string; checked?: boolean; hasIssue?: boolean; note?: string }> }
+}> {
+  const apiKey = await getSetting("ai_api_key")
+  if (!apiKey) throw new Error("API Key de IA no configurada")
+  const provider = "google"
+  const model = (await getSetting("ai_model")) || "gemini-2.5-flash"
+  const prompt =
+    `Analiza la imagen. Si corresponde a un checklist/lista de verificacion, devuelve JSON con:\n` +
+    `name (titulo del checklist), description (breve descripcion/area), items: arreglo de objetos {text} representando cada punto.\n` +
+    `Incluye solo items relevantes, maximo 20.\n` +
+    `Si no corresponde a checklist, usa null.\n` +
+    `Responde solo el JSON.`
+  const { text } = await generateText({
+    model: getModel(provider, model, apiKey) as unknown as LanguageModel,
+    messages: [
+      {
+        role: "user",
+        content: [{ type: "text", text: prompt }, { type: "image", image: `data:${mimeType};base64,${base64Image}` }],
+      },
+    ],
+  })
+  const cleaned = text.replace(/```json\n?|\n?```/g, "").trim()
+  try {
+    const parsed = JSON.parse(cleaned)
+    if (Array.isArray(parsed?.items)) {
+      return {
+        name: parsed.name || undefined,
+        description: parsed.description || undefined,
+        items: { items: parsed.items.map((it: any, idx: number) => ({ id: it.id || `ai-${idx}`, text: String(it.text || it) })) },
+      }
+    }
+    return parsed
+  } catch {
+    const m = cleaned.match(/\{[\s\S]*\}/)
+    if (m) {
+      const parsed = JSON.parse(m[0])
+      if (Array.isArray(parsed?.items)) {
+        return {
+          name: parsed.name || undefined,
+          description: parsed.description || undefined,
+          items: { items: parsed.items.map((it: any, idx: number) => ({ id: it.id || `ai-${idx}`, text: String(it.text || it) })) },
+        }
+      }
+      return parsed
+    }
+  }
+  return {}
 }

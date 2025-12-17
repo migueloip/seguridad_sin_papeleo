@@ -3,8 +3,10 @@
 import type React from "react"
 
 import { useState } from "react"
-import { Sidebar } from "./sidebar"
-import { Header } from "./header"
+import dynamic from "next/dynamic"
+import { usePathname } from "next/navigation"
+const SidebarClient = dynamic(() => import("./sidebar").then((m) => m.Sidebar), { ssr: false })
+const HeaderClient = dynamic(() => import("./header").then((m) => m.Header), { ssr: false })
 
 interface DashboardLayoutProps {
   children: React.ReactNode
@@ -13,12 +15,16 @@ interface DashboardLayoutProps {
 
 export function DashboardLayout({ children, user }: DashboardLayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const pathname = usePathname()
+  const showSidebar = pathname.startsWith("/proyectos/")
 
   return (
     <div className="flex min-h-screen bg-background">
-      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} user={user} />
-      <div className="flex flex-1 flex-col lg:pl-72">
-        <Header onMenuClick={() => setSidebarOpen(true)} user={user} />
+      {showSidebar && (
+        <SidebarClient open={sidebarOpen} onClose={() => setSidebarOpen(false)} user={user} />
+      )}
+      <div className={`flex flex-1 flex-col ${showSidebar ? "lg:pl-72" : ""}`}>
+        <HeaderClient onMenuClick={() => setSidebarOpen(true)} user={user} />
         <main className="flex-1 p-4 md:p-6 lg:p-8">{children}</main>
       </div>
     </div>

@@ -1,10 +1,19 @@
 import { PrismaClient } from "@prisma/client"
+import { withAccelerate } from "@prisma/extension-accelerate"
 
-const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient }
+const globalForPrisma = globalThis as unknown as { prisma?: any }
 
-export const prisma = globalForPrisma.prisma ?? new PrismaClient({
-  log: ["error", "warn"],
-})
+const rawUrl = process.env.DATABASE_URL || ""
+const l = rawUrl.toLowerCase()
+const isAccelerate = !!rawUrl && (l.startsWith("prisma+postgres://") || l.startsWith("prisma://") || l.includes("accelerate.prisma-data.net") || l.includes("db.prisma.io"))
+const dbUrl = rawUrl || "postgresql://postgres:postgres@localhost:5432/ssp?schema=public"
+
+process.env.DATABASE_URL = dbUrl
+process.env.PRISMA_CLIENT_DATA_PROXY = isAccelerate ? "true" : "false"
+if (!isAccelerate) process.env.PRISMA_ACCELERATE_URL = ""
+
+const base = globalForPrisma.prisma ?? new PrismaClient({ log: ["error", "warn"] })
+export const prisma = isAccelerate ? base.$extends(withAccelerate()) : base
 
 if (!globalForPrisma.prisma) globalForPrisma.prisma = prisma
 
@@ -163,4 +172,38 @@ export interface Session {
   token: string
   created_at: string
   expires_at: string
+}
+
+export interface Plan {
+  id: number
+  user_id: number
+  project_id: number | null
+  name: string
+  plan_type: string
+  file_name: string
+  file_url: string | null
+  mime_type: string | null
+  extracted: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+export interface PlanFloor {
+  id: number
+  user_id: number
+  plan_id: number
+  name: string
+  level: number | null
+  created_at: string
+}
+
+export interface PlanZone {
+  id: number
+  user_id: number
+  plan_id: number
+  floor_id: number | null
+  name: string
+  code: string | null
+  zone_type: string | null
+  created_at: string
 }

@@ -1,8 +1,10 @@
 "use server"
 
 import { generateText } from "ai"
+import type { LanguageModel } from "ai"
 import { getSetting } from "./settings"
 import { getModel } from "@/lib/ai"
+import { formatRut } from "@/lib/utils"
 
 interface ExtractedData {
   rut: string | null
@@ -20,8 +22,8 @@ export async function extractDocumentData(base64Image: string, mimeType: string)
     throw new Error("API Key de IA no configurada. Ve a Configuración para agregarla.")
   }
 
-  const provider = (await getSetting("ai_provider")) || "openai"
-  const model = (await getSetting("ai_model")) || "gpt-4o-mini"
+  const provider = "google"
+  const model = (await getSetting("ai_model")) || "gemini-2.5-flash"
 
   const prompt = `Analiza esta imagen de un documento y extrae la siguiente información en formato JSON:
 - rut: RUT chileno (formato XX.XXX.XXX-X)
@@ -36,7 +38,7 @@ Responde SOLO con el JSON, sin explicaciones adicionales. Si no puedes extraer a
 
   try {
     const { text } = await generateText({
-      model: getModel(provider, model, apiKey) as any,
+      model: getModel(provider, model, apiKey) as unknown as LanguageModel,
       messages: [
         {
           role: "user",
@@ -48,10 +50,14 @@ Responde SOLO con el JSON, sin explicaciones adicionales. Si no puedes extraer a
       ],
     })
 
-    // Parse the JSON response
-    const jsonMatch = text.match(/\{[\s\S]*\}/)
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0])
+    const cleanedText = text.replace(/```json\n?|\n?```/g, "").trim()
+    try {
+      return JSON.parse(cleanedText)
+    } catch {
+      const jsonMatch = cleanedText.match(/\{[\s\S]*\}/)
+      if (jsonMatch) {
+        return JSON.parse(jsonMatch[0])
+      }
     }
 
     return {
@@ -67,4 +73,49 @@ Responde SOLO con el JSON, sin explicaciones adicionales. Si no puedes extraer a
     console.error("Error extracting document data with AI:", error)
     throw error
   }
+}
+
+export interface ClassificationResult {
+  target: "document" | "finding" | "checklist"
+  rut?: string | null
+  documentType?: string | null
+  checklistTemplate?: string | null
+}
+
+export async function classifyUpload(base64: string, mime: string): Promise<ClassificationResult> {
+  const apiKey = await getSetting("ai_api_key")
+  if (!apiKey) {
+    throw new Error("API Key de IA no configurada. Ve a Configuración para agregarla.")
+  }
+  const provider = "google"
+  const model = (await getSetting("ai_model")) || "gemini-2.5-flash"
+  const prompt =
+    `Clasifica el contenido de este archivo en una sola categoria: "document" | "finding" | "checklist". ` +
+    `Devuelve JSON con campos: target, rut (formato XX.XXX.XXX-X si existe), documentType (si es documento), checklistTemplate (si es checklist). ` +
+    `Responde solo el JSON.`
+  const { text } = await generateText({
+    model: getModel(provider, model, apiKey) as unknown as LanguageModel,
+    messages: [
+      {
+        role: "user",
+        content: [{ type: "text", text: prompt }, { type: "image", image: `data:${mime};base64,${base64}` }],
+      },
+    ],
+  })
+  const cleanedText = text.replace(/```json\n?|\n?```/g, "").trim()
+  let parsed: ClassificationResult = { target: "document" }
+  try {
+    parsed = JSON.parse(cleanedText) as ClassificationResult
+  } catch {
+    const jsonMatch = cleanedText.match(/\{[\s\S]*\}/)
+    if (jsonMatch) {
+      parsed = JSON.parse(jsonMatch[0]) as ClassificationResult
+    }
+  }
+  if (parsed?.rut) {
+    try {
+      parsed.rut = formatRut(parsed.rut)
+    } catch {}
+  }
+  return parsed
 }

@@ -2,6 +2,7 @@ import { KpiCards } from "./kpi-cards"
 import { FindingsChart } from "./findings-chart"
 import { UpcomingExpirations } from "./upcoming-expirations"
 import { RecentFindings } from "./recent-findings"
+import { RiskHeatmap } from "./risk-heatmap"
 
 interface DashboardStats {
   documents: { valid: number; expiring: number; expired: number }
@@ -21,6 +22,15 @@ interface DashboardStats {
     status: string
     project_name: string
     created_at: string
+  }>
+  riskLocations: Array<{
+    location: string
+    score: number
+    openCount: number
+    critical: number
+    high: number
+    medium: number
+    low: number
   }>
 }
 
@@ -44,6 +54,8 @@ export function DashboardContent({ stats, weeklyFindings }: { stats: DashboardSt
         <FindingsChart data={weeklyFindings} />
         <UpcomingExpirations expirations={stats.expiringDocs} />
       </div>
+
+      <RiskHeatmap data={stats.riskLocations} />
 
       <RecentFindings findings={stats.recentFindings} />
     </div>

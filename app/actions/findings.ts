@@ -3,6 +3,10 @@
 import { sql } from "@/lib/db"
 import { getCurrentUserId } from "@/lib/auth"
 import { revalidatePath } from "next/cache"
+import { generateText } from "ai"
+import type { LanguageModel } from "ai"
+import { getSetting } from "./settings"
+import { getModel } from "@/lib/ai"
 
 export async function getFindings(projectId?: number, status?: string) {
   const userId = await getCurrentUserId()
@@ -66,11 +70,11 @@ export async function createFinding(data: {
   photos?: string[]
 }) {
   const userId = await getCurrentUserId()
-  const result = await sql`
+  const result = await sql<{ id: number }>`
     INSERT INTO findings (project_id, checklist_id, title, description, severity, location, responsible_person, due_date, photos)
     VALUES (${data.project_id || null}, ${data.checklist_id || null}, ${data.title}, ${data.description || null},
             ${data.severity}, ${data.location || null}, ${data.responsible_person || null}, 
-            ${data.due_date || null}, ${data.photos ? JSON.stringify(data.photos) : null})
+            ${data.due_date || null}, ${data.photos ? JSON.stringify(data.photos) : null}::jsonb)
     RETURNING id
   `
   const findingId = Number(result[0].id)
@@ -120,4 +124,84 @@ export async function deleteFinding(id: number) {
   const userId = await getCurrentUserId()
   await sql`DELETE FROM findings WHERE id = ${id} AND user_id = ${userId}`
   revalidatePath("/hallazgos")
+}
+
+export async function scanFindingImage(base64Image: string, mimeType: string): Promise<{
+  title?: string
+  description?: string
+  severity?: "low" | "medium" | "high" | "critical"
+  location?: string
+  responsible_person?: string
+  due_date?: string
+}> {
+  const apiKey = await getSetting("ai_api_key")
+  if (!apiKey) throw new Error("API Key de IA no configurada")
+  const provider = "google"
+  const model = (await getSetting("ai_model")) || "gemini-2.5-flash"
+  const prompt =
+    `Analiza la imagen y devuelve un JSON con: title, description, severity (low|medium|high|critical), location, responsible_person, due_date (YYYY-MM-DD). Si algun dato no se puede inferir usa null. Responde solo el JSON.`
+  const { text } = await generateText({
+    model: getModel(provider, model, apiKey) as unknown as LanguageModel,
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: prompt },
+          { type: "image", image: `data:${mimeType};base64,${base64Image}` },
+        ],
+      },
+    ],
+  })
+  const cleaned = text.replace(/```json\n?|\n?```/g, "").trim()
+  try {
+    const parsed = JSON.parse(cleaned)
+    return parsed
+  } catch {
+    const m = cleaned.match(/\{[\s\S]*\}/)
+    if (m) return JSON.parse(m[0])
+  }
+  return {}
+}
+
+export async function generateCorrectiveAction(args: {
+  title?: string
+  description?: string
+  severity?: "low" | "medium" | "high" | "critical"
+  location?: string
+  photos?: string[]
+}): Promise<string> {
+  const apiKey = await getSetting("ai_api_key")
+  if (!apiKey) throw new Error("API Key de IA no configurada")
+  const provider = "google"
+  const model = (await getSetting("ai_model")) || "gemini-2.5-flash"
+  const base =
+    `Genera una accion correctiva concreta y accionable en espanol para un hallazgo de seguridad.\n` +
+    `Incluye pasos claros, responsables, y plazos sugeridos.\n` +
+    `Responde exclusivamente con una lista de viñetas, iniciando cada linea con "-".\n` +
+    `No incluyas introducciones, encabezados, separadores ni conclusiones.\n` +
+    `No uses frases como "Aqui tienes..." ni "Resumen".\n` +
+    `Contexto:\n` +
+    `Titulo: ${args.title || "-"}\n` +
+    `Descripcion: ${args.description || "-"}\n` +
+    `Severidad: ${args.severity || "-"}\n` +
+    `Ubicacion: ${args.location || "-"}\n`
+  const photo = Array.isArray(args.photos) && args.photos.length > 0 ? args.photos[0] : undefined
+  const { text } = await generateText({
+    model: getModel(provider, model, apiKey) as unknown as LanguageModel,
+    messages: [
+      {
+        role: "user",
+        content: photo
+          ? [{ type: "text", text: base }, { type: "image", image: photo }]
+          : [{ type: "text", text: base }],
+      },
+    ],
+  })
+  const cleaned = text
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/^\s*(aquí|aqui)\s+tienes[^\n]*\n?/i, "")
+    .replace(/^\s*[-–—]{3,}\s*$/gm, "")
+    .replace(/^\s*#{1,6}\s.*$/gm, "")
+    .trim()
+  return cleaned
 }

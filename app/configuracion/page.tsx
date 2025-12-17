@@ -1,5 +1,5 @@
 import { DashboardLayout } from "@/components/dashboard-layout"
-import { SettingsContent } from "@/components/settings-content"
+import SettingsContentClient from "@/components/settings-content-client"
 import { getSettings } from "@/app/actions/settings"
 
 export default async function ConfiguracionPage() {
@@ -7,7 +7,7 @@ export default async function ConfiguracionPage() {
 
   return (
     <DashboardLayout>
-      <SettingsContent initialSettings={settings} />
+      <SettingsContentClient initialSettings={settings} />
     </DashboardLayout>
   )
 }

@@ -137,12 +137,12 @@ export function PersonnelContent({ initialWorkers }: { initialWorkers: Worker[] 
 
       setWorkers((prev) => [
         {
-          ...(created as any),
+          ...(created as unknown as Worker),
           valid_docs: 0,
           expiring_docs: 0,
           expired_docs: 0,
           project_name: null,
-        } as any,
+        } as Worker,
         ...prev,
       ])
       setNewWorker({
@@ -189,13 +189,13 @@ export function PersonnelContent({ initialWorkers }: { initialWorkers: Worker[] 
         phone: editForm.phone || undefined,
         email: editForm.email || undefined,
       })
-
+      const updatedWorker = updated as unknown as Worker
       setWorkers((prev) =>
         prev.map((w) =>
           w.id === editingWorker.id
             ? {
                 ...w,
-                ...updated,
+                ...updatedWorker,
               }
             : w,
         ),

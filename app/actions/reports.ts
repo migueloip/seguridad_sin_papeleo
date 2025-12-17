@@ -3,7 +3,7 @@
 import { sql } from "@/lib/db"
 import type { Report as DbReport } from "@/lib/db"
 import { generateText } from "ai"
-import type { LanguageModelV1 } from "ai"
+import type { LanguageModel } from "ai"
 import { getSetting } from "./settings"
 import { getModel } from "@/lib/ai"
 import { getCurrentUserId } from "@/lib/auth"
@@ -164,8 +164,8 @@ export async function generateAIReport(
 ): Promise<{ content: string; title: string; id: number }> {
   const userId = await getCurrentUserId()
   const apiKey = await getSetting("ai_api_key")
-  const aiModel = (await getSetting("ai_model")) || "gpt-4o-mini"
-  const aiProvider = (await getSetting("ai_provider")) || "openai"
+  const aiModel = (await getSetting("ai_model")) || "gemini-2.5-flash"
+  const aiProvider = "google"
 
   if (!apiKey) {
     throw new Error("No se ha configurado la API Key de IA. Ve a Configuracion para agregarla.")
@@ -220,7 +220,7 @@ Genera un informe estructurado con:
 El informe debe ser profesional, conciso y orientado a la accion. Usa formato Markdown.`
 
   try {
-    const model = getModel(aiProvider, aiModel, apiKey) as LanguageModelV1
+    const model = getModel(aiProvider, aiModel, apiKey) as unknown as LanguageModel
     const { text } = await generateText({ model, prompt })
 
     const inserted = await sql<{ id: number }>`

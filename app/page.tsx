@@ -1,23 +1,31 @@
-import { DashboardLayout } from "@/components/dashboard-layout"
-import { DashboardContent } from "@/components/dashboard-content"
-import { getDashboardStats, getWeeklyFindingsOpenClosed } from "@/app/actions/dashboard"
+import { ProjectsContent } from "@/components/projects-content"
 import { getSession } from "@/lib/auth"
+import { getProjects } from "@/app/actions/projects"
+import { logout } from "@/app/actions/auth"
+import { redirect } from "next/navigation"
+import { Button } from "@/components/ui/button"
+import { AnimatedPage } from "@/components/animated-page"
 
 export default async function Home() {
-  const [stats, weekly, session] = await Promise.all([getDashboardStats(), getWeeklyFindingsOpenClosed(), getSession()])
+  const [projects, session] = await Promise.all([getProjects(), getSession()])
+  if (!session) redirect("/auth/login")
 
   return (
-    <DashboardLayout
-      user={session ? { email: String(session.email), name: session.name ?? null, role: session.role ?? null } : undefined}
-    >
-      <DashboardContent
-        stats={stats}
-        weeklyFindings={(weekly as Array<{ semana: string; abiertos: number; cerrados: number }>).map((w) => ({
-          semana: w.semana,
-          abiertos: Number(w.abiertos) || 0,
-          cerrados: Number(w.cerrados) || 0,
-        }))}
-      />
-    </DashboardLayout>
+    <AnimatedPage duration={400}>
+      <div className="min-h-screen bg-background">
+        <header className="flex items-center justify-between border-b border-border bg-card p-4 md:p-6">
+          <div>
+            <h1 className="text-xl font-semibold">Bienvenido</h1>
+            <p className="text-sm text-muted-foreground">Selecciona un proyecto para administrar</p>
+          </div>
+          <form action={logout}>
+            <Button variant="outline">Cerrar sesión</Button>
+          </form>
+        </header>
+        <main className="p-4 md:p-6 lg:p-8">
+          <ProjectsContent initialProjects={projects as any} />
+        </main>
+      </div>
+    </AnimatedPage>
   )
 }

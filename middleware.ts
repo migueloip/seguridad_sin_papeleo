@@ -12,7 +12,13 @@ export function middleware(req: NextRequest) {
     "/apple-icon.png",
   ]
 
-  if (publicPaths.includes(pathname) || pathname.startsWith("/_next") || pathname.startsWith("/public")) {
+  if (
+    publicPaths.includes(pathname) ||
+    pathname.startsWith("/_next") ||
+    pathname.startsWith("/public") ||
+    pathname.startsWith("/api/health") ||
+    pathname.startsWith("/api/diagnostics")
+  ) {
     return NextResponse.next()
   }
 

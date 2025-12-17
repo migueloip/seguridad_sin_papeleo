@@ -141,3 +141,43 @@ CREATE INDEX idx_findings_status ON findings(status);
 CREATE INDEX idx_findings_severity ON findings(severity);
 CREATE INDEX idx_completed_checklists_project ON completed_checklists(project_id);
 CREATE INDEX idx_notifications_read ON notifications(is_read);
+
+-- Tabla de planos
+CREATE TABLE plans (
+  id SERIAL PRIMARY KEY,
+  project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+  name VARCHAR(255) NOT NULL,
+  plan_type VARCHAR(50) NOT NULL,
+  file_name VARCHAR(255) NOT NULL,
+  file_url TEXT,
+  mime_type VARCHAR(100),
+  extracted JSONB,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Tabla de pisos asociados a un plano
+CREATE TABLE plan_floors (
+  id SERIAL PRIMARY KEY,
+  plan_id INTEGER REFERENCES plans(id) ON DELETE CASCADE,
+  name VARCHAR(100) NOT NULL,
+  level INTEGER,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Tabla de zonas por piso o generales del plano
+CREATE TABLE plan_zones (
+  id SERIAL PRIMARY KEY,
+  plan_id INTEGER REFERENCES plans(id) ON DELETE CASCADE,
+  floor_id INTEGER REFERENCES plan_floors(id) ON DELETE SET NULL,
+  name VARCHAR(100) NOT NULL,
+  code VARCHAR(50),
+  zone_type VARCHAR(50),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Índices para planos
+CREATE INDEX idx_plans_project ON plans(project_id);
+CREATE INDEX idx_plan_floors_plan ON plan_floors(plan_id);
+CREATE INDEX idx_plan_zones_plan ON plan_zones(plan_id);
+CREATE INDEX idx_plan_zones_floor ON plan_zones(floor_id);

@@ -5,7 +5,13 @@ import { getSession } from "@/lib/auth"
 export default async function UploadPage() {
   const session = await getSession()
   return (
-    <DashboardLayout user={session as any}>
+    <DashboardLayout
+      user={
+        session
+          ? { email: String(session.email), name: session.name ?? null, role: session.role ?? null }
+          : undefined
+      }
+    >
       <UploadContent />
     </DashboardLayout>
   )

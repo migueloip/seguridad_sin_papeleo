@@ -4,6 +4,7 @@ import { sql } from "@/lib/db"
 import type { Worker, DocumentType, Document } from "@/lib/db"
 import { getCurrentUserId } from "@/lib/auth"
 import { revalidatePath } from "next/cache"
+import { formatRut, normalizeRut } from "@/lib/utils"
 
 export async function getDocuments(workerId?: number): Promise<
   Array<Document & { first_name: string; last_name: string; rut: string | null; document_type: string }>
@@ -62,7 +63,7 @@ export async function createDocument(data: {
   const result = await sql<Document>`
     INSERT INTO documents (worker_id, document_type_id, file_name, file_url, issue_date, expiry_date, status, extracted_data, user_id)
     VALUES (${data.worker_id}, ${data.document_type_id}, ${data.file_name}, ${data.file_url || null},
-            ${data.issue_date || null}, ${data.expiry_date || null}, ${status}, ${JSON.stringify(data.extracted_data) || null}, ${userId})
+            ${data.issue_date || null}, ${data.expiry_date || null}, ${status}, ${data.extracted_data ? JSON.stringify(data.extracted_data) : null}::jsonb, ${userId})
     RETURNING *
   `
   revalidatePath("/documentos")
@@ -80,8 +81,12 @@ export async function findOrCreateWorkerByRut(data: {
 }): Promise<Worker> {
   // First try to find existing worker
   const userId = await getCurrentUserId()
+  const normInput = normalizeRut(data.rut)
   const existing = await sql<Worker>`
-    SELECT * FROM workers WHERE rut = ${data.rut} AND user_id = ${userId} LIMIT 1
+    SELECT * FROM workers 
+    WHERE regexp_replace(upper(rut), '[^0-9K]', '', 'g') = regexp_replace(${normInput.toUpperCase()}, '[^0-9K]', '', 'g')
+      AND user_id = ${userId}
+    LIMIT 1
   `
 
   if (existing.length > 0) {
@@ -91,7 +96,7 @@ export async function findOrCreateWorkerByRut(data: {
   // Create new worker
   const result = await sql<Worker>`
     INSERT INTO workers (rut, first_name, last_name, company, role, user_id)
-    VALUES (${data.rut}, ${data.first_name}, ${data.last_name}, ${data.company || null}, ${data.role || null}, ${userId})
+    VALUES (${formatRut(normInput)}, ${data.first_name}, ${data.last_name}, ${data.company || null}, ${data.role || null}, ${userId})
     RETURNING *
   `
   revalidatePath("/personal")
@@ -158,7 +163,7 @@ export async function updateDocument(
         WHEN COALESCE(${data.expiry_date || null}, expiry_date) <= CURRENT_DATE + INTERVAL '30 days' THEN 'expiring'
         ELSE 'valid'
       END,
-      extracted_data = COALESCE(${data.extracted_data ? JSON.stringify(data.extracted_data) : null}, extracted_data),
+      extracted_data = COALESCE(${data.extracted_data ? JSON.stringify(data.extracted_data) : null}::jsonb, extracted_data),
       updated_at = CURRENT_TIMESTAMP
     WHERE id = ${id} AND user_id = ${userId}
     RETURNING *
@@ -166,4 +171,18 @@ export async function updateDocument(
   revalidatePath("/documentos")
   revalidatePath("/")
   return result[0]
+}
+
+export async function getDocumentsByProject(projectId: number): Promise<
+  Array<Document & { first_name: string; last_name: string; rut: string | null; document_type: string; project_id: number }>
+> {
+  const userId = await getCurrentUserId()
+  return sql<Document & { first_name: string; last_name: string; rut: string | null; document_type: string; project_id: number }>`
+    SELECT d.*, w.first_name, w.last_name, w.rut, w.project_id, dt.name as document_type
+    FROM documents d
+    JOIN workers w ON d.worker_id = w.id
+    LEFT JOIN document_types dt ON d.document_type_id = dt.id
+    WHERE w.project_id = ${projectId} AND d.user_id = ${userId}
+    ORDER BY d.expiry_date ASC
+  `
 }

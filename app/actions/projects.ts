@@ -3,6 +3,7 @@
 import { sql } from "@/lib/db"
 import { getCurrentUserId } from "@/lib/auth"
 import { revalidatePath } from "next/cache"
+import { toOptionalDate } from "@/lib/utils"
 
 export async function getProjects() {
   const userId = await getCurrentUserId()
@@ -31,12 +32,20 @@ export async function createProject(data: {
   end_date?: string
 }) {
   const userId = await getCurrentUserId()
+  const start = toOptionalDate(data.start_date)
+  const end = toOptionalDate(data.end_date)
   const result = await sql`
     INSERT INTO projects (name, location, client, start_date, end_date, user_id)
     VALUES (${data.name}, ${data.location || null}, ${data.client || null}, 
-            ${data.start_date || null}, ${data.end_date || null}, ${userId})
+            ${start}, ${end}, ${userId})
     RETURNING *
   `
   revalidatePath("/")
   return result[0]
+}
+
+export async function deleteProject(id: number) {
+  const userId = await getCurrentUserId()
+  await sql`DELETE FROM projects WHERE id = ${id} AND user_id = ${userId}`
+  revalidatePath("/")
 }

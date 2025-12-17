@@ -65,69 +65,28 @@ export function SettingsContent({ initialSettings }: SettingsContentProps) {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Key className="h-5 w-5" />
-                Configuracion de IA
+                Configuracion de Google AI
               </CardTitle>
               <CardDescription>
-                Configura el proveedor y la API Key para funciones de IA como generacion de informes
+                Configura la API Key de Google AI para funciones de IA como generacion de informes
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor="ai_provider">Proveedor de IA</Label>
-                  <Select
-                    value={settings.ai_provider || "openai"}
-                    onValueChange={(value) => updateSetting("ai_provider", value)}
-                  >
-                    <SelectTrigger id="ai_provider">
-                      <SelectValue placeholder="Seleccionar proveedor" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="openai">OpenAI</SelectItem>
-                      <SelectItem value="anthropic">Anthropic</SelectItem>
-                      <SelectItem value="google">Google AI</SelectItem>
-                      <SelectItem value="groq">Groq</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
                   <Label htmlFor="ai_model">Modelo</Label>
                   <Select
-                    value={settings.ai_model || "gpt-4o-mini"}
+                    value={settings.ai_model || "gemini-2.5-flash"}
                     onValueChange={(value) => updateSetting("ai_model", value)}
                   >
                     <SelectTrigger id="ai_model">
                       <SelectValue placeholder="Seleccionar modelo" />
                     </SelectTrigger>
                     <SelectContent>
-                      {settings.ai_provider === "openai" && (
-                        <>
-                          <SelectItem value="gpt-4o">GPT-4o</SelectItem>
-                          <SelectItem value="gpt-4o-mini">GPT-4o Mini</SelectItem>
-                          <SelectItem value="gpt-4-turbo">GPT-4 Turbo</SelectItem>
-                        </>
-                      )}
-                      {settings.ai_provider === "anthropic" && (
-                        <>
-                          <SelectItem value="claude-sonnet-4-20250514">Claude Sonnet 4</SelectItem>
-                          <SelectItem value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet</SelectItem>
-                          <SelectItem value="claude-3-haiku-20240307">Claude 3 Haiku</SelectItem>
-                        </>
-                      )}
-                      {settings.ai_provider === "google" && (
-                        <>
-                          <SelectItem value="gemini-1.5-pro">Gemini 1.5 Pro</SelectItem>
-                          <SelectItem value="gemini-1.5-flash">Gemini 1.5 Flash</SelectItem>
-                        </>
-                      )}
-                      {settings.ai_provider === "groq" && (
-                        <>
-                          <SelectItem value="llama-3.1-70b-versatile">Llama 3.1 70B</SelectItem>
-                          <SelectItem value="llama-3.1-8b-instant">Llama 3.1 8B</SelectItem>
-                          <SelectItem value="mixtral-8x7b-32768">Mixtral 8x7B</SelectItem>
-                        </>
-                      )}
+                      <SelectItem value="gemini-2.5-flash">Gemini 2.5 Flash</SelectItem>
+                      <SelectItem value="gemini-1.5-pro-latest">Gemini 1.5 Pro (latest)</SelectItem>
+                      <SelectItem value="gemini-1.5-flash-latest">Gemini 1.5 Flash (latest)</SelectItem>
+                      <SelectItem value="gemini-2.0-flash">Gemini 2.0 Flash</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -143,6 +102,8 @@ export function SettingsContent({ initialSettings }: SettingsContentProps) {
                     onChange={(e) => updateSetting("ai_api_key", e.target.value)}
                     placeholder="sk-..."
                     className="pr-10"
+                    autoComplete="new-password"
+                    name="ai-api-key"
                   />
                   <Button
                     type="button"
@@ -163,28 +124,6 @@ export function SettingsContent({ initialSettings }: SettingsContentProps) {
                 <h4 className="mb-2 font-medium">Como obtener una API Key</h4>
                 <ul className="space-y-1 text-sm text-muted-foreground">
                   <li>
-                    <strong>OpenAI:</strong> Visita{" "}
-                    <a
-                      href="https://platform.openai.com/api-keys"
-                      target="_blank"
-                      className="text-primary underline"
-                      rel="noreferrer"
-                    >
-                      platform.openai.com/api-keys
-                    </a>
-                  </li>
-                  <li>
-                    <strong>Anthropic:</strong> Visita{" "}
-                    <a
-                      href="https://console.anthropic.com/"
-                      target="_blank"
-                      className="text-primary underline"
-                      rel="noreferrer"
-                    >
-                      console.anthropic.com
-                    </a>
-                  </li>
-                  <li>
                     <strong>Google AI:</strong> Visita{" "}
                     <a
                       href="https://aistudio.google.com/apikey"
@@ -193,17 +132,6 @@ export function SettingsContent({ initialSettings }: SettingsContentProps) {
                       rel="noreferrer"
                     >
                       aistudio.google.com
-                    </a>
-                  </li>
-                  <li>
-                    <strong>Groq:</strong> Visita{" "}
-                    <a
-                      href="https://console.groq.com/keys"
-                      target="_blank"
-                      className="text-primary underline"
-                      rel="noreferrer"
-                    >
-                      console.groq.com
                     </a>
                   </li>
                 </ul>
