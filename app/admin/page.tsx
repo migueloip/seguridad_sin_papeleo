@@ -1,19 +1,37 @@
-import { redirect } from "next/navigation"
-import { getSession } from "@/lib/auth"
 import { DashboardLayout } from "@/components/dashboard-layout"
+import { adminLogin, isAdminAuthenticated } from "@/app/actions/admin"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import Link from "next/link"
 
 export default async function AdminPage() {
-  const session = await getSession()
-  if (!session) redirect("/auth/login")
-  if ((session as any).role !== "admin") redirect("/")
+  const authed = await isAdminAuthenticated()
 
   return (
     <DashboardLayout>
-      <div className="space-y-4">
-        <h1 className="text-2xl font-bold">Panel de Administración</h1>
-        <p className="text-muted-foreground">Gestión avanzada del sistema.</p>
-      </div>
+      {authed ? (
+        <div className="space-y-4">
+          <h1 className="text-2xl font-bold">Panel de Administración</h1>
+          <p className="text-muted-foreground">Gestión de usuarios.</p>
+          <div>
+            <Link href="/admin/usuarios">
+              <Button>Ver usuarios</Button>
+            </Link>
+          </div>
+        </div>
+      ) : (
+        <div className="mx-auto w-full max-w-sm rounded-lg border border-border bg-card p-6">
+          <h1 className="mb-4 text-xl font-semibold">Acceso Administrador</h1>
+          <form action={adminLogin} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="password">Contraseña</Label>
+              <Input id="password" name="password" type="password" required />
+            </div>
+            <Button type="submit" className="w-full">Entrar</Button>
+          </form>
+        </div>
+      )}
     </DashboardLayout>
   )
 }
-
