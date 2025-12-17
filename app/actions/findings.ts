@@ -146,8 +146,11 @@ export async function scanFindingImage(base64Image: string, mimeType: string): P
   responsible_person?: string
   due_date?: string
 }> {
-  const apiKey = await getSetting("ai_api_key")
-  if (!apiKey) throw new Error("API Key de IA no configurada")
+  const apiKey =
+    (await getSetting("ai_api_key")) || process.env.AI_API_KEY || process.env.GOOGLE_API_KEY || ""
+  if (!apiKey) {
+    return {}
+  }
   const provider = "google"
   const model = (await getSetting("ai_model")) || "gemini-2.5-flash"
   const prompt =
@@ -182,8 +185,18 @@ export async function generateCorrectiveAction(args: {
   location?: string
   photos?: string[]
 }): Promise<string> {
-  const apiKey = await getSetting("ai_api_key")
-  if (!apiKey) throw new Error("API Key de IA no configurada")
+  const apiKey =
+    (await getSetting("ai_api_key")) || process.env.AI_API_KEY || process.env.GOOGLE_API_KEY || ""
+  if (!apiKey) {
+    const lines = [
+      "- Restringir y señalizar el área afectada.",
+      "- Asignar responsable para ejecutar la corrección.",
+      "- Definir plazo concreto y verificar cumplimiento.",
+      "- Implementar medida de control adecuada al riesgo.",
+      "- Registrar evidencia antes y después de la acción.",
+    ]
+    return lines.join("\n")
+  }
   const provider = "google"
   const model = (await getSetting("ai_model")) || "gemini-2.5-flash"
   const base =

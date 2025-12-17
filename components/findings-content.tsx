@@ -36,6 +36,10 @@ interface Finding {
 }
 
 export function FindingsContent({ initialFindings, projectId }: { initialFindings: Finding[]; projectId?: number }) {
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => {
+    setMounted(true)
+  }, [])
   const [findings, setFindings] = useState<Finding[]>(initialFindings)
   const [filter, setFilter] = useState<string>("todos")
   const [isPending, startTransition] = useTransition()
@@ -99,6 +103,7 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
     }
     setCorrectiveById(map)
   }, [initialFindings])
+  if (!mounted) return null
 
   const getPriorityBadge = (severity: string) => {
     switch (severity) {

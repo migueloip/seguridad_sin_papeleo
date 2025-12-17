@@ -17,9 +17,18 @@ interface ExtractedData {
 }
 
 export async function extractDocumentData(base64Image: string, mimeType: string): Promise<ExtractedData> {
-  const apiKey = await getSetting("ai_api_key")
+  const apiKey =
+    (await getSetting("ai_api_key")) || process.env.AI_API_KEY || process.env.GOOGLE_API_KEY || ""
   if (!apiKey) {
-    throw new Error("API Key de IA no configurada. Ve a Configuración para agregarla.")
+    return {
+      rut: null,
+      nombre: null,
+      fechaEmision: null,
+      fechaVencimiento: null,
+      tipoDocumento: null,
+      empresa: null,
+      cargo: null,
+    }
   }
 
   const provider = "google"
@@ -83,9 +92,10 @@ export interface ClassificationResult {
 }
 
 export async function classifyUpload(base64: string, mime: string): Promise<ClassificationResult> {
-  const apiKey = await getSetting("ai_api_key")
+  const apiKey =
+    (await getSetting("ai_api_key")) || process.env.AI_API_KEY || process.env.GOOGLE_API_KEY || ""
   if (!apiKey) {
-    throw new Error("API Key de IA no configurada. Ve a Configuración para agregarla.")
+    return { target: "document" }
   }
   const provider = "google"
   const model = (await getSetting("ai_model")) || "gemini-2.5-flash"

@@ -114,7 +114,7 @@ function extractDataFromText(text: string): ExtractedData {
   }
 }
 
-export function UploadContent() {
+export function UploadContent({ projectId }: { projectId?: number }) {
   const [files, setFiles] = useState<UploadedFile[]>([])
   const [ocrMethod, setOcrMethod] = useState<string>("tesseract")
   const [workers, setWorkers] = useState<Array<{ id: number; first_name: string; last_name: string; rut: string | null }>>([])
@@ -128,7 +128,7 @@ export function UploadContent() {
         if (active && method) setOcrMethod(method)
       } catch {}
       try {
-        const list = await getWorkers()
+        const list = await getWorkers(projectId)
         if (active && Array.isArray(list)) {
           const casted = list as Array<{ id: number; first_name: string; last_name: string; rut: string | null }>
           setWorkers(
@@ -140,7 +140,7 @@ export function UploadContent() {
     return () => {
       active = false
     }
-  }, [])
+  }, [projectId])
 
   const processWithTesseract = useCallback(async (file: File, id: string) => {
     try {
@@ -475,6 +475,7 @@ export function UploadContent() {
           last_name: lastName || firstName,
           company: (data!.empresa as string) || undefined,
           role: (data!.cargo as string) || undefined,
+          project_id: projectId,
         })
         workerId = Number(worker.id as number)
       }
@@ -518,6 +519,7 @@ export function UploadContent() {
           (fileData.editedData?.nombre ? String(fileData.editedData?.nombre) : ""))
       const photos = fileData.dataUrl ? [fileData.dataUrl] : undefined
       await createFinding({
+        project_id: projectId,
         title,
         description: description || undefined,
         severity: (ai?.severity as any) || "medium",

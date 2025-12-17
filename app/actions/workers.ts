@@ -67,20 +67,13 @@ export async function createWorker(data: {
     SELECT * FROM workers 
     WHERE user_id = ${userId}
       AND regexp_replace(upper(rut), '[^0-9K]', '', 'g') = regexp_replace(${norm.toUpperCase()}, '[^0-9K]', '', 'g')
+      AND project_id IS NOT DISTINCT FROM ${data.project_id || null}
     LIMIT 1
   `
   if (existingForUser[0]) {
     revalidatePath("/personal")
     revalidatePath("/")
     return existingForUser[0]
-  }
-  const existsGlobal = await sql<{ id: number }>`
-    SELECT id FROM workers 
-    WHERE regexp_replace(upper(rut), '[^0-9K]', '', 'g') = regexp_replace(${norm.toUpperCase()}, '[^0-9K]', '', 'g')
-    LIMIT 1
-  `
-  if (existsGlobal[0]) {
-    throw new Error(`El RUT ${formatRut(norm)} ya existe`)
   }
   const result = await sql`
     INSERT INTO workers (rut, first_name, last_name, role, company, phone, email, project_id, user_id)
@@ -114,6 +107,10 @@ export async function updateWorker(
   if (!userId) {
     throw new Error("Debes iniciar sesión para actualizar personal")
   }
+  const current = await sql<{ project_id: number | null }>`
+    SELECT project_id FROM workers WHERE id = ${id} AND user_id = ${userId} LIMIT 1
+  `
+  const targetProjectId = (data.project_id ?? (current[0]?.project_id ?? null)) as number | null
   if (data.rut) {
     const norm = normalizeRut(data.rut)
     if (!isValidRut(norm)) {
@@ -123,11 +120,12 @@ export async function updateWorker(
       SELECT id FROM workers 
       WHERE user_id = ${userId}
         AND regexp_replace(upper(rut), '[^0-9K]', '', 'g') = regexp_replace(${normalizeRut(data.rut).toUpperCase()}, '[^0-9K]', '', 'g')
+        AND project_id IS NOT DISTINCT FROM ${targetProjectId}
         AND id <> ${id}
       LIMIT 1
     `
     if (existsOtherForUser[0]) {
-      throw new Error(`El RUT ${formatRut(norm)} ya existe en tu cuenta`)
+      throw new Error(`El RUT ${formatRut(norm)} ya existe en este proyecto`)
     }
   }
   const result = await sql`

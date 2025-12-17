@@ -85,6 +85,7 @@ export async function findOrCreateWorkerByRut(data: {
   last_name: string
   company?: string
   role?: string
+  project_id?: number
 }): Promise<Worker> {
   // First try to find existing worker
   const userId = await getCurrentUserId()
@@ -99,6 +100,7 @@ export async function findOrCreateWorkerByRut(data: {
     SELECT * FROM workers 
     WHERE regexp_replace(upper(rut), '[^0-9K]', '', 'g') = regexp_replace(${normInput.toUpperCase()}, '[^0-9K]', '', 'g')
       AND user_id = ${userId}
+      AND project_id IS NOT DISTINCT FROM ${data.project_id || null}
     LIMIT 1
   `
 
@@ -108,11 +110,14 @@ export async function findOrCreateWorkerByRut(data: {
 
   // Create new worker
   const result = await sql<Worker>`
-    INSERT INTO workers (rut, first_name, last_name, company, role, user_id)
-    VALUES (${formatRut(normInput)}, ${data.first_name}, ${data.last_name}, ${data.company || null}, ${data.role || null}, ${userId})
+    INSERT INTO workers (rut, first_name, last_name, company, role, project_id, user_id)
+    VALUES (${formatRut(normInput)}, ${data.first_name}, ${data.last_name}, ${data.company || null}, ${data.role || null}, ${data.project_id || null}, ${userId})
     RETURNING *
   `
   revalidatePath("/personal")
+  if (data.project_id) {
+    revalidatePath(`/proyectos/${data.project_id}/personal`)
+  }
   return result[0]
 }
 

@@ -16,7 +16,7 @@ interface DashboardLayoutProps {
 export function DashboardLayout({ children, user }: DashboardLayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const pathname = usePathname()
-  const showSidebar = pathname.startsWith("/proyectos/")
+  const showSidebar = !pathname.startsWith("/admin") && !pathname.startsWith("/auth")
 
   return (
     <div className="flex min-h-screen bg-background">

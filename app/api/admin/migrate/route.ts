@@ -14,6 +14,7 @@ export async function POST() {
     await sql`CREATE TABLE IF NOT EXISTS reports (id SERIAL PRIMARY KEY, project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL, report_type VARCHAR(50) NOT NULL, title VARCHAR(255) NOT NULL, date_from DATE, date_to DATE, content JSONB, file_url TEXT, generated_by VARCHAR(255), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`
     await sql`CREATE TABLE IF NOT EXISTS notifications (id SERIAL PRIMARY KEY, type VARCHAR(50) NOT NULL, title VARCHAR(255) NOT NULL, message TEXT, related_id INTEGER, related_type VARCHAR(50), is_read BOOLEAN DEFAULT false, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`
     await sql`CREATE TABLE IF NOT EXISTS settings (id SERIAL PRIMARY KEY, key VARCHAR(100) UNIQUE NOT NULL, value TEXT, description TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`
+    await sql`CREATE TABLE IF NOT EXISTS user_settings (id SERIAL PRIMARY KEY, user_id INTEGER REFERENCES users(id) ON DELETE CASCADE, key VARCHAR(100) NOT NULL, value TEXT, description TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE (user_id, key))`
     await sql`CREATE TABLE IF NOT EXISTS plans (id SERIAL PRIMARY KEY, project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL, name VARCHAR(255) NOT NULL, plan_type VARCHAR(50) NOT NULL, file_name VARCHAR(255) NOT NULL, file_url TEXT, mime_type VARCHAR(100), extracted JSONB, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`
     await sql`CREATE TABLE IF NOT EXISTS plan_floors (id SERIAL PRIMARY KEY, plan_id INTEGER REFERENCES plans(id) ON DELETE CASCADE, name VARCHAR(100) NOT NULL, level INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`
     await sql`CREATE TABLE IF NOT EXISTS plan_zones (id SERIAL PRIMARY KEY, plan_id INTEGER REFERENCES plans(id) ON DELETE CASCADE, floor_id INTEGER REFERENCES plan_floors(id) ON DELETE SET NULL, name VARCHAR(100) NOT NULL, code VARCHAR(50), zone_type VARCHAR(50), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`
@@ -52,6 +53,8 @@ export async function POST() {
     await sql`CREATE INDEX IF NOT EXISTS idx_plans_user ON plans(user_id)`
     await sql`CREATE INDEX IF NOT EXISTS idx_plan_floors_user ON plan_floors(user_id)`
     await sql`CREATE INDEX IF NOT EXISTS idx_plan_zones_user ON plan_zones(user_id)`
+    await sql`CREATE INDEX IF NOT EXISTS idx_user_settings_user ON user_settings(user_id)`
+    await sql`CREATE INDEX IF NOT EXISTS idx_user_settings_key ON user_settings(key)`
     await sql`INSERT INTO settings (key, value, description) VALUES 
       ('ai_provider', 'google', 'Proveedor de IA para OCR e informes'),
       ('ai_model', 'gemini-2.5-flash', 'Modelo de IA a usar'),
