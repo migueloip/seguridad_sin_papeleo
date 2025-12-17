@@ -23,6 +23,9 @@ import { getReportData, generateAIReport, getReportById, createManualReport, upd
 import { getFindings } from "@/app/actions/findings"
 import { Input } from "@/components/ui/input"
 import ReactMarkdown from "react-markdown"
+import { updateSettings } from "@/app/actions/settings"
+import type { EditorState, MatrixRow, DocumentAttachment, QuoteItem } from "@/lib/pdf-editor"
+import { buildEditorHtmlFromState, validateEditorState } from "@/lib/pdf-editor"
 
 interface GeneratedReport {
   id: number
@@ -111,6 +114,30 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
   const [selectedFindingIds, setSelectedFindingIds] = useState<number[]>([])
   const [brandName, setBrandName] = useState<string>("")
   const [brandLogo, setBrandLogo] = useState<string>("")
+  const [responsibleName, setResponsibleName] = useState<string>("")
+  const [pdfFont, setPdfFont] = useState<"sans-serif" | "serif">("sans-serif")
+  const [pdfFontSize, setPdfFontSize] = useState<number>(14)
+  const [pdfColor, setPdfColor] = useState<string>("#111827")
+  const [editorSections, setEditorSections] = useState<Array<"cover" | "summary" | "matrix" | "docs" | "quotes" | "recs">>([
+    "cover",
+    "summary",
+    "matrix",
+    "docs",
+    "quotes",
+    "recs",
+  ])
+  const [coverTitle, setCoverTitle] = useState<string>("Informe de Seguridad")
+  const [coverSubtitle, setCoverSubtitle] = useState<string>("Resumen de prevención de riesgos")
+  const [summaryText, setSummaryText] = useState<string>("")
+  const [matrixRows, setMatrixRows] = useState<MatrixRow[]>([])
+  const [recs, setRecs] = useState<string[]>([])
+  const [history, setHistory] = useState<any[]>([])
+  const [redo, setRedo] = useState<any[]>([])
+  const [editorAlerts, setEditorAlerts] = useState<string[]>([])
+  const [pdfA, setPdfA] = useState<boolean>(false)
+  const [docs, setDocs] = useState<DocumentAttachment[]>([])
+  const [quotes, setQuotes] = useState<QuoteItem[]>([])
+  const [quoteDraft, setQuoteDraft] = useState<QuoteItem>({ name: "", role: "", date: new Date().toISOString().slice(0, 10), content: "", signatureDataUrl: null })
 
   useEffect(() => {
     let mounted = true
@@ -125,12 +152,70 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
         if (!mounted) return
         setBrandName(String(nameJson.company_name || ""))
         setBrandLogo(String(logoJson.company_logo || ""))
+        try {
+          const resp = await fetch("/api/settings/responsible-name")
+          const j = await resp.json()
+          setResponsibleName(String(j.responsible_name || ""))
+        } catch {}
       } catch {}
     })()
     return () => {
       mounted = false
     }
   }, [])
+
+  const pushHistory = () => {
+    const snapshot = {
+      pdfFont,
+      pdfFontSize,
+      pdfColor,
+      editorSections,
+      coverTitle,
+      coverSubtitle,
+      summaryText,
+      matrixRows,
+      recs,
+      responsibleName,
+    }
+    setHistory((h) => [...h, snapshot])
+    setRedo([])
+  }
+  const undoEdit = () => {
+    setHistory((h) => {
+      if (h.length === 0) return h
+      const last = h[h.length - 1]
+      setRedo((r) => [...r, { pdfFont, pdfFontSize, pdfColor, editorSections, coverTitle, coverSubtitle, summaryText, matrixRows, recs, responsibleName }])
+      setPdfFont(last.pdfFont)
+      setPdfFontSize(last.pdfFontSize)
+      setPdfColor(last.pdfColor)
+      setEditorSections(last.editorSections)
+      setCoverTitle(last.coverTitle)
+      setCoverSubtitle(last.coverSubtitle)
+      setSummaryText(last.summaryText)
+      setMatrixRows(last.matrixRows)
+      setRecs(last.recs)
+      setResponsibleName(last.responsibleName)
+      return h.slice(0, -1)
+    })
+  }
+  const redoEdit = () => {
+    setRedo((r) => {
+      if (r.length === 0) return r
+      const last = r[r.length - 1]
+      setHistory((h) => [...h, { pdfFont, pdfFontSize, pdfColor, editorSections, coverTitle, coverSubtitle, summaryText, matrixRows, recs, responsibleName }])
+      setPdfFont(last.pdfFont)
+      setPdfFontSize(last.pdfFontSize)
+      setPdfColor(last.pdfColor)
+      setEditorSections(last.editorSections)
+      setCoverTitle(last.coverTitle)
+      setCoverSubtitle(last.coverSubtitle)
+      setSummaryText(last.summaryText)
+      setMatrixRows(last.matrixRows)
+      setRecs(last.recs)
+      setResponsibleName(last.responsibleName)
+      return r.slice(0, -1)
+    })
+  }
 
   const handleGenerate = async (templateId: string) => {
     setGenerating(templateId)
@@ -202,6 +287,45 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
         </div>
       </header>`
     return `${header}${html}`
+  }
+  const validateEditor = () => {
+    const alerts = validateEditorState({
+      pdfFont,
+      pdfFontSize,
+      pdfColor,
+      editorSections,
+      coverTitle,
+      coverSubtitle,
+      summaryText,
+      matrixRows,
+      recs,
+      brandLogo,
+      responsibleName,
+      pdfA,
+      docs,
+      quotes,
+    })
+    setEditorAlerts(alerts)
+    return alerts.length === 0
+  }
+  const buildEditorHtml = () => {
+    const state: EditorState = {
+      pdfFont,
+      pdfFontSize,
+      pdfColor,
+      editorSections,
+      coverTitle,
+      coverSubtitle,
+      summaryText,
+      matrixRows,
+      recs,
+      brandLogo,
+      responsibleName,
+      pdfA,
+      docs,
+      quotes,
+    }
+    return buildEditorHtmlFromState(state)
   }
 
   return (
@@ -335,6 +459,7 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
         <TabsList>
           <TabsTrigger value="ai">Generar con IA</TabsTrigger>
           <TabsTrigger value="manual">Crear Manual</TabsTrigger>
+          <TabsTrigger value="editor">Editor PDF</TabsTrigger>
           <TabsTrigger value="history">Historial</TabsTrigger>
         </TabsList>
 
@@ -411,6 +536,753 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
               </Card>
             ))}
           </div>
+        </TabsContent>
+
+        <TabsContent value="editor" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Editor de PDF</CardTitle>
+              <CardDescription>Maqueta estructurada para prevención de riesgos</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-wrap items-center gap-3">
+                <select
+                  value={pdfFont}
+                  onChange={(e) => {
+                    pushHistory()
+                    setPdfFont(e.target.value as any)
+                  }}
+                  className="rounded border bg-background px-2 py-1 text-sm"
+                >
+                  <option value="sans-serif">Sans Serif</option>
+                  <option value="serif">Serif</option>
+                </select>
+                <Input
+                  type="number"
+                  value={pdfFontSize}
+                  onChange={(e) => {
+                    pushHistory()
+                    setPdfFontSize(Number(e.target.value) || 14)
+                  }}
+                  className="w-24"
+                  placeholder="Tamaño"
+                />
+                <input
+                  type="color"
+                  value={pdfColor}
+                  onChange={(e) => {
+                    pushHistory()
+                    setPdfColor(e.target.value)
+                  }}
+                />
+                <Input
+                  placeholder="Responsable del documento"
+                  value={responsibleName}
+                  onChange={(e) => {
+                    pushHistory()
+                    setResponsibleName(e.target.value)
+                  }}
+                />
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    pushHistory()
+                    setEditorSections((s) => [...s].reverse())
+                  }}
+                >
+                  Invertir secciones
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    undoEdit()
+                  }}
+                  disabled={history.length === 0}
+                >
+                  Deshacer
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    redoEdit()
+                  }}
+                  disabled={redo.length === 0}
+                >
+                  Rehacer
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    pushHistory()
+                    setPdfA((v) => !v)
+                  }}
+                >
+                  PDF/A
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    try {
+                      const versionsRaw = localStorage.getItem("pdfEditorVersions")
+                      const versions = versionsRaw ? JSON.parse(versionsRaw) : []
+                      const snapshot = {
+                        date: new Date().toISOString(),
+                        pdfFont,
+                        pdfFontSize,
+                        pdfColor,
+                        editorSections,
+                        coverTitle,
+                        coverSubtitle,
+                        summaryText,
+                        matrixRows,
+                        recs,
+                        docs,
+                        quotes,
+                        responsibleName,
+                        pdfA,
+                      }
+                      const next = [...versions, snapshot].slice(-20)
+                      localStorage.setItem("pdfEditorVersions", JSON.stringify(next))
+                    } catch {}
+                  }}
+                >
+                  Guardar versión
+                </Button>
+              </div>
+              <div className="grid gap-6 md:grid-cols-2">
+                <div className="space-y-4">
+                  <div
+                    className="space-y-4"
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                      const from = e.dataTransfer.getData("section")
+                      const to = e.currentTarget.getAttribute("data-drop")
+                      if (!from || !to) return
+                    }}
+                  >
+                    {editorSections.map((sec, idx) => (
+                      <div
+                        key={sec + idx}
+                        draggable
+                        onDragStart={(e) => e.dataTransfer.setData("section-index", String(idx))}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={(e) => {
+                          const fromIdx = Number(e.dataTransfer.getData("section-index"))
+                          const toIdx = idx
+                          if (!Number.isFinite(fromIdx)) return
+                          pushHistory()
+                          setEditorSections((arr) => {
+                            const copy = [...arr]
+                            const [moved] = copy.splice(fromIdx, 1)
+                            copy.splice(toIdx, 0, moved)
+                            return copy
+                          })
+                        }}
+                        className="rounded border p-3"
+                      >
+                        {sec === "cover" && (
+                          <div className="space-y-2">
+                            <p className="text-sm font-medium">Portada</p>
+                            <Input
+                              placeholder="Título del documento"
+                              value={coverTitle}
+                              onChange={(e) => {
+                                pushHistory()
+                                setCoverTitle(e.target.value)
+                              }}
+                            />
+                            <Input
+                              placeholder="Subtítulo"
+                              value={coverSubtitle}
+                              onChange={(e) => {
+                                pushHistory()
+                                setCoverSubtitle(e.target.value)
+                              }}
+                            />
+                          </div>
+                        )}
+                        {sec === "summary" && (
+                          <div className="space-y-2">
+                            <p className="text-sm font-medium">Resumen Ejecutivo</p>
+                            <textarea
+                              className="w-full rounded border bg-background p-2 text-sm"
+                              rows={8}
+                              value={summaryText}
+                              onChange={(e) => {
+                                pushHistory()
+                                setSummaryText(e.target.value)
+                              }}
+                            />
+                            <div className="flex gap-2">
+                              <Button
+                                variant="outline"
+                                onClick={() => {
+                                  pushHistory()
+                                  setSummaryText((t) => t + (t ? "\n" : "") + "<b>Texto en negrita</b>")
+                                }}
+                              >
+                                Negrita
+                              </Button>
+                              <Button
+                                variant="outline"
+                                onClick={() => {
+                                  pushHistory()
+                                  setSummaryText((t) => t + (t ? "\n" : "") + "<i>Texto en cursiva</i>")
+                                }}
+                              >
+                                Cursiva
+                              </Button>
+                              <Button
+                                variant="outline"
+                                onClick={() => {
+                                  pushHistory()
+                                  setSummaryText((t) => t + (t ? "\n" : "") + "<ul><li>Elemento</li></ul>")
+                                }}
+                              >
+                                Viñetas
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                        {sec === "matrix" && (
+                          <div className="space-y-2">
+                            <p className="text-sm font-medium">Matriz de Hallazgos</p>
+                            <div className="grid gap-2">
+                              {matrixRows.map((row, i) => (
+                                <div key={i} className="grid grid-cols-6 gap-2">
+                                  <Input
+                                    placeholder="Descripción"
+                                    value={row.description}
+                                    onChange={(e) => {
+                                      pushHistory()
+                                      setMatrixRows((rows) => {
+                                        const copy = [...rows]
+                                        copy[i] = { ...copy[i], description: e.target.value }
+                                        return copy
+                                      })
+                                    }}
+                                  />
+                                  <Input
+                                    placeholder="Categoría"
+                                    value={row.category || ""}
+                                    onChange={(e) => {
+                                      pushHistory()
+                                      setMatrixRows((rows) => {
+                                        const copy = [...rows]
+                                        copy[i] = { ...copy[i], category: e.target.value }
+                                        return copy
+                                      })
+                                    }}
+                                  />
+                                  <Input
+                                    placeholder="Responsable"
+                                    value={row.owner || ""}
+                                    onChange={(e) => {
+                                      pushHistory()
+                                      setMatrixRows((rows) => {
+                                        const copy = [...rows]
+                                        copy[i] = { ...copy[i], owner: e.target.value }
+                                        return copy
+                                      })
+                                    }}
+                                  />
+                                  <select
+                                    value={row.severity}
+                                    onChange={(e) => {
+                                      pushHistory()
+                                      setMatrixRows((rows) => {
+                                        const copy = [...rows]
+                                        copy[i] = { ...copy[i], severity: e.target.value as any }
+                                        return copy
+                                      })
+                                    }}
+                                    className="rounded border bg-background px-2 py-1 text-sm"
+                                  >
+                                    <option value="alta">Alta</option>
+                                    <option value="medio">Medio</option>
+                                    <option value="bajo">Bajo</option>
+                                  </select>
+                                  <select
+                                    value={row.status}
+                                    onChange={(e) => {
+                                      pushHistory()
+                                      setMatrixRows((rows) => {
+                                        const copy = [...rows]
+                                        copy[i] = { ...copy[i], status: e.target.value as any }
+                                        return copy
+                                      })
+                                    }}
+                                    className="rounded border bg-background px-2 py-1 text-sm"
+                                  >
+                                    <option value="pendiente">Pendiente</option>
+                                    <option value="en progreso">En progreso</option>
+                                    <option value="resuelto">Resuelto</option>
+                                  </select>
+                                  <Input
+                                    type="date"
+                                    value={row.date}
+                                    onChange={(e) => {
+                                      pushHistory()
+                                      setMatrixRows((rows) => {
+                                        const copy = [...rows]
+                                        copy[i] = { ...copy[i], date: e.target.value }
+                                        return copy
+                                      })
+                                    }}
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                            <div className="flex gap-2">
+                              <Button
+                                variant="outline"
+                                onClick={() => {
+                                  pushHistory()
+                                  setMatrixRows((rows) => [
+                                    ...rows,
+                                    { description: "", severity: "medio", status: "pendiente", date: new Date().toISOString().slice(0, 10), category: "", owner: "" },
+                                  ])
+                                 }}
+                               >
+                                 Agregar fila
+                               </Button>
+                               <Button
+                                 variant="outline"
+                                 onClick={() => {
+                                   pushHistory()
+                                   setMatrixRows((rows) => rows.slice(0, -1))
+                                 }}
+                                 disabled={matrixRows.length === 0}
+                               >
+                                 Quitar última
+                               </Button>
+                                <Button
+                                  variant="outline"
+                                  disabled={findingsLoading}
+                                  onClick={() => {
+                                    setFindingsLoading(true)
+                                    startTransition(async () => {
+                                      try {
+                                        const items = (await getFindings(projectId)) as unknown as FindingRow[]
+                                        setFindingsList(
+                                          (items || []).map((f) => ({
+                                            id: f.id,
+                                            title: f.title,
+                                            description: f.description ?? null,
+                                            severity: f.severity,
+                                            status: f.status,
+                                            location: f.location ?? null,
+                                            created_at: f.created_at,
+                                            photos: Array.isArray(f.photos) ? f.photos : null,
+                                          })),
+                                        )
+                                      } finally {
+                                        setFindingsLoading(false)
+                                      }
+                                    })
+                                  }}
+                                >
+                                  Buscar hallazgos
+                                </Button>
+                             </div>
+                            {findingsList.length > 0 && (
+                              <div className="space-y-2">
+                                <Input
+                                  placeholder="Buscar por #ID o texto"
+                                  value={findingsQuery}
+                                  onChange={(e) => setFindingsQuery(e.target.value)}
+                                />
+                                <div className="grid gap-2">
+                                  {findingsList
+                                    .filter((f) => {
+                                      const q = findingsQuery.trim()
+                                      if (!q) return true
+                                      if (q.startsWith("#")) {
+                                        const idStr = q.slice(1)
+                                        const idNum = Number(idStr)
+                                        return f.id === idNum
+                                      }
+                                      const s = q.toLowerCase()
+                                      return f.title.toLowerCase().includes(s) || (f.description || "").toLowerCase().includes(s)
+                                    })
+                                    .slice(0, 6)
+                                    .map((f) => {
+                                      const checked = selectedFindingIds.includes(f.id)
+                                      return (
+                                        <div key={f.id} className="flex items-center justify-between rounded border px-3 py-2">
+                                          <div className="flex items-center gap-3">
+                                            <div className="flex h-8 w-8 items-center justify-center rounded bg-muted text-xs">#{f.id}</div>
+                                            <div>
+                                              <p className="text-sm font-medium">{f.title}</p>
+                                              <div className="text-xs text-muted-foreground">
+                                                {f.severity} · {f.status} · {formatDate(f.created_at)}
+                                              </div>
+                                            </div>
+                                          </div>
+                                          <div className="flex items-center gap-2">
+                                            <Badge variant="outline">{f.location || "-"}</Badge>
+                                            <Button
+                                              variant={checked ? "secondary" : "outline"}
+                                              size="sm"
+                                              onClick={() => {
+                                                setSelectedFindingIds((prev) => (checked ? prev.filter((id) => id !== f.id) : [...prev, f.id]))
+                                              }}
+                                            >
+                                              {checked ? "Quitar" : "Agregar"}
+                                            </Button>
+                                          </div>
+                                        </div>
+                                      )
+                                    })}
+                                </div>
+                                <div className="flex gap-2">
+                                  <Button
+                                    variant="outline"
+                                    disabled={selectedFindingIds.length === 0}
+                                    onClick={() => {
+                                      const selected = findingsList.filter((f) => selectedFindingIds.includes(f.id))
+                                      pushHistory()
+                                      setMatrixRows((rows) => [
+                                        ...rows,
+                                        ...selected.map((f) => ({
+                                          description: f.description || f.title,
+                                          severity: (f.severity as any) || "medio",
+                                          status: (f.status as any) || "pendiente",
+                                          date: new Date(f.created_at).toISOString().slice(0, 10),
+                                          category: "",
+                                          owner: "",
+                                        })),
+                                      ])
+                                    }}
+                                  >
+                                    Insertar selección
+                                  </Button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {sec === "recs" && (
+                          <div className="space-y-2">
+                            <p className="text-sm font-medium">Recomendaciones</p>
+                            <div className="grid gap-2">
+                              {recs.map((r, i) => (
+                                <div key={i} className="flex gap-2">
+                                  <Input
+                                    placeholder={`Recomendación ${i + 1}`}
+                                    value={r}
+                                    onChange={(e) => {
+                                      pushHistory()
+                                      setRecs((rs) => {
+                                        const copy = [...rs]
+                                        copy[i] = e.target.value
+                                        return copy
+                                      })
+                                    }}
+                                  />
+                                  <Button
+                                    variant="outline"
+                                    onClick={() => {
+                                      pushHistory()
+                                      setRecs((rs) => rs.filter((_, idx) => idx !== i))
+                                    }}
+                                  >
+                                    Quitar
+                                  </Button>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="flex gap-2">
+                              <Button
+                                variant="outline"
+                                onClick={() => {
+                                  pushHistory()
+                                  setRecs((rs) => [...rs, ""])
+                                }}
+                              >
+                                Agregar recomendación
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                        {sec === "docs" && (
+                          <div className="space-y-2">
+                            <p className="text-sm font-medium">Documentos</p>
+                            <input
+                              type="file"
+                              multiple
+                              accept=".pdf,.doc,.docx,.xls,.xlsx"
+                              onChange={(e) => {
+                                const files = Array.from(e.target.files || [])
+                                if (files.length === 0) return
+                                pushHistory()
+                                const next: DocumentAttachment[] = []
+                                files.forEach((file) => {
+                                  const name = file.name
+                                  const ext = name.split(".").pop()?.toLowerCase() || ""
+                                  const type: DocumentAttachment["type"] =
+                                    ext === "pdf" ? "pdf" : ext === "doc" || ext === "docx" ? "word" : ext === "xls" || ext === "xlsx" ? "excel" : "other"
+                                  const url = URL.createObjectURL(file)
+                                  next.push({ name, type, previewUrl: type === "pdf" ? url : null })
+                                })
+                                setDocs((d) => [...d, ...next])
+                              }}
+                            />
+                            <div className="grid gap-3">
+                              {docs.map((d, i) => (
+                                <div key={i} className="rounded border p-3">
+                                  <p className="text-sm font-medium">{d.name}</p>
+                                  <p className="text-xs text-muted-foreground mb-2">Tipo: {d.type.toUpperCase()}</p>
+                                  {d.previewUrl ? (
+                                    <object data={d.previewUrl} type="application/pdf" className="h-48 w-full" aria-label="PDF preview" />
+                                  ) : (
+                                    <div className="h-24 w-full rounded bg-muted flex items-center justify-center text-xs">Vista previa no disponible</div>
+                                  )}
+                                  <div className="mt-2 flex gap-2">
+                                    <Button
+                                      variant="outline"
+                                      onClick={() => {
+                                        pushHistory()
+                                        setDocs((arr) => arr.filter((_, idx) => idx !== i))
+                                      }}
+                                    >
+                                      Quitar
+                                    </Button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {sec === "quotes" && (
+                          <div className="space-y-2">
+                            <p className="text-sm font-medium">Citas de Personal</p>
+                            <div className="grid gap-2">
+                              <Input
+                                placeholder="Nombre"
+                                value={quoteDraft.name}
+                                onChange={(e) => setQuoteDraft((q) => ({ ...q, name: e.target.value }))}
+                              />
+                              <Input
+                                placeholder="Cargo"
+                                value={quoteDraft.role}
+                                onChange={(e) => setQuoteDraft((q) => ({ ...q, role: e.target.value }))}
+                              />
+                              <Input
+                                type="date"
+                                value={quoteDraft.date}
+                                onChange={(e) => setQuoteDraft((q) => ({ ...q, date: e.target.value }))}
+                              />
+                              <textarea
+                                className="w-full rounded border bg-background p-2 text-sm"
+                                rows={4}
+                                placeholder="Contenido de la cita"
+                                value={quoteDraft.content}
+                                onChange={(e) => setQuoteDraft((q) => ({ ...q, content: e.target.value }))}
+                              />
+                              <div>
+                                <p className="text-xs mb-2">Firma digital</p>
+                                <canvas
+                                  id="signature-canvas-editor"
+                                  className="h-24 w-full rounded border bg-background"
+                                  onMouseDown={(e) => {
+                                    const c = e.currentTarget
+                                    const ctx = c.getContext("2d")
+                                    if (!ctx) return
+                                    let drawing = true
+                                    const rect = c.getBoundingClientRect()
+                                    const move = (ev: MouseEvent) => {
+                                      if (!drawing) return
+                                      ctx.strokeStyle = "#111827"
+                                      ctx.lineWidth = 2
+                                      ctx.lineCap = "round"
+                                      ctx.beginPath()
+                                      ctx.moveTo(ev.clientX - rect.left, ev.clientY - rect.top)
+                                      ctx.lineTo(ev.clientX - rect.left + 0.1, ev.clientY - rect.top + 0.1)
+                                      ctx.stroke()
+                                    }
+                                    const up = () => {
+                                      drawing = false
+                                      window.removeEventListener("mousemove", move)
+                                      window.removeEventListener("mouseup", up)
+                                    }
+                                    window.addEventListener("mousemove", move)
+                                    window.addEventListener("mouseup", up)
+                                  }}
+                                />
+                                <div className="mt-2 flex gap-2">
+                                  <Button
+                                    variant="outline"
+                                    onClick={() => {
+                                      const c = document.getElementById("signature-canvas-editor") as HTMLCanvasElement | null
+                                      if (!c) return
+                                      setQuoteDraft((q) => ({ ...q, signatureDataUrl: c.toDataURL("image/png") }))
+                                    }}
+                                  >
+                                    Guardar firma
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    onClick={() => {
+                                      const c = document.getElementById("signature-canvas-editor") as HTMLCanvasElement | null
+                                      if (!c) return
+                                      const ctx = c.getContext("2d")
+                                      if (!ctx) return
+                                      ctx.clearRect(0, 0, c.width, c.height)
+                                      setQuoteDraft((q) => ({ ...q, signatureDataUrl: null }))
+                                    }}
+                                  >
+                                    Limpiar
+                                  </Button>
+                                </div>
+                              </div>
+                              <div className="flex justify-end gap-2">
+                                <Button
+                                  variant="outline"
+                                  onClick={() => {
+                                    if (!quoteDraft.name || !quoteDraft.role || !quoteDraft.date || !quoteDraft.content) return
+                                    pushHistory()
+                                    setQuotes((qs) => [...qs, quoteDraft])
+                                    setQuoteDraft({ name: "", role: "", date: new Date().toISOString().slice(0, 10), content: "", signatureDataUrl: null })
+                                  }}
+                                >
+                                  Agregar cita
+                                </Button>
+                              </div>
+                              <div className="grid gap-2">
+                                {quotes.map((q, i) => (
+                                  <div key={i} className="rounded border p-3">
+                                    <p className="text-sm font-medium">{q.name} · {q.role} · {q.date}</p>
+                                    <p className="text-sm">{q.content}</p>
+                                    {q.signatureDataUrl ? <img src={q.signatureDataUrl} alt="Firma" className="mt-2 max-h-12" /> : null}
+                                    <div className="mt-2 flex gap-2">
+                                      <Button
+                                        variant="outline"
+                                        onClick={() => {
+                                          pushHistory()
+                                          setQuotes((arr) => arr.filter((_, idx) => idx !== i))
+                                        }}
+                                      >
+                                        Quitar
+                                      </Button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <div className="rounded border p-3">
+                    <p className="mb-2 text-sm font-medium">Previsualización</p>
+                    <div
+                      className="max-h-[60vh] overflow-auto rounded border"
+                      dangerouslySetInnerHTML={{ __html: buildEditorHtml() }}
+                    />
+                  </div>
+                </div>
+              </div>
+              {editorAlerts.length > 0 && (
+                <Alert variant="destructive">
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertDescription>{editorAlerts.join(" · ")}</AlertDescription>
+                </Alert>
+              )}
+              <div className="flex flex-wrap justify-end gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    startTransition(async () => {
+                      const tpl = {
+                        pdfFont,
+                        pdfFontSize,
+                        pdfColor,
+                        editorSections,
+                        coverTitle,
+                        coverSubtitle,
+                        summaryText,
+                        matrixRows,
+                        recs,
+                      }
+                      await updateSettings([{ key: "pdf_template_default", value: JSON.stringify(tpl) }, { key: "responsible_name", value: responsibleName }])
+                    })
+                  }}
+                >
+                  Guardar como plantilla
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={async () => {
+                    try {
+                      const resp = await fetch("/api/settings/pdf-template")
+                      const j = await resp.json()
+                      const raw = j.template || ""
+                      if (!raw) return
+                      const tpl = JSON.parse(String(raw))
+                      setPdfFont(tpl.pdfFont || "sans-serif")
+                      setPdfFontSize(Number(tpl.pdfFontSize) || 14)
+                      setPdfColor(tpl.pdfColor || "#111827")
+                      setEditorSections(Array.isArray(tpl.editorSections) ? tpl.editorSections : ["cover", "summary", "matrix", "recs"])
+                      setCoverTitle(tpl.coverTitle || "")
+                      setCoverSubtitle(tpl.coverSubtitle || "")
+                      setSummaryText(tpl.summaryText || "")
+                      setMatrixRows(Array.isArray(tpl.matrixRows) ? tpl.matrixRows : [])
+                      setRecs(Array.isArray(tpl.recs) ? tpl.recs : [])
+                    } catch {}
+                  }}
+                >
+                  Cargar plantilla
+                </Button>
+                <Button
+                  onClick={() => {
+                    if (!validateEditor()) return
+                    const html = buildEditorHtml()
+                    const blob = new Blob([html], { type: "text/html" })
+                    const url = URL.createObjectURL(blob)
+                    const a = document.createElement("a")
+                    a.href = url
+                    a.download = `${coverTitle || "informe"}.html`
+                    a.click()
+                    URL.revokeObjectURL(url)
+                  }}
+                >
+                  Exportar HTML
+                </Button>
+                <Button
+                  onClick={() => {
+                    if (!validateEditor()) return
+                    const w = window.open("", "_blank")
+                    if (!w) return
+                    const html = buildEditorHtml() 
+                    w.document.write(html.replace("</body></html>", `<script>setTimeout(function(){window.print()},100)</script></body></html>`))
+                    w.document.close()
+                  }}
+                >
+                  Exportar PDF
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    if (!validateEditor()) return
+                    const html = buildEditorHtml()
+                    const blob = new Blob([html], { type: "application/msword" })
+                    const url = URL.createObjectURL(blob)
+                    const a = document.createElement("a")
+                    a.href = url
+                    a.download = `${coverTitle || "informe"}.doc`
+                    a.click()
+                    URL.revokeObjectURL(url)
+                  }}
+                >
+                  Exportar Word
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
         </TabsContent>
 
         <TabsContent value="manual" className="space-y-6">
