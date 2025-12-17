@@ -1,4 +1,3 @@
-import { describe, it, expect, vi } from "vitest"
 import { createRoot } from "react-dom/client"
 import { act } from "react"
 import { AnimatedPage } from "./animated-page"

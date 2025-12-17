@@ -4,7 +4,6 @@ import { getProjectDashboardStats, getProjectWeeklyFindingsOpenClosed } from "@/
 import { getProjectById } from "@/app/actions/projects"
 import { getSession } from "@/lib/auth"
 import { notFound, redirect } from "next/navigation"
-import { parseIntId } from "@/lib/route"
 
 type ProjectRow = {
   id: number
@@ -16,9 +15,10 @@ type ProjectRow = {
   status?: string
 }
 
-export default async function ProyectoDashboardPage({ params }: { params: { id: string } }) {
-  const id = parseIntId(String(params.id || "")) ?? NaN
-  if (!Number.isFinite(id)) notFound()
+export default async function ProyectoDashboardPage({ params }: { params: Promise<{ id: string }> }) {
+  const p = await params
+  const id = /^\d+$/.test(p.id) ? Number.parseInt(p.id, 10) : NaN
+  if (!Number.isFinite(id) || id <= 0) notFound()
   const [session, project] = await Promise.all([getSession(), getProjectById(id)])
   if (!session) redirect("/auth/login")
   if (!project) notFound()
