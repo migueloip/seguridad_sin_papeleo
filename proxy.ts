@@ -1,16 +1,10 @@
 import type { NextRequest } from "next/server"
 import { NextResponse } from "next/server"
 
-export function middleware(req: NextRequest) {
+export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl
 
-  const publicPaths = [
-    "/auth/login",
-    "/auth/register",
-    "/favicon.ico",
-    "/icon.svg",
-    "/apple-icon.png",
-  ]
+  const publicPaths = ["/auth/login", "/auth/register", "/favicon.ico", "/icon.svg", "/apple-icon.png"]
 
   if (
     publicPaths.includes(pathname) ||
@@ -31,6 +25,4 @@ export function middleware(req: NextRequest) {
   return NextResponse.next()
 }
 
-export const config = {
-  matcher: ["/(.*)"],
-}
+export const config = { matcher: ["/(.*)"] }
