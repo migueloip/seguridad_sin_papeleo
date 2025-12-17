@@ -60,9 +60,10 @@ const reportTemplates = [
 
 interface ReportsContentProps {
   initialReports?: GeneratedReport[]
+  projectId?: number
 }
 
-export function ReportsContent({ initialReports = [] }: ReportsContentProps) {
+export function ReportsContent({ initialReports = [], projectId }: ReportsContentProps) {
   const [generating, setGenerating] = useState<string | null>(null)
   const [period, setPeriod] = useState("weekly")
   const [isPending, startTransition] = useTransition()
@@ -78,10 +79,10 @@ export function ReportsContent({ initialReports = [] }: ReportsContentProps) {
     startTransition(async () => {
       try {
         // Obtener datos del periodo
-        const data = await getReportData(period)
+        const data = await getReportData(period, projectId)
 
         // Generar informe con IA
-        const result = await generateAIReport(templateId, data)
+        const result = await generateAIReport(templateId, data, projectId)
 
         // Mostrar el informe generado
         setViewingReport(result)

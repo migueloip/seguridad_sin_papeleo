@@ -1,5 +1,5 @@
 import { DashboardLayout } from "@/components/dashboard-layout"
-import { adminLogin, isAdminAuthenticated } from "@/app/actions/admin"
+import { isAdminAuthenticated } from "@/app/actions/admin"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -29,7 +29,7 @@ export default async function AdminPage({ searchParams }: { searchParams?: Promi
           {error === "not_configured" && (
             <p className="mb-2 text-sm text-destructive">ADMIN_PASSWORD_HASH o ADMIN_PASSWORD no configurados</p>
           )}
-          <form action={adminLogin} className="space-y-4">
+          <form action="/api/admin/login" method="POST" className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="password">Contraseña</Label>
               <Input id="password" name="password" type="password" required />

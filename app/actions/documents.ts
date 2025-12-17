@@ -4,7 +4,7 @@ import { sql } from "@/lib/db"
 import type { Worker, DocumentType, Document } from "@/lib/db"
 import { getCurrentUserId } from "@/lib/auth"
 import { revalidatePath } from "next/cache"
-import { formatRut, normalizeRut } from "@/lib/utils"
+import { formatRut, normalizeRut, isValidRut } from "@/lib/utils"
 
 export async function getDocuments(workerId?: number): Promise<
   Array<Document & { first_name: string; last_name: string; rut: string | null; document_type: string }>
@@ -60,13 +60,20 @@ export async function createDocument(data: {
   }
 
   const userId = await getCurrentUserId()
+  if (!userId) {
+    throw new Error("Debes iniciar sesión para crear documentos")
+  }
   const result = await sql<Document>`
     INSERT INTO documents (worker_id, document_type_id, file_name, file_url, issue_date, expiry_date, status, extracted_data, user_id)
     VALUES (${data.worker_id}, ${data.document_type_id}, ${data.file_name}, ${data.file_url || null},
             ${data.issue_date || null}, ${data.expiry_date || null}, ${status}, ${data.extracted_data ? JSON.stringify(data.extracted_data) : null}::jsonb, ${userId})
     RETURNING *
   `
+  const [wp] = await sql<{ project_id: number | null }>`SELECT project_id FROM workers WHERE id = ${data.worker_id} LIMIT 1`
   revalidatePath("/documentos")
+  if (wp?.project_id) {
+    revalidatePath(`/proyectos/${wp.project_id}/documentos`)
+  }
   revalidatePath("/subir")
   revalidatePath("/")
   return result[0]
@@ -81,7 +88,13 @@ export async function findOrCreateWorkerByRut(data: {
 }): Promise<Worker> {
   // First try to find existing worker
   const userId = await getCurrentUserId()
+  if (!userId) {
+    throw new Error("Debes iniciar sesión para vincular personal")
+  }
   const normInput = normalizeRut(data.rut)
+  if (!isValidRut(normInput)) {
+    throw new Error("RUT inválido")
+  }
   const existing = await sql<Worker>`
     SELECT * FROM workers 
     WHERE regexp_replace(upper(rut), '[^0-9K]', '', 'g') = regexp_replace(${normInput.toUpperCase()}, '[^0-9K]', '', 'g')

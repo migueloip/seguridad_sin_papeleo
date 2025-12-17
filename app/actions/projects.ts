@@ -32,6 +32,9 @@ export async function createProject(data: {
   end_date?: string
 }) {
   const userId = await getCurrentUserId()
+  if (!userId) {
+    throw new Error("Debes iniciar sesión para crear proyectos")
+  }
   const start = toOptionalDate(data.start_date)
   const end = toOptionalDate(data.end_date)
   const result = await sql`
@@ -46,6 +49,9 @@ export async function createProject(data: {
 
 export async function deleteProject(id: number) {
   const userId = await getCurrentUserId()
+  if (!userId) {
+    throw new Error("Debes iniciar sesión para eliminar proyectos")
+  }
   await sql`DELETE FROM projects WHERE id = ${id} AND user_id = ${userId}`
   revalidatePath("/")
 }

@@ -4,7 +4,7 @@ import { sql } from "@/lib/db"
 import type { Worker } from "@/lib/db"
 import { getCurrentUserId } from "@/lib/auth"
 import { revalidatePath } from "next/cache"
-import { formatRut, normalizeRut } from "@/lib/utils"
+import { formatRut, normalizeRut, isValidRut } from "@/lib/utils"
 
 export async function getWorkers(projectId?: number) {
   const userId = await getCurrentUserId()
@@ -56,13 +56,42 @@ export async function createWorker(data: {
   project_id?: number
 }) {
   const userId = await getCurrentUserId()
+  if (!userId) {
+    throw new Error("Debes iniciar sesión para crear personal")
+  }
+  const norm = normalizeRut(data.rut)
+  if (!isValidRut(norm)) {
+    throw new Error("RUT inválido")
+  }
+  const existingForUser = await sql<Worker>`
+    SELECT * FROM workers 
+    WHERE user_id = ${userId}
+      AND regexp_replace(upper(rut), '[^0-9K]', '', 'g') = regexp_replace(${norm.toUpperCase()}, '[^0-9K]', '', 'g')
+    LIMIT 1
+  `
+  if (existingForUser[0]) {
+    revalidatePath("/personal")
+    revalidatePath("/")
+    return existingForUser[0]
+  }
+  const existsGlobal = await sql<{ id: number }>`
+    SELECT id FROM workers 
+    WHERE regexp_replace(upper(rut), '[^0-9K]', '', 'g') = regexp_replace(${norm.toUpperCase()}, '[^0-9K]', '', 'g')
+    LIMIT 1
+  `
+  if (existsGlobal[0]) {
+    throw new Error(`El RUT ${formatRut(norm)} ya existe`)
+  }
   const result = await sql`
     INSERT INTO workers (rut, first_name, last_name, role, company, phone, email, project_id, user_id)
-    VALUES (${formatRut(normalizeRut(data.rut))}, ${data.first_name}, ${data.last_name}, ${data.role || null}, 
+    VALUES (${formatRut(norm)}, ${data.first_name}, ${data.last_name}, ${data.role || null}, 
             ${data.company || null}, ${data.phone || null}, ${data.email || null}, ${data.project_id || null}, ${userId})
     RETURNING *
   `
   revalidatePath("/personal")
+  if (data.project_id) {
+    revalidatePath(`/proyectos/${data.project_id}/personal`)
+  }
   revalidatePath("/")
   return result[0]
 }
@@ -82,6 +111,25 @@ export async function updateWorker(
   }>,
 ) {
   const userId = await getCurrentUserId()
+  if (!userId) {
+    throw new Error("Debes iniciar sesión para actualizar personal")
+  }
+  if (data.rut) {
+    const norm = normalizeRut(data.rut)
+    if (!isValidRut(norm)) {
+      throw new Error("RUT inválido")
+    }
+    const existsOtherForUser = await sql<{ id: number }>`
+      SELECT id FROM workers 
+      WHERE user_id = ${userId}
+        AND regexp_replace(upper(rut), '[^0-9K]', '', 'g') = regexp_replace(${normalizeRut(data.rut).toUpperCase()}, '[^0-9K]', '', 'g')
+        AND id <> ${id}
+      LIMIT 1
+    `
+    if (existsOtherForUser[0]) {
+      throw new Error(`El RUT ${formatRut(norm)} ya existe en tu cuenta`)
+    }
+  }
   const result = await sql`
     UPDATE workers
     SET 
@@ -104,6 +152,9 @@ export async function updateWorker(
 
 export async function deleteWorker(id: number) {
   const userId = await getCurrentUserId()
+  if (!userId) {
+    throw new Error("Debes iniciar sesión para eliminar personal")
+  }
   await sql`DELETE FROM workers WHERE id = ${id} AND user_id = ${userId}`
   revalidatePath("/personal")
 }

@@ -15,13 +15,13 @@ export default async function ProjectReportsPage({ params }: { params: Promise<{
   if (!session) redirect("/auth/login")
   if (!project) notFound()
 
-  const reports = await getGeneratedReports()
+  const reports = await getGeneratedReports(id)
 
   return (
     <DashboardLayout
       user={session ? { email: String(session.email), name: session.name ?? null, role: session.role ?? null } : undefined}
     >
-      <ReportsContent initialReports={reports} />
+      <ReportsContent initialReports={reports} projectId={id} />
     </DashboardLayout>
   )
 }

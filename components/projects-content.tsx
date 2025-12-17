@@ -10,6 +10,7 @@ import { Plus, LayoutDashboard } from "lucide-react"
 import { createProject } from "@/app/actions/projects"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
+import { toast } from "sonner"
 
 type ProjectRow = {
   id: number
@@ -46,21 +47,27 @@ export function ProjectsContent({ initialProjects }: { initialProjects: ProjectR
 
   const handleCreate = () => {
     if (!newProject.name.trim()) {
-      alert("El nombre del proyecto es requerido")
+      toast.error("El nombre del proyecto es requerido")
       return
     }
     startTransition(async () => {
-      const created = await createProject({
-        name: newProject.name.trim(),
-        location: newProject.location || undefined,
-        client: newProject.client || undefined,
-        start_date: newProject.start_date || undefined,
-        end_date: newProject.end_date || undefined,
-      })
-      const row: ProjectRow = created as unknown as ProjectRow
-      setProjects((prev) => [{ ...row, worker_count: 0, open_findings: 0 }, ...prev])
-      setNewProject({ name: "", location: "", client: "", start_date: "", end_date: "" })
-      setIsCreateOpen(false)
+      try {
+        const created = await createProject({
+          name: newProject.name.trim(),
+          location: newProject.location || undefined,
+          client: newProject.client || undefined,
+          start_date: newProject.start_date || undefined,
+          end_date: newProject.end_date || undefined,
+        })
+        const row: ProjectRow = created as unknown as ProjectRow
+        setProjects((prev) => [{ ...row, worker_count: 0, open_findings: 0 }, ...prev])
+        setNewProject({ name: "", location: "", client: "", start_date: "", end_date: "" })
+        setIsCreateOpen(false)
+        toast.success("Proyecto creado")
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Error al crear proyecto"
+        toast.error(msg)
+      }
     })
   }
 

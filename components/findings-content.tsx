@@ -35,7 +35,7 @@ interface Finding {
   created_at: string
 }
 
-export function FindingsContent({ initialFindings }: { initialFindings: Finding[] }) {
+export function FindingsContent({ initialFindings, projectId }: { initialFindings: Finding[]; projectId?: number }) {
   const [findings, setFindings] = useState<Finding[]>(initialFindings)
   const [filter, setFilter] = useState<string>("todos")
   const [isPending, startTransition] = useTransition()
@@ -203,6 +203,7 @@ export function FindingsContent({ initialFindings }: { initialFindings: Finding[
 
     startTransition(async () => {
       const created = await createFinding({
+        project_id: projectId,
         title: newFinding.title,
         description: newFinding.description || undefined,
         severity: newFinding.severity,

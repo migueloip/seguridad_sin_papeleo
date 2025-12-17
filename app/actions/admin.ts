@@ -8,9 +8,12 @@ import type { User } from "@/lib/db"
 import { revalidatePath } from "next/cache"
 
 function getAdminSecret() {
-  const hash = process.env.ADMIN_PASSWORD_HASH
-  const plain = process.env.ADMIN_PASSWORD
-  return { hash: hash || "", plain: plain || "" }
+  const rawHash = process.env.ADMIN_PASSWORD_HASH || ""
+  const rawPlain = process.env.ADMIN_PASSWORD || ""
+  const sanitize = (v: string) => v.trim().replace(/^['"]|['"]$/g, "")
+  const hash = sanitize(rawHash)
+  const plain = sanitize(rawPlain)
+  return { hash, plain }
 }
 
 export async function isAdminAuthenticated() {
@@ -20,7 +23,7 @@ export async function isAdminAuthenticated() {
 }
 
 export async function adminLogin(formData: FormData) {
-  const password = String(formData.get("password") || "")
+  const password = String(formData.get("password") || "").trim()
   const { hash, plain } = getAdminSecret()
   if (!hash && !plain) {
     return redirect("/admin?error=not_configured")

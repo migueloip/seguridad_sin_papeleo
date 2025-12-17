@@ -19,6 +19,8 @@ import {
 import { Search, Plus, Users, CheckCircle, AlertCircle, FileText, Edit2, Trash2 } from "lucide-react"
 import { createWorker, updateWorker, deleteWorker } from "@/app/actions/workers"
 import { useRouter } from "next/navigation"
+import { toast } from "sonner"
+import { isValidRut, normalizeRut } from "@/lib/utils"
 
 interface Worker {
   id: number
@@ -36,7 +38,7 @@ interface Worker {
   expired_docs: number
 }
 
-export function PersonnelContent({ initialWorkers }: { initialWorkers: Worker[] }) {
+export function PersonnelContent({ initialWorkers, projectId }: { initialWorkers: Worker[]; projectId?: number }) {
   const [search, setSearch] = useState("")
   const [workers, setWorkers] = useState<Worker[]>(initialWorkers)
   const [isPending, startTransition] = useTransition()
@@ -120,42 +122,59 @@ export function PersonnelContent({ initialWorkers }: { initialWorkers: Worker[] 
 
   const handleCreateWorker = () => {
     if (!newWorker.rut || !newWorker.first_name || !newWorker.last_name) {
-      alert("RUT, nombre y apellido son requeridos")
+      toast.error("RUT, nombre y apellido son requeridos")
+      return
+    }
+
+    const normalized = normalizeRut(newWorker.rut)
+    if (!isValidRut(normalized)) {
+      toast.error("RUT inválido")
       return
     }
 
     startTransition(async () => {
-      const created = await createWorker({
-        rut: newWorker.rut,
-        first_name: newWorker.first_name,
-        last_name: newWorker.last_name,
-        role: newWorker.role || undefined,
-        company: newWorker.company || undefined,
-        phone: newWorker.phone || undefined,
-        email: newWorker.email || undefined,
-      })
-
-      setWorkers((prev) => [
-        {
-          ...(created as unknown as Worker),
-          valid_docs: 0,
-          expiring_docs: 0,
-          expired_docs: 0,
-          project_name: null,
-        } as Worker,
-        ...prev,
-      ])
-      setNewWorker({
-        rut: "",
-        first_name: "",
-        last_name: "",
-        role: "",
-        company: "",
-        phone: "",
-        email: "",
-      })
-      setIsCreateOpen(false)
-      router.refresh()
+      try {
+        const created = await createWorker({
+          rut: newWorker.rut,
+          first_name: newWorker.first_name,
+          last_name: newWorker.last_name,
+          role: newWorker.role || undefined,
+          company: newWorker.company || undefined,
+          phone: newWorker.phone || undefined,
+          email: newWorker.email || undefined,
+          project_id: projectId,
+        })
+        const createdWorker = created as unknown as Worker
+        setWorkers((prev) => {
+          const exists = prev.some((w) => w.id === createdWorker.id)
+          if (exists) return prev
+          return [
+            {
+              ...createdWorker,
+              valid_docs: 0,
+              expiring_docs: 0,
+              expired_docs: 0,
+              project_name: null,
+            } as Worker,
+            ...prev,
+          ]
+        })
+        setNewWorker({
+          rut: "",
+          first_name: "",
+          last_name: "",
+          role: "",
+          company: "",
+          phone: "",
+          email: "",
+        })
+        setIsCreateOpen(false)
+        router.refresh()
+        toast.success("Trabajador creado correctamente")
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Error al crear trabajador"
+        toast.error(msg)
+      }
     })
   }
 
@@ -175,13 +194,19 @@ export function PersonnelContent({ initialWorkers }: { initialWorkers: Worker[] 
 
   const handleUpdateWorker = () => {
     if (!editingWorker || !editForm.rut || !editForm.first_name || !editForm.last_name) {
-      alert("RUT, nombre y apellido son requeridos")
+      toast.error("RUT, nombre y apellido son requeridos")
+      return
+    }
+
+    const normalized = normalizeRut(editForm.rut)
+    if (!isValidRut(normalized)) {
+      toast.error("RUT inválido")
       return
     }
 
     startTransition(async () => {
       const updated = await updateWorker(editingWorker.id, {
-        rut: editForm.rut,
+        rut: normalized,
         first_name: editForm.first_name,
         last_name: editForm.last_name,
         role: editForm.role || undefined,
@@ -203,6 +228,7 @@ export function PersonnelContent({ initialWorkers }: { initialWorkers: Worker[] 
       setIsEditOpen(false)
       setEditingWorker(null)
       router.refresh()
+      toast.success("Trabajador actualizado")
     })
   }
 

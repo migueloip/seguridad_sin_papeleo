@@ -70,6 +70,9 @@ export async function createFinding(data: {
   photos?: string[]
 }) {
   const userId = await getCurrentUserId()
+  if (!userId) {
+    throw new Error("Debes iniciar sesión para crear hallazgos")
+  }
   const result = await sql<{ id: number }>`
     INSERT INTO findings (project_id, checklist_id, title, description, severity, location, responsible_person, due_date, photos)
     VALUES (${data.project_id || null}, ${data.checklist_id || null}, ${data.title}, ${data.description || null},
@@ -81,6 +84,9 @@ export async function createFinding(data: {
   await sql`UPDATE findings SET user_id = ${userId} WHERE id = ${findingId}`
   const inserted = await sql`SELECT * FROM findings WHERE id = ${findingId}`
   revalidatePath("/hallazgos")
+  if (data.project_id) {
+    revalidatePath(`/proyectos/${data.project_id}/hallazgos`)
+  }
   revalidatePath("/")
   return inserted[0]
 }
@@ -99,6 +105,9 @@ export async function updateFinding(
   }>,
 ) {
   const userId = await getCurrentUserId()
+  if (!userId) {
+    throw new Error("Debes iniciar sesión para actualizar hallazgos")
+  }
   const result = await sql`
     UPDATE findings
     SET 
@@ -122,6 +131,9 @@ export async function updateFinding(
 
 export async function deleteFinding(id: number) {
   const userId = await getCurrentUserId()
+  if (!userId) {
+    throw new Error("Debes iniciar sesión para eliminar hallazgos")
+  }
   await sql`DELETE FROM findings WHERE id = ${id} AND user_id = ${userId}`
   revalidatePath("/hallazgos")
 }

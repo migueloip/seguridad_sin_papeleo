@@ -1,5 +1,5 @@
 import { DashboardLayout } from "@/components/dashboard-layout"
-import { getAllUsers, createUser, deleteUser, adminLogout, isAdminAuthenticated } from "@/app/actions/admin"
+import { getAllUsers, isAdminAuthenticated } from "@/app/actions/admin"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -20,14 +20,14 @@ export default async function AdminUsersPage() {
     <DashboardLayout>
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Usuarios</h1>
-        <form action={adminLogout}>
+        <form action="/api/admin/logout" method="POST">
           <Button variant="outline">Salir</Button>
         </form>
       </div>
       <div className="grid gap-6 md:grid-cols-2">
         <div className="rounded-lg border border-border bg-card p-4">
           <h2 className="mb-3 text-lg font-semibold">Crear usuario</h2>
-          <form action={createUser} className="space-y-3">
+          <form action="/api/admin/users/create" method="POST" className="space-y-3">
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
               <Input id="email" name="email" type="email" required />
@@ -57,7 +57,8 @@ export default async function AdminUsersPage() {
                   <div className="text-sm text-muted-foreground">{u.name || "-"}</div>
                   <div className="text-xs text-muted-foreground">rol: {u.role || "user"}</div>
                 </div>
-                <form action={async () => deleteUser(Number(u.id))}>
+                <form action="/api/admin/users/delete" method="POST">
+                  <input type="hidden" name="id" value={String(u.id)} />
                   <Button variant="destructive">Eliminar</Button>
                 </form>
               </div>

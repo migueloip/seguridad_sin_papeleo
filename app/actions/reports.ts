@@ -55,7 +55,7 @@ export interface GeneratedReportSummary {
   created_at: string
 }
 
-export async function getReportData(period: string): Promise<ReportData> {
+export async function getReportData(period: string, projectId?: number): Promise<ReportData> {
   const userId = await getCurrentUserId()
   if (!userId) {
     return {
@@ -92,41 +92,83 @@ export async function getReportData(period: string): Promise<ReportData> {
   }
 
   const [documentsResult, findingsResult, workersResult, recentFindingsResult, expiringDocsResult] = await Promise.all([
-    sql<{ total: number; valid: number; expiring: number; expired: number }>`SELECT 
-          COUNT(*) as total,
-          COUNT(*) FILTER (WHERE status = 'valid') as valid,
-          COUNT(*) FILTER (WHERE status = 'expiring') as expiring,
-          COUNT(*) FILTER (WHERE status = 'expired') as expired
-        FROM documents WHERE user_id = ${userId}`,
-    sql<{ total: number; open: number; resolved: number; critical: number; high: number; medium: number; low: number }>`SELECT 
-          COUNT(*) as total,
-          COUNT(*) FILTER (WHERE status = 'open') as open,
-          COUNT(*) FILTER (WHERE status = 'resolved') as resolved,
-          COUNT(*) FILTER (WHERE severity = 'critical') as critical,
-          COUNT(*) FILTER (WHERE severity = 'high') as high,
-          COUNT(*) FILTER (WHERE severity = 'medium') as medium,
-          COUNT(*) FILTER (WHERE severity = 'low') as low
-        FROM findings
-        WHERE user_id = ${userId} AND created_at >= ${dateFrom} AND created_at <= ${dateTo}`,
-    sql<{ total: number; with_complete_docs: number; with_expired_docs: number }>`SELECT 
-          COUNT(*) as total,
-          COUNT(DISTINCT w.id) FILTER (WHERE d.status = 'valid') as with_complete_docs,
-          COUNT(DISTINCT w.id) FILTER (WHERE d.status = 'expired') as with_expired_docs
-        FROM workers w
-        LEFT JOIN documents d ON w.id = d.worker_id
-        WHERE w.user_id = ${userId}`,
-    sql<{ title: string; severity: string; status: string; location: string; created_at: string }>`SELECT title, severity, status, location, created_at
-        FROM findings
-        WHERE user_id = ${userId} AND created_at >= ${dateFrom} AND created_at <= ${dateTo}
-        ORDER BY created_at DESC
-        LIMIT 10`,
-    sql<{ worker_name: string; document_type: string; expiry_date: string }>`SELECT CONCAT(w.first_name, ' ', w.last_name) as worker_name, dt.name as document_type, d.expiry_date
-        FROM documents d
-        JOIN workers w ON d.worker_id = w.id
-        LEFT JOIN document_types dt ON d.document_type_id = dt.id
-        WHERE d.user_id = ${userId} AND d.expiry_date <= CURRENT_DATE + INTERVAL '30 days' AND d.expiry_date >= CURRENT_DATE
-        ORDER BY d.expiry_date ASC
-        LIMIT 10`,
+    projectId
+      ? sql<{ total: number; valid: number; expiring: number; expired: number }>`SELECT 
+            COUNT(*) as total,
+            COUNT(*) FILTER (WHERE d.status = 'valid') as valid,
+            COUNT(*) FILTER (WHERE d.status = 'expiring') as expiring,
+            COUNT(*) FILTER (WHERE d.status = 'expired') as expired
+          FROM documents d
+          JOIN workers w ON d.worker_id = w.id
+          WHERE d.user_id = ${userId} AND w.project_id = ${projectId}`
+      : sql<{ total: number; valid: number; expiring: number; expired: number }>`SELECT 
+            COUNT(*) as total,
+            COUNT(*) FILTER (WHERE status = 'valid') as valid,
+            COUNT(*) FILTER (WHERE status = 'expiring') as expiring,
+            COUNT(*) FILTER (WHERE status = 'expired') as expired
+          FROM documents WHERE user_id = ${userId}`,
+    projectId
+      ? sql<{ total: number; open: number; resolved: number; critical: number; high: number; medium: number; low: number }>`SELECT 
+            COUNT(*) as total,
+            COUNT(*) FILTER (WHERE status = 'open') as open,
+            COUNT(*) FILTER (WHERE status = 'resolved') as resolved,
+            COUNT(*) FILTER (WHERE severity = 'critical') as critical,
+            COUNT(*) FILTER (WHERE severity = 'high') as high,
+            COUNT(*) FILTER (WHERE severity = 'medium') as medium,
+            COUNT(*) FILTER (WHERE severity = 'low') as low
+          FROM findings
+          WHERE user_id = ${userId} AND project_id = ${projectId} AND created_at >= ${dateFrom} AND created_at <= ${dateTo}`
+      : sql<{ total: number; open: number; resolved: number; critical: number; high: number; medium: number; low: number }>`SELECT 
+            COUNT(*) as total,
+            COUNT(*) FILTER (WHERE status = 'open') as open,
+            COUNT(*) FILTER (WHERE status = 'resolved') as resolved,
+            COUNT(*) FILTER (WHERE severity = 'critical') as critical,
+            COUNT(*) FILTER (WHERE severity = 'high') as high,
+            COUNT(*) FILTER (WHERE severity = 'medium') as medium,
+            COUNT(*) FILTER (WHERE severity = 'low') as low
+          FROM findings
+          WHERE user_id = ${userId} AND created_at >= ${dateFrom} AND created_at <= ${dateTo}`,
+    projectId
+      ? sql<{ total: number; with_complete_docs: number; with_expired_docs: number }>`SELECT 
+            COUNT(*) as total,
+            COUNT(DISTINCT w.id) FILTER (WHERE d.status = 'valid') as with_complete_docs,
+            COUNT(DISTINCT w.id) FILTER (WHERE d.status = 'expired') as with_expired_docs
+          FROM workers w
+          LEFT JOIN documents d ON w.id = d.worker_id
+          WHERE w.user_id = ${userId} AND w.project_id = ${projectId}`
+      : sql<{ total: number; with_complete_docs: number; with_expired_docs: number }>`SELECT 
+            COUNT(*) as total,
+            COUNT(DISTINCT w.id) FILTER (WHERE d.status = 'valid') as with_complete_docs,
+            COUNT(DISTINCT w.id) FILTER (WHERE d.status = 'expired') as with_expired_docs
+          FROM workers w
+          LEFT JOIN documents d ON w.id = d.worker_id
+          WHERE w.user_id = ${userId}`,
+    projectId
+      ? sql<{ title: string; severity: string; status: string; location: string; created_at: string }>`SELECT title, severity, status, location, created_at
+          FROM findings
+          WHERE user_id = ${userId} AND project_id = ${projectId} AND created_at >= ${dateFrom} AND created_at <= ${dateTo}
+          ORDER BY created_at DESC
+          LIMIT 10`
+      : sql<{ title: string; severity: string; status: string; location: string; created_at: string }>`SELECT title, severity, status, location, created_at
+          FROM findings
+          WHERE user_id = ${userId} AND created_at >= ${dateFrom} AND created_at <= ${dateTo}
+          ORDER BY created_at DESC
+          LIMIT 10`,
+    projectId
+      ? sql<{ worker_name: string; document_type: string; expiry_date: string }>`SELECT CONCAT(w.first_name, ' ', w.last_name) as worker_name, dt.name as document_type, d.expiry_date
+          FROM documents d
+          JOIN workers w ON d.worker_id = w.id
+          LEFT JOIN document_types dt ON d.document_type_id = dt.id
+          WHERE d.user_id = ${userId} AND w.project_id = ${projectId} AND d.expiry_date <= CURRENT_DATE + INTERVAL '30 days' AND d.expiry_date >= CURRENT_DATE
+          ORDER BY d.expiry_date ASC
+          LIMIT 10`
+      : sql<{ worker_name: string; document_type: string; expiry_date: string }>`SELECT CONCAT(w.first_name, ' ', w.last_name) as worker_name, dt.name as document_type, d.expiry_date
+          FROM documents d
+          JOIN workers w ON d.worker_id = w.id
+          LEFT JOIN document_types dt ON d.document_type_id = dt.id
+          WHERE d.user_id = ${userId} AND d.expiry_date <= CURRENT_DATE + INTERVAL '30 days' AND d.expiry_date >= CURRENT_DATE
+          ORDER BY d.expiry_date ASC
+          LIMIT 10`,
   ])
 
   return {
@@ -161,6 +203,7 @@ export async function getReportData(period: string): Promise<ReportData> {
 export async function generateAIReport(
   reportType: string,
   data: ReportData,
+  projectId?: number,
 ): Promise<{ content: string; title: string; id: number }> {
   const userId = await getCurrentUserId()
   const apiKey = await getSetting("ai_api_key")
@@ -224,8 +267,8 @@ El informe debe ser profesional, conciso y orientado a la accion. Usa formato Ma
     const { text } = await generateText({ model, prompt })
 
     const inserted = await sql<{ id: number }>`
-      INSERT INTO reports (report_type, title, date_from, date_to, content, generated_by)
-      VALUES (${reportType}, ${title}, ${new Date(data.dateFrom)}, ${new Date(data.dateTo)}, ${JSON.stringify({ markdown: text })}::jsonb, 'Sistema')
+      INSERT INTO reports (report_type, title, date_from, date_to, content, generated_by, project_id)
+      VALUES (${reportType}, ${title}, ${new Date(data.dateFrom)}, ${new Date(data.dateTo)}, ${JSON.stringify({ markdown: text })}::jsonb, 'Sistema', ${projectId || null})
       RETURNING id
     `
     const idNum = Number(inserted[0].id)
@@ -238,15 +281,23 @@ El informe debe ser profesional, conciso y orientado a la accion. Usa formato Ma
   }
 }
 
-export async function getGeneratedReports() {
+export async function getGeneratedReports(projectId?: number) {
   const userId = await getCurrentUserId()
-  const result = await sql<GeneratedReportSummary>`
-    SELECT id, report_type, title, date_from, date_to, created_at
-    FROM reports
-    WHERE user_id = ${userId}
-    ORDER BY created_at DESC
-    LIMIT 20
-  `
+  const result = projectId
+    ? await sql<GeneratedReportSummary>`
+        SELECT id, report_type, title, date_from, date_to, created_at
+        FROM reports
+        WHERE user_id = ${userId} AND project_id = ${projectId}
+        ORDER BY created_at DESC
+        LIMIT 20
+      `
+    : await sql<GeneratedReportSummary>`
+        SELECT id, report_type, title, date_from, date_to, created_at
+        FROM reports
+        WHERE user_id = ${userId}
+        ORDER BY created_at DESC
+        LIMIT 20
+      `
   return result
 }
 

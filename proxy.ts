@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server"
 import { NextResponse } from "next/server"
 
-export function proxy(req: NextRequest) {
+export default function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl
 
   const publicPaths = ["/auth/login", "/auth/register", "/favicon.ico", "/icon.svg", "/apple-icon.png"]
@@ -12,6 +12,7 @@ export function proxy(req: NextRequest) {
     pathname.startsWith("/public") ||
     pathname.startsWith("/api/health") ||
     pathname.startsWith("/api/diagnostics") ||
+    pathname.startsWith("/api/admin") ||
     pathname.startsWith("/admin")
   ) {
     return NextResponse.next()
