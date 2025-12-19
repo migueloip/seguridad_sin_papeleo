@@ -8,6 +8,36 @@ import type { LanguageModel } from "ai"
 import { getSetting } from "./settings"
 import { getModel } from "@/lib/ai"
 
+function extFromMime(m: string) {
+  const map: Record<string, string> = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+  }
+  return map[m] || "png"
+}
+
+async function uploadBase64ToSupabase(bucket: string, path: string, dataUrl: string): Promise<string | null> {
+  const url = process.env.SUPABASE_URL || ""
+  const key = process.env.SUPABASE_SERVICE_KEY || ""
+  if (!url || !key || !dataUrl.startsWith("data:")) return null
+  const m = dataUrl.match(/^data:([^;]+);base64,(.+)$/)
+  if (!m) return null
+  const mime = m[1]
+  const b64 = m[2]
+  const body = Buffer.from(b64, "base64")
+  const res = await fetch(`${url}/storage/v1/object/${bucket}/${path}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${key}`,
+      "Content-Type": mime,
+      "x-upsert": "true",
+    },
+    body,
+  })
+  if (!res.ok) return null
+  return `${url}/storage/v1/object/public/${bucket}/${path}`
+}
+
 export async function getFindings(projectId?: number, status?: string) {
   const userId = await getCurrentUserId()
   if (!userId) return []
@@ -77,11 +107,31 @@ export async function createFinding(data: {
     INSERT INTO findings (project_id, checklist_id, title, description, severity, location, responsible_person, due_date, photos)
     VALUES (${data.project_id || null}, ${data.checklist_id || null}, ${data.title}, ${data.description || null},
             ${data.severity}, ${data.location || null}, ${data.responsible_person || null}, 
-            ${data.due_date || null}, ${data.photos ? JSON.stringify(data.photos) : null}::jsonb)
+            ${data.due_date || null}, NULL)
     RETURNING id
   `
   const findingId = Number(result[0].id)
   await sql`UPDATE findings SET user_id = ${userId} WHERE id = ${findingId}`
+  let finalPhotos: string[] | null = null
+  if (Array.isArray(data.photos) && data.photos.length > 0) {
+    const out: string[] = []
+    for (let i = 0; i < data.photos.length; i++) {
+      const p = data.photos[i]
+      if (typeof p === "string" && p.startsWith("data:")) {
+        const m = p.match(/^data:([^;]+);base64,(.+)$/)
+        const mime = m ? m[1] : "image/png"
+        const ext = extFromMime(mime)
+        const path = `findings/${userId}/${findingId}-${i}.${ext}`
+        const uploaded = await uploadBase64ToSupabase("img", path, p)
+        if (uploaded) out.push(uploaded)
+        else out.push(p)
+      } else if (typeof p === "string") {
+        out.push(p)
+      }
+    }
+    finalPhotos = out
+    await sql`UPDATE findings SET photos = ${JSON.stringify(out)}::jsonb WHERE id = ${findingId}`
+  }
   const inserted = await sql`SELECT * FROM findings WHERE id = ${findingId}`
   revalidatePath("/hallazgos")
   if (data.project_id) {

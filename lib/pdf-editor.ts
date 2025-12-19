@@ -24,6 +24,18 @@ export type QuoteItem = {
   signatureDataUrl?: string | null
 }
 
+export type PageSize = "A4" | "Letter" | "Legal"
+
+export type DesignerElement =
+  | { id: string; type: "heading"; level: 1 | 2 | 3; text: string; align?: "left" | "center" | "right" }
+  | { id: string; type: "text"; html: string; align?: "left" | "center" | "right" }
+  | { id: string; type: "image"; src: string; alt?: string; widthPct?: number }
+  | { id: string; type: "table"; rows: string[][] }
+  | { id: string; type: "matrix"; rows: MatrixRow[] }
+  | { id: string; type: "quote"; item: QuoteItem }
+  | { id: string; type: "docs"; items: DocumentAttachment[] }
+  | { id: string; type: "divider" }
+
 export type EditorState = {
   pdfFont: "sans-serif" | "serif"
   pdfFontSize: number
@@ -39,6 +51,10 @@ export type EditorState = {
   pdfA?: boolean
   docs?: DocumentAttachment[]
   quotes?: QuoteItem[]
+  designerEnabled?: boolean
+  pageSize?: PageSize
+  pageMarginMm?: number
+  elements?: DesignerElement[]
 }
 
 export function validateEditorState(s: EditorState): string[] {
@@ -47,6 +63,10 @@ export function validateEditorState(s: EditorState): string[] {
   if (!s.summaryText.trim()) alerts.push("El resumen ejecutivo está vacío")
   if (!Array.isArray(s.matrixRows) || s.matrixRows.length === 0) alerts.push("La matriz de hallazgos no tiene filas")
   if (!Array.isArray(s.recs) || s.recs.length === 0) alerts.push("La sección de recomendaciones está vacía")
+  if (s.editorSections.includes("docs") && (!Array.isArray(s.docs) || s.docs.length === 0)) alerts.push("La sección de documentos está vacía")
+  if (s.editorSections.includes("quotes") && (!Array.isArray(s.quotes) || s.quotes.length === 0)) alerts.push("La sección de citas está vacía")
+  if (!s.responsibleName || !s.responsibleName.trim()) alerts.push("Falta el nombre del responsable en el pie de página")
+  if (s.designerEnabled && (!Array.isArray(s.elements) || s.elements.length === 0)) alerts.push("El documento no tiene elementos")
   return alerts
 }
 
@@ -159,5 +179,87 @@ export function buildEditorHtmlFromState(s: EditorState): string {
   const body = s.editorSections.map((k) => secMap[k]).join("") + footer
   const meta = s.pdfA ? `<meta name="pdfa" content="true">` : ""
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${s.coverTitle}</title>${meta}${styles}</head><body>${body}</body></html>`
+  return html
+}
+
+export function buildDesignerHtmlFromState(s: EditorState): string {
+  const size = s.pageSize || "A4"
+  const margin = typeof s.pageMarginMm === "number" ? s.pageMarginMm : 20
+  const color = s.pdfA ? "#000000" : s.pdfColor
+  const styles = `<style>
+    body{font-family:${s.pdfFont},system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:${color};line-height:1.6}
+    .workspace{margin:${margin}mm}
+    h1{font-size:${s.pdfFontSize + 8}px;margin:0 0 8px}
+    h2{font-size:${s.pdfFontSize + 4}px;margin:16px 0 8px}
+    h3{font-size:${s.pdfFontSize + 2}px;margin:12px 0 6px}
+    p,li,td,th{font-size:${s.pdfFontSize}px}
+    img{max-width:100%;height:auto}
+    table{border-collapse:collapse;width:100%}
+    th,td{border:1px solid #e5e7eb;padding:8px;text-align:left}
+    .footer{position:fixed;bottom:10mm;left:0;right:0;display:flex;justify-content:space-between;font-size:${s.pdfFontSize - 2}px;color:#374151}
+    .page-number:after{content:"Página " counter(page) " de " counter(pages)}
+    @page{size:${size};margin:${margin}mm}
+    *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  </style>`
+  const els = (s.elements || []).map((el) => {
+    if (el.type === "heading") {
+      const tag = el.level === 1 ? "h1" : el.level === 2 ? "h2" : "h3"
+      const align = el.align || "left"
+      return `<${tag} style="text-align:${align}">${el.text}</${tag}>`
+    }
+    if (el.type === "text") {
+      const align = el.align || "left"
+      return `<div style="text-align:${align}">${el.html}</div>`
+    }
+    if (el.type === "image") {
+      const w = el.widthPct && el.widthPct > 0 ? `${Math.min(100, Math.max(10, el.widthPct))}%` : "100%"
+      return `<div><img src="${el.src}" alt="${el.alt || ""}" style="width:${w};height:auto"/></div>`
+    }
+    if (el.type === "table") {
+      const body = el.rows
+        .map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join("")}</tr>`)
+        .join("")
+      return `<table><tbody>${body}</tbody></table>`
+    }
+    if (el.type === "matrix") {
+      const body = el.rows
+        .map(
+          (r) =>
+            `<tr><td>${r.description}</td><td>${r.category || ""}</td><td>${r.owner || ""}</td><td>${r.severity}</td><td>${r.status}</td><td>${r.date}</td></tr>`,
+        )
+        .join("")
+      return `<section><h2>Matriz de Hallazgos</h2><table><thead><tr><th>Descripción</th><th>Categoría</th><th>Responsable</th><th>Severidad</th><th>Estado</th><th>Fecha</th></tr></thead><tbody>${body}</tbody></table></section>`
+    }
+    if (el.type === "quote") {
+      const q = el.item
+      return `<div><p><strong>${q.name}</strong> · ${q.role} · ${q.date}</p><p>${q.content.replace(/\n/g, "<br/>")}</p>${q.signatureDataUrl ? `<img src="${q.signatureDataUrl}" alt="Firma" style="max-height:60px"/>` : ""}</div>`
+    }
+    if (el.type === "docs") {
+      return (el.items || [])
+        .map(
+          (d) =>
+            `<div style="page-break-before:always"><h3>${d.name}</h3><p>Tipo: ${d.type.toUpperCase()}</p>${
+              d.previewUrl
+                ? `<img src="${d.previewUrl}" alt="Vista previa" style="max-width:100%;height:auto"/>`
+                : `<p>Vista previa no disponible</p>`
+            }</div>`,
+        )
+        .join("")
+    }
+    if (el.type === "divider") {
+      return `<hr/>`
+    }
+    return ""
+  })
+  const footer = `
+    <div class="footer">
+      <div>${new Date().toLocaleDateString("es-CL")}</div>
+      <div>${s.responsibleName ? `Responsable: ${s.responsibleName}` : ""}</div>
+      <div class="page-number"></div>
+    </div>
+  `
+  const body = `<div class="workspace">${els.join("")}</div>${footer}`
+  const meta = s.pdfA ? `<meta name="pdfa" content="true">` : ""
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${s.coverTitle || "Documento"}</title>${meta}${styles}</head><body>${body}</body></html>`
   return html
 }

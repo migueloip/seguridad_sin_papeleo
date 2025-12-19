@@ -6,6 +6,37 @@ import { getCurrentUserId } from "@/lib/auth"
 import { revalidatePath } from "next/cache"
 import { formatRut, normalizeRut, isValidRut } from "@/lib/utils"
 
+function extFromMime(m: string) {
+  const map: Record<string, string> = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "application/pdf": "pdf",
+  }
+  return map[m] || "bin"
+}
+
+async function uploadBase64ToSupabase(bucket: string, path: string, dataUrl: string): Promise<string | null> {
+  const url = process.env.SUPABASE_URL || ""
+  const key = process.env.SUPABASE_SERVICE_KEY || ""
+  if (!url || !key || !dataUrl.startsWith("data:")) return null
+  const m = dataUrl.match(/^data:([^;]+);base64,(.+)$/)
+  if (!m) return null
+  const mime = m[1]
+  const b64 = m[2]
+  const body = Buffer.from(b64, "base64")
+  const res = await fetch(`${url}/storage/v1/object/${bucket}/${path}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${key}`,
+      "Content-Type": mime,
+      "x-upsert": "true",
+    },
+    body,
+  })
+  if (!res.ok) return null
+  return `${url}/storage/v1/object/public/${bucket}/${path}`
+}
+
 export async function getDocuments(workerId?: number): Promise<
   Array<Document & { first_name: string; last_name: string; rut: string | null; document_type: string }>
 > {
@@ -63,9 +94,22 @@ export async function createDocument(data: {
   if (!userId) {
     throw new Error("Debes iniciar sesión para crear documentos")
   }
+  let toStoreUrl = data.file_url || null
+  if (toStoreUrl && toStoreUrl.startsWith("data:")) {
+    const m = toStoreUrl.match(/^data:([^;]+);base64,(.+)$/)
+    if (m) {
+      const mime = m[1]
+      const ext = extFromMime(mime)
+      const safeName = String(data.file_name || "archivo").toLowerCase().replace(/[^a-z0-9_.-]+/g, "-")
+      const file = `${Date.now()}-${safeName}`.replace(/\.+$/, "")
+      const path = `documents/${userId}/${file}${safeName.includes(".") ? "" : `.${ext}`}`
+      const uploaded = await uploadBase64ToSupabase("files", path, toStoreUrl)
+      if (uploaded) toStoreUrl = uploaded
+    }
+  }
   const result = await sql<Document>`
     INSERT INTO documents (worker_id, document_type_id, file_name, file_url, issue_date, expiry_date, status, extracted_data, user_id)
-    VALUES (${data.worker_id}, ${data.document_type_id}, ${data.file_name}, ${data.file_url || null},
+    VALUES (${data.worker_id}, ${data.document_type_id}, ${data.file_name}, ${toStoreUrl},
             ${data.issue_date || null}, ${data.expiry_date || null}, ${status}, ${data.extracted_data ? JSON.stringify(data.extracted_data) : null}::jsonb, ${userId})
     RETURNING *
   `

@@ -1,18 +1,39 @@
 import { PrismaClient } from "@prisma/client"
 import { withAccelerate } from "@prisma/extension-accelerate"
 
-const globalForPrisma = globalThis as unknown as { prisma?: any }
+const globalForPrisma = globalThis as unknown as {
+  prisma?: PrismaClient | ReturnType<PrismaClient["$extends"]>
+}
 
 const rawUrl = process.env.DATABASE_URL || ""
 const l = rawUrl.toLowerCase()
 const isAccelerate = !!rawUrl && (l.startsWith("prisma+postgres://") || l.startsWith("prisma://") || l.includes("accelerate.prisma-data.net") || l.includes("db.prisma.io"))
-const dbUrl = rawUrl || "postgresql://postgres:postgres@localhost:5432/ssp?schema=public"
+let dbUrl = rawUrl || "postgresql://postgres:postgres@localhost:5432/ssp?schema=public"
+
+try {
+  const u = new URL(dbUrl)
+  const h = u.hostname.toLowerCase()
+  const isSupabaseDbHost = h.startsWith("db.") && h.endsWith(".supabase.co")
+  const isSupabasePoolerHost = h.endsWith(".pooler.supabase.com")
+  const port = u.port || ""
+  const hasPgBouncer = u.searchParams.get("pgbouncer") === "true"
+  if (isSupabaseDbHost && (port === "6543" || hasPgBouncer)) {
+    u.hostname = "aws-0-us-west-2.pooler.supabase.com"
+    u.port = "6543"
+    u.searchParams.set("pgbouncer", "true")
+    dbUrl = u.toString()
+  } else if (isSupabasePoolerHost && port !== "6543") {
+    u.port = "6543"
+    u.searchParams.set("pgbouncer", "true")
+    dbUrl = u.toString()
+  }
+} catch {}
 
 process.env.DATABASE_URL = dbUrl
 process.env.PRISMA_CLIENT_DATA_PROXY = isAccelerate ? "true" : "false"
 if (!isAccelerate) process.env.PRISMA_ACCELERATE_URL = ""
 
-const base = globalForPrisma.prisma ?? new PrismaClient({ log: ["error", "warn"] })
+const base = (globalForPrisma.prisma as PrismaClient | undefined) ?? new PrismaClient({ log: ["error", "warn"] })
 export const prisma = isAccelerate ? base.$extends(withAccelerate()) : base
 
 if (!globalForPrisma.prisma) globalForPrisma.prisma = prisma
@@ -206,4 +227,27 @@ export interface PlanZone {
   code: string | null
   zone_type: string | null
   created_at: string
+}
+
+export interface AdmonitionAttachment {
+  file_name: string
+  file_url: string | null
+  mime?: string | null
+}
+
+export interface Admonition {
+  id: number
+  user_id: number
+  worker_id: number
+  admonition_date: string
+  admonition_type: "verbal" | "escrita" | "suspension"
+  reason: string
+  supervisor_signature: string | null
+  attachments: AdmonitionAttachment[] | null
+  status: "active" | "archived" | "archivada"
+  approval_status: "pending" | "approved" | "rejected"
+  approved_at: string | null
+  rejected_at: string | null
+  created_at: string
+  updated_at: string
 }

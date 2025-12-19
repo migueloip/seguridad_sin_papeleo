@@ -181,3 +181,27 @@ CREATE INDEX idx_plans_project ON plans(project_id);
 CREATE INDEX idx_plan_floors_plan ON plan_floors(plan_id);
 CREATE INDEX idx_plan_zones_plan ON plan_zones(plan_id);
 CREATE INDEX idx_plan_zones_floor ON plan_zones(floor_id);
+
+-- Tabla de amonestaciones (cartas de amonestación)
+CREATE TABLE admonitions (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  worker_id INTEGER REFERENCES workers(id) ON DELETE CASCADE,
+  admonition_date DATE NOT NULL,
+  admonition_type VARCHAR(50) NOT NULL,
+  reason TEXT NOT NULL,
+  supervisor_signature TEXT,
+  attachments JSONB,
+  status VARCHAR(50) DEFAULT 'active',
+  approval_status VARCHAR(50) DEFAULT 'pending',
+  approved_at TIMESTAMP,
+  rejected_at TIMESTAMP,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_admonitions_worker ON admonitions(worker_id);
+CREATE INDEX idx_admonitions_type ON admonitions(admonition_type);
+CREATE INDEX idx_admonitions_status ON admonitions(status);
+CREATE INDEX idx_admonitions_approval ON admonitions(approval_status);
+CREATE INDEX idx_admonitions_date ON admonitions(admonition_date);

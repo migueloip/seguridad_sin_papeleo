@@ -12,7 +12,7 @@ export interface Setting {
   description: string | null
 }
 
-const SENSITIVE_KEYS = new Set(["ai_api_key"]) 
+const SENSITIVE_KEYS = new Set(["ai_api_key", "smtp_pass"]) 
 function getKey(): Buffer {
   const secret = process.env.CONFIG_ENCRYPTION_SECRET || ""
   return crypto.createHash("sha256").update(secret).digest()

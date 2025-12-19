@@ -18,14 +18,23 @@ import {
   Sparkles,
   AlertTriangle,
   Eye,
+  ChevronDown,
+  ArrowUp,
+  ArrowDown,
+  Trash2,
 } from "lucide-react"
 import { getReportData, generateAIReport, getReportById, createManualReport, updateReport } from "@/app/actions/reports"
 import { getFindings } from "@/app/actions/findings"
 import { Input } from "@/components/ui/input"
 import ReactMarkdown from "react-markdown"
-import { updateSettings } from "@/app/actions/settings"
-import type { EditorState, MatrixRow, DocumentAttachment, QuoteItem } from "@/lib/pdf-editor"
-import { buildEditorHtmlFromState, validateEditorState } from "@/lib/pdf-editor"
+import type { EditorState, MatrixRow, DocumentAttachment, QuoteItem, DesignerElement, PageSize, Severity, Status } from "@/lib/pdf-editor"
+import { buildEditorHtmlFromState, validateEditorState, buildDesignerHtmlFromState } from "@/lib/pdf-editor"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 
 interface GeneratedReport {
   id: number
@@ -131,13 +140,33 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
   const [summaryText, setSummaryText] = useState<string>("")
   const [matrixRows, setMatrixRows] = useState<MatrixRow[]>([])
   const [recs, setRecs] = useState<string[]>([])
-  const [history, setHistory] = useState<any[]>([])
-  const [redo, setRedo] = useState<any[]>([])
+  const [expandedSections, setExpandedSections] = useState<Array<"cover" | "summary" | "matrix" | "docs" | "quotes" | "recs">>([])
+  const [aiTemplate, setAiTemplate] = useState<"weekly" | "monthly" | "findings" | "docs">("weekly")
+  type EditorSnapshot = {
+    pdfFont: "sans-serif" | "serif"
+    pdfFontSize: number
+    pdfColor: string
+    editorSections: Array<"cover" | "summary" | "matrix" | "docs" | "quotes" | "recs">
+    coverTitle: string
+    coverSubtitle: string
+    summaryText: string
+    matrixRows: MatrixRow[]
+    recs: string[]
+    responsibleName: string
+  }
+  const [history, setHistory] = useState<EditorSnapshot[]>([])
+  const [redo, setRedo] = useState<EditorSnapshot[]>([])
   const [editorAlerts, setEditorAlerts] = useState<string[]>([])
   const [pdfA, setPdfA] = useState<boolean>(false)
   const [docs, setDocs] = useState<DocumentAttachment[]>([])
   const [quotes, setQuotes] = useState<QuoteItem[]>([])
   const [quoteDraft, setQuoteDraft] = useState<QuoteItem>({ name: "", role: "", date: new Date().toISOString().slice(0, 10), content: "", signatureDataUrl: null })
+  const [designerEnabled, setDesignerEnabled] = useState<boolean>(false)
+  const [pageSize, setPageSize] = useState<PageSize>("A4")
+  const [pageMarginMm, setPageMarginMm] = useState<number>(20)
+  const [elements, setElements] = useState<DesignerElement[]>([])
+  const [expandedElementId, setExpandedElementId] = useState<string | null>(null)
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
 
   useEffect(() => {
     let mounted = true
@@ -289,24 +318,32 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
     return `${header}${html}`
   }
   const validateEditor = () => {
-    const alerts = validateEditorState({
-      pdfFont,
-      pdfFontSize,
-      pdfColor,
-      editorSections,
-      coverTitle,
-      coverSubtitle,
-      summaryText,
-      matrixRows,
-      recs,
-      brandLogo,
-      responsibleName,
-      pdfA,
-      docs,
-      quotes,
-    })
-    setEditorAlerts(alerts)
-    return alerts.length === 0
+    if (designerEnabled) {
+      const alerts: string[] = []
+      if (!responsibleName || !responsibleName.trim()) alerts.push("Falta el nombre del responsable en el pie de página")
+      if (!Array.isArray(elements) || elements.length === 0) alerts.push("El documento no tiene elementos")
+      setEditorAlerts(alerts)
+      return alerts.length === 0
+    } else {
+      const alerts = validateEditorState({
+        pdfFont,
+        pdfFontSize,
+        pdfColor,
+        editorSections,
+        coverTitle,
+        coverSubtitle,
+        summaryText,
+        matrixRows,
+        recs,
+        brandLogo,
+        responsibleName,
+        pdfA,
+        docs,
+        quotes,
+      })
+      setEditorAlerts(alerts)
+      return alerts.length === 0
+    }
   }
   const buildEditorHtml = () => {
     const state: EditorState = {
@@ -324,7 +361,12 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
       pdfA,
       docs,
       quotes,
+      designerEnabled,
+      pageSize,
+      pageMarginMm,
+      elements,
     }
+    if (designerEnabled) return buildDesignerHtmlFromState(state)
     return buildEditorHtmlFromState(state)
   }
 
@@ -408,24 +450,6 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
             <Button
               variant="secondary"
               onClick={() => {
-                const text = viewingReport?.content || editContent || ""
-                const meta = generatedReports.find((r) => r.id === viewingId)
-                const body = toHtml(text, meta)
-                const html = `<!doctype html><html><head><meta charset=\"utf-8\"><title>${viewingReport?.title || editTitle || "informe"}</title><style>body{font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:40px;line-height:1.7;color:#111827}img{display:block;margin:8px 0;max-width:100%;height:auto}h1{font-size:22px;margin:16px 0 8px}h2{font-size:18px;margin:12px 0 6px}h3{font-size:16px;margin:8px 0 4px}@page{size:A4;margin:20mm}*{-webkit-print-color-adjust:exact;print-color-adjust:exact}</style></head><body>${body}</body></html>`
-                const blob = new Blob([html], { type: "text/html" })
-                const url = URL.createObjectURL(blob)
-                const a = document.createElement("a")
-                a.href = url
-                a.download = `${viewingReport?.title || editTitle || "informe"}.html`
-                a.click()
-                URL.revokeObjectURL(url)
-              }}
-            >
-              Descargar HTML
-            </Button>
-            <Button
-              variant="secondary"
-              onClick={() => {
                 const w = window.open("", "_blank")
                 if (!w) return
                 const text = viewingReport?.content || editContent || ""
@@ -455,88 +479,13 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
         </DialogContent>
       </Dialog>
 
-      <Tabs defaultValue="ai" className="space-y-6">
+      <Tabs defaultValue="editor" className="space-y-6">
         <TabsList>
-          <TabsTrigger value="ai">Generar con IA</TabsTrigger>
-          <TabsTrigger value="manual">Crear Manual</TabsTrigger>
           <TabsTrigger value="editor">Editor PDF</TabsTrigger>
           <TabsTrigger value="history">Historial</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="ai" className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Calendar className="h-5 w-5" />
-                Periodo del Informe
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex flex-wrap gap-4">
-                <Select value={period} onValueChange={setPeriod}>
-                  <SelectTrigger className="w-[200px]">
-                    <SelectValue placeholder="Seleccionar periodo" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="weekly">Esta semana</SelectItem>
-                    <SelectItem value="last-week">Semana pasada</SelectItem>
-                    <SelectItem value="monthly">Este mes</SelectItem>
-                    <SelectItem value="last-month">Mes pasado</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </CardContent>
-          </Card>
-
-          <div className="grid gap-4 md:grid-cols-2">
-            {reportTemplates.map((template) => (
-              <Card key={template.id}>
-                <CardHeader>
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-2">
-                      <FileBarChart className="h-5 w-5 text-primary" />
-                      <CardTitle>{template.title}</CardTitle>
-                    </div>
-                    <Badge variant="secondary" className="flex items-center gap-1">
-                      <Sparkles className="h-3 w-3" />
-                      IA
-                    </Badge>
-                  </div>
-                  <CardDescription>{template.description}</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="mb-4">
-                    <p className="mb-2 text-sm font-medium text-muted-foreground">Secciones incluidas:</p>
-                    <div className="flex flex-wrap gap-2">
-                      {template.sections.map((section) => (
-                        <Badge key={section} variant="outline">
-                          {section}
-                        </Badge>
-                      ))}
-                    </div>
-                  </div>
-                  <Button
-                    className="w-full"
-                    onClick={() => handleGenerate(template.id)}
-                    disabled={generating === template.id || isPending}
-                  >
-                    {generating === template.id ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Generando con IA...
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles className="mr-2 h-4 w-4" />
-                        Generar Informe
-                      </>
-                    )}
-                  </Button>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </TabsContent>
+        
 
         <TabsContent value="editor" className="space-y-6">
           <Card>
@@ -550,7 +499,7 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
                   value={pdfFont}
                   onChange={(e) => {
                     pushHistory()
-                    setPdfFont(e.target.value as any)
+                    setPdfFont(e.target.value as "sans-serif" | "serif")
                   }}
                   className="rounded border bg-background px-2 py-1 text-sm"
                 >
@@ -583,15 +532,131 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
                     setResponsibleName(e.target.value)
                   }}
                 />
+                <select
+                  value={period}
+                  onChange={(e) => setPeriod(e.target.value)}
+                  className="rounded border bg-background px-2 py-1 text-sm"
+                >
+                  <option value="weekly">Esta semana</option>
+                  <option value="last-week">Semana pasada</option>
+                  <option value="monthly">Este mes</option>
+                  <option value="last-month">Mes pasado</option>
+                </select>
+                <select
+                  value={aiTemplate}
+                  onChange={(e) => setAiTemplate(e.target.value as "weekly" | "monthly" | "findings" | "docs")}
+                  className="rounded border bg-background px-2 py-1 text-sm"
+                >
+                  <option value="weekly">Plantilla semanal</option>
+                  <option value="monthly">Plantilla mensual</option>
+                  <option value="findings">Plantilla hallazgos</option>
+                  <option value="docs">Plantilla documentos</option>
+                </select>
                 <Button
                   variant="outline"
                   onClick={() => {
-                    pushHistory()
-                    setEditorSections((s) => [...s].reverse())
+                    setGenerating("fill")
+                    startTransition(async () => {
+                      try {
+                        const data = await getReportData(period, projectId)
+                        const result = await generateAIReport(aiTemplate, data, projectId)
+                        const md = String(result?.content || "")
+                        const plain = md
+                          .replace(/^#{1,6}\s+/gm, "")
+                          .replace(/\*\*/g, "")
+                          .replace(/\[(.*?)\]\((.*?)\)/g, "$1")
+                          .replace(/!\[[^\]]*\]\([^)]+\)/g, "")
+                        setCoverTitle(String(result?.title || coverTitle))
+                        setSummaryText(plain)
+                        try {
+                          const items = (await getFindings(projectId)) as unknown as FindingRow[]
+                          const nextRows = (items || []).slice(0, 10).map((f) => ({
+                            description: f.description || f.title,
+                            severity: (["alta", "medio", "bajo"] as Severity[]).includes(f.severity as Severity)
+                              ? (f.severity as Severity)
+                              : "medio",
+                            status: (["pendiente", "en progreso", "resuelto"] as Status[]).includes(f.status as Status)
+                              ? (f.status as Status)
+                              : "pendiente",
+                            date: new Date(f.created_at).toISOString().slice(0, 10),
+                            category: "",
+                            owner: "",
+                          }))
+                          setMatrixRows(nextRows)
+                        } catch {}
+                        setEditorAlerts([])
+                      } catch {
+                        setEditorAlerts(["No se pudo rellenar con IA"])
+                      } finally {
+                        setGenerating(null)
+                      }
+                    })
                   }}
                 >
-                  Invertir secciones
+                  {generating === "fill" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+                  Rellenar con IA
                 </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline">Agregar sección</Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    <DropdownMenuItem
+                      onClick={() => {
+                        pushHistory()
+                        setEditorSections((arr) => (arr.includes("cover") ? arr : [...arr, "cover"]))
+                        setExpandedSections((arr) => (arr.includes("cover") ? arr : [...arr, "cover"]))
+                      }}
+                    >
+                      Portada
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => {
+                        pushHistory()
+                        setEditorSections((arr) => (arr.includes("summary") ? arr : [...arr, "summary"]))
+                        setExpandedSections((arr) => (arr.includes("summary") ? arr : [...arr, "summary"]))
+                      }}
+                    >
+                      Resumen
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => {
+                        pushHistory()
+                        setEditorSections((arr) => (arr.includes("matrix") ? arr : [...arr, "matrix"]))
+                        setExpandedSections((arr) => (arr.includes("matrix") ? arr : [...arr, "matrix"]))
+                      }}
+                    >
+                      Matriz
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => {
+                        pushHistory()
+                        setEditorSections((arr) => (arr.includes("docs") ? arr : [...arr, "docs"]))
+                        setExpandedSections((arr) => (arr.includes("docs") ? arr : [...arr, "docs"]))
+                      }}
+                    >
+                      Documentos
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => {
+                        pushHistory()
+                        setEditorSections((arr) => (arr.includes("quotes") ? arr : [...arr, "quotes"]))
+                        setExpandedSections((arr) => (arr.includes("quotes") ? arr : [...arr, "quotes"]))
+                      }}
+                    >
+                      Citas
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => {
+                        pushHistory()
+                        setEditorSections((arr) => (arr.includes("recs") ? arr : [...arr, "recs"]))
+                        setExpandedSections((arr) => (arr.includes("recs") ? arr : [...arr, "recs"]))
+                      }}
+                    >
+                      Recomendaciones
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
                 <Button
                   variant="outline"
                   onClick={() => {
@@ -648,9 +713,42 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
                 >
                   Guardar versión
                 </Button>
+                <Button
+                  variant={designerEnabled ? "default" : "outline"}
+                  onClick={() => {
+                    setDesignerEnabled((v) => !v)
+                  }}
+                >
+                  Modo diseñador
+                </Button>
+                {designerEnabled && (
+                  <>
+                    <select
+                      value={pageSize}
+                      onChange={(e) => {
+                        setPageSize(e.target.value as PageSize)
+                      }}
+                      className="rounded border bg-background px-2 py-1 text-sm"
+                    >
+                      <option value="A4">A4</option>
+                      <option value="Letter">Letter</option>
+                      <option value="Legal">Legal</option>
+                    </select>
+                    <Input
+                      type="number"
+                      value={pageMarginMm}
+                      onChange={(e) => {
+                        setPageMarginMm(Number(e.target.value) || 20)
+                      }}
+                      className="w-28"
+                      placeholder="Margen (mm)"
+                    />
+                  </>
+                )}
               </div>
               <div className="grid gap-6 md:grid-cols-2">
                 <div className="space-y-4">
+                  {!designerEnabled && (
                   <div
                     className="space-y-4"
                     onDragOver={(e) => e.preventDefault()}
@@ -680,6 +778,90 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
                         }}
                         className="rounded border p-3"
                       >
+                        <div className="flex items-center justify-between">
+                          <p className="text-sm font-medium">
+                            {sec === "cover"
+                              ? "Portada"
+                              : sec === "summary"
+                              ? "Resumen Ejecutivo"
+                              : sec === "matrix"
+                              ? "Matriz de Hallazgos"
+                              : sec === "docs"
+                              ? "Documentos"
+                              : sec === "quotes"
+                              ? "Citas de Personal"
+                              : "Recomendaciones"}
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={idx === 0}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                if (idx === 0) return
+                                pushHistory()
+                                setEditorSections((arr) => {
+                                  const copy = [...arr]
+                                  const tmp = copy[idx - 1]
+                                  copy[idx - 1] = copy[idx]
+                                  copy[idx] = tmp
+                                  return copy
+                                })
+                              }}
+                            >
+                              <ArrowUp className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={idx === editorSections.length - 1}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                if (idx === editorSections.length - 1) return
+                                pushHistory()
+                                setEditorSections((arr) => {
+                                  const copy = [...arr]
+                                  const tmp = copy[idx + 1]
+                                  copy[idx + 1] = copy[idx]
+                                  copy[idx] = tmp
+                                  return copy
+                                })
+                              }}
+                            >
+                              <ArrowDown className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setExpandedSections((arr) => (arr.includes(sec) ? arr.filter((s) => s !== sec) : [...arr, sec]))
+                              }}
+                            >
+                              <ChevronDown
+                                className={`h-4 w-4 transition-transform ${
+                                  expandedSections.includes(sec) ? "rotate-180" : ""
+                                }`}
+                              />
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                pushHistory()
+                                setEditorSections((arr) => arr.filter((_, i) => i !== idx))
+                                setExpandedSections((arr) => arr.filter((s) => s !== sec))
+                              }}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                              Quitar sección
+                            </Button>
+                          </div>
+                        </div>
+                        {expandedSections.includes(sec) && (
+                          <div className="mt-2 space-y-2">
                         {sec === "cover" && (
                           <div className="space-y-2">
                             <p className="text-sm font-medium">Portada</p>
@@ -792,7 +974,7 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
                                       pushHistory()
                                       setMatrixRows((rows) => {
                                         const copy = [...rows]
-                                        copy[i] = { ...copy[i], severity: e.target.value as any }
+                                        copy[i] = { ...copy[i], severity: e.target.value as Severity }
                                         return copy
                                       })
                                     }}
@@ -808,7 +990,7 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
                                       pushHistory()
                                       setMatrixRows((rows) => {
                                         const copy = [...rows]
-                                        copy[i] = { ...copy[i], status: e.target.value as any }
+                                        copy[i] = { ...copy[i], status: e.target.value as Status }
                                         return copy
                                       })
                                     }}
@@ -946,8 +1128,12 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
                                         ...rows,
                                         ...selected.map((f) => ({
                                           description: f.description || f.title,
-                                          severity: (f.severity as any) || "medio",
-                                          status: (f.status as any) || "pendiente",
+                                          severity: (["alta", "medio", "bajo"] as Severity[]).includes(f.severity as Severity)
+                                            ? (f.severity as Severity)
+                                            : "medio",
+                                          status: (["pendiente", "en progreso", "resuelto"] as Status[]).includes(f.status as Status)
+                                            ? (f.status as Status)
+                                            : "pendiente",
                                           date: new Date(f.created_at).toISOString().slice(0, 10),
                                           category: "",
                                           owner: "",
@@ -1091,15 +1277,21 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
                                     if (!ctx) return
                                     let drawing = true
                                     const rect = c.getBoundingClientRect()
+                                    let lastX = e.clientX - rect.left
+                                    let lastY = e.clientY - rect.top
                                     const move = (ev: MouseEvent) => {
                                       if (!drawing) return
+                                      const x = ev.clientX - rect.left
+                                      const y = ev.clientY - rect.top
                                       ctx.strokeStyle = "#111827"
                                       ctx.lineWidth = 2
                                       ctx.lineCap = "round"
                                       ctx.beginPath()
-                                      ctx.moveTo(ev.clientX - rect.left, ev.clientY - rect.top)
-                                      ctx.lineTo(ev.clientX - rect.left + 0.1, ev.clientY - rect.top + 0.1)
+                                      ctx.moveTo(lastX, lastY)
+                                      ctx.lineTo(x, y)
                                       ctx.stroke()
+                                      lastX = x
+                                      lastY = y
                                     }
                                     const up = () => {
                                       drawing = false
@@ -1108,6 +1300,38 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
                                     }
                                     window.addEventListener("mousemove", move)
                                     window.addEventListener("mouseup", up)
+                                  }}
+                                  onTouchStart={(e) => {
+                                    const c = e.currentTarget
+                                    const ctx = c.getContext("2d")
+                                    if (!ctx) return
+                                    let drawing = true
+                                    const rect = c.getBoundingClientRect()
+                                    const t = e.touches[0]
+                                    let lastX = t.clientX - rect.left
+                                    let lastY = t.clientY - rect.top
+                                    const move = (ev: TouchEvent) => {
+                                      if (!drawing) return
+                                      const tt = ev.touches[0]
+                                      const x = tt.clientX - rect.left
+                                      const y = tt.clientY - rect.top
+                                      ctx.strokeStyle = "#111827"
+                                      ctx.lineWidth = 2
+                                      ctx.lineCap = "round"
+                                      ctx.beginPath()
+                                      ctx.moveTo(lastX, lastY)
+                                      ctx.lineTo(x, y)
+                                      ctx.stroke()
+                                      lastX = x
+                                      lastY = y
+                                    }
+                                    const up = () => {
+                                      drawing = false
+                                      window.removeEventListener("touchmove", move)
+                                      window.removeEventListener("touchend", up)
+                                    }
+                                    window.addEventListener("touchmove", move, { passive: true })
+                                    window.addEventListener("touchend", up)
                                   }}
                                 />
                                 <div className="mt-2 flex gap-2">
@@ -1168,13 +1392,397 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
                                     </div>
                                   </div>
                                 ))}
-                              </div>
                             </div>
                           </div>
+                         </div>
+                        )}
+                        </div>
                         )}
                       </div>
                     ))}
                   </div>
+                  )}
+                  {designerEnabled && (
+                    <div className="space-y-4">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setElements((els) => [...els, { id: `h1-${Date.now()}`, type: "heading", level: 1, text: "Título", align: "left" }])
+                          }}
+                        >
+                          Agregar H1
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setElements((els) => [...els, { id: `h2-${Date.now()}`, type: "heading", level: 2, text: "Subtítulo", align: "left" }])
+                          }}
+                        >
+                          Agregar H2
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setElements((els) => [...els, { id: `text-${Date.now()}`, type: "text", html: "", align: "left" }])
+                          }}
+                        >
+                          Agregar texto
+                        </Button>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={(e) => {
+                            const f = e.target.files?.[0]
+                            if (!f) return
+                            const url = URL.createObjectURL(f)
+                            setElements((els) => [...els, { id: `img-${Date.now()}`, type: "image", src: url, alt: f.name, widthPct: 100 }])
+                          }}
+                        />
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setElements((els) => [...els, { id: `table-${Date.now()}`, type: "table", rows: [["", ""], ["", ""]] }])
+                          }}
+                        >
+                          Agregar tabla
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setElements((els) => [...els, { id: `matrix-${Date.now()}`, type: "matrix", rows: matrixRows }])
+                          }}
+                        >
+                          Agregar matriz
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setElements((els) => [...els, { id: `quote-${Date.now()}`, type: "quote", item: quoteDraft }])
+                          }}
+                        >
+                          Agregar cita
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setElements((els) => [...els, { id: `docs-${Date.now()}`, type: "docs", items: docs }])
+                          }}
+                        >
+                          Agregar documentos
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setElements((els) => [...els, { id: `div-${Date.now()}`, type: "divider" }])
+                          }}
+                        >
+                          Agregar divisor
+                        </Button>
+                      </div>
+                      <div className="grid gap-3">
+                        {elements.map((el, idx) => (
+                          <div
+                            key={el.id}
+                            className="rounded border p-3"
+                            draggable
+                            onDragStart={(e) => e.dataTransfer.setData("element-index", String(idx))}
+                            onDragOver={(e) => e.preventDefault()}
+                            onDrop={(e) => {
+                              const fromIdx = Number(e.dataTransfer.getData("element-index"))
+                              const toIdx = idx
+                              if (!Number.isFinite(fromIdx)) return
+                              setElements((arr) => {
+                                const copy = [...arr]
+                                const [moved] = copy.splice(fromIdx, 1)
+                                copy.splice(toIdx, 0, moved)
+                                return copy
+                              })
+                            }}
+                          >
+                            <div className="flex items-center justify-between">
+                              <p className="text-sm font-medium">{el.type}</p>
+                              <div className="flex gap-2">
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => {
+                                    setExpandedElementId((id) => (id === el.id ? null : el.id))
+                                  }}
+                                >
+                                  {expandedElementId === el.id ? "Cerrar" : "Editar"}
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => {
+                                    setElements((arr) => arr.filter((x) => x.id !== el.id))
+                                  }}
+                                >
+                                  Quitar
+                                </Button>
+                              </div>
+                            </div>
+                            {expandedElementId === el.id ? (
+                              <div className="mt-2 space-y-2">
+                                {el.type === "heading" && (
+                                  <div className="grid gap-2">
+                                    <select
+                                      value={String(el.level)}
+                                      onChange={(e) => {
+                                        const lvl = Number(e.target.value) as 1 | 2 | 3
+                                        setElements((arr) => arr.map((it, i) => (i === idx && it.type === "heading" ? { ...it, level: lvl } : it)))
+                                      }}
+                                      className="rounded border bg-background px-2 py-1 text-sm"
+                                    >
+                                      <option value="1">H1</option>
+                                      <option value="2">H2</option>
+                                      <option value="3">H3</option>
+                                    </select>
+                                    <Input
+                                      placeholder="Texto"
+                                      value={el.text}
+                                      onChange={(e) => {
+                                        setElements((arr) => arr.map((it, i) => (i === idx && it.type === "heading" ? { ...it, text: e.target.value } : it)))
+                                      }}
+                                    />
+                                    <select
+                                      value={el.align || "left"}
+                                      onChange={(e) => {
+                                        setElements((arr) =>
+                                          arr.map((it, i) =>
+                                            i === idx && it.type === "heading" ? { ...it, align: e.target.value as "left" | "center" | "right" } : it,
+                                          ),
+                                        )
+                                      }}
+                                      className="rounded border bg-background px-2 py-1 text-sm"
+                                    >
+                                      <option value="left">Izquierda</option>
+                                      <option value="center">Centro</option>
+                                      <option value="right">Derecha</option>
+                                    </select>
+                                  </div>
+                                )}
+                                {el.type === "text" && (
+                                  <div className="grid gap-2">
+                                    <textarea
+                                      className="w-full rounded border bg-background p-2 text-sm"
+                                      rows={6}
+                                      value={el.html}
+                                      onChange={(e) => {
+                                        setElements((arr) => arr.map((it, i) => (i === idx && it.type === "text" ? { ...it, html: e.target.value } : it)))
+                                      }}
+                                    />
+                                    <select
+                                      value={el.align || "left"}
+                                      onChange={(e) => {
+                                        setElements((arr) =>
+                                          arr.map((it, i) =>
+                                            i === idx && it.type === "text" ? { ...it, align: e.target.value as "left" | "center" | "right" } : it,
+                                          ),
+                                        )
+                                      }}
+                                      className="rounded border bg-background px-2 py-1 text-sm"
+                                    >
+                                      <option value="left">Izquierda</option>
+                                      <option value="center">Centro</option>
+                                      <option value="right">Derecha</option>
+                                    </select>
+                                  </div>
+                                )}
+                                {el.type === "image" && (
+                                  <div className="grid gap-2">
+                                    <Input
+                                      placeholder="Texto alternativo"
+                                      value={el.alt || ""}
+                                      onChange={(e) => {
+                                        setElements((arr) => arr.map((it, i) => (i === idx && it.type === "image" ? { ...it, alt: e.target.value } : it)))
+                                      }}
+                                    />
+                                    <Input
+                                      type="number"
+                                      value={el.widthPct || 100}
+                                      onChange={(e) => {
+                                        setElements((arr) =>
+                                          arr.map((it, i) =>
+                                            i === idx && it.type === "image" ? { ...it, widthPct: Number(e.target.value) || 100 } : it,
+                                          ),
+                                        )
+                                      }}
+                                      className="w-28"
+                                      placeholder="Ancho %"
+                                    />
+                                    <input
+                                      type="file"
+                                      accept="image/*"
+                                      onChange={(e) => {
+                                        const f = e.target.files?.[0]
+                                        if (!f) return
+                                        const url = URL.createObjectURL(f)
+                                        setElements((arr) =>
+                                          arr.map((it, i) => (i === idx && it.type === "image" ? { ...it, src: url, alt: f.name } : it)),
+                                        )
+                                      }}
+                                    />
+                                  </div>
+                                )}
+                                {el.type === "table" && (
+                                  <div className="space-y-2">
+                                    <div className="grid gap-2">
+                                      {el.rows.map((row: string[], rIdx: number) => (
+                                        <div key={rIdx} className="grid grid-cols-[1fr_1fr_1fr_1fr] gap-2">
+                                          {row.map((cell: string, cIdx: number) => (
+                                            <Input
+                                              key={cIdx}
+                                              value={cell}
+                                              onChange={(e) => {
+                                                const nextRows = el.rows.map((rr, ri) =>
+                                                  ri === rIdx ? rr.map((cc, ci) => (ci === cIdx ? e.target.value : cc)) : rr,
+                                                )
+                                                setElements((arr) => arr.map((it, i) => (i === idx && it.type === "table" ? { ...it, rows: nextRows } : it)))
+                                              }}
+                                            />
+                                          ))}
+                                        </div>
+                                      ))}
+                                    </div>
+                                    <div className="flex gap-2">
+                                      <Button
+                                        variant="outline"
+                                        onClick={() => {
+                                          const cols = el.rows[0]?.length || 2
+                                          const nextRows = [...el.rows, Array(cols).fill("")]
+                                          setElements((arr) => arr.map((it, i) => (i === idx && it.type === "table" ? { ...it, rows: nextRows } : it)))
+                                        }}
+                                      >
+                                        Agregar fila
+                                      </Button>
+                                      <Button
+                                        variant="outline"
+                                        onClick={() => {
+                                          const nextRows = el.rows.map((r) => [...r, ""])
+                                          setElements((arr) => arr.map((it, i) => (i === idx && it.type === "table" ? { ...it, rows: nextRows } : it)))
+                                        }}
+                                      >
+                                        Agregar columna
+                                      </Button>
+                                    </div>
+                                  </div>
+                                )}
+                                {el.type === "matrix" && (
+                                  <div className="flex gap-2">
+                                    <Button
+                                      variant="outline"
+                                      onClick={() => {
+                                        setElements((arr) => arr.map((it, i) => (i === idx && it.type === "matrix" ? { ...it, rows: matrixRows } : it)))
+                                      }}
+                                    >
+                                      Actualizar con matriz actual
+                                    </Button>
+                                  </div>
+                                )}
+                                {el.type === "quote" && (
+                                  <div className="grid gap-2">
+                                    <Input
+                                      placeholder="Nombre"
+                                      value={el.item.name}
+                                      onChange={(e) => {
+                                        setElements((arr) =>
+                                          arr.map((it, i) => (i === idx && it.type === "quote" ? { ...it, item: { ...it.item, name: e.target.value } } : it)),
+                                        )
+                                      }}
+                                    />
+                                    <Input
+                                      placeholder="Cargo"
+                                      value={el.item.role}
+                                      onChange={(e) => {
+                                        setElements((arr) =>
+                                          arr.map((it, i) => (i === idx && it.type === "quote" ? { ...it, item: { ...it.item, role: e.target.value } } : it)),
+                                        )
+                                      }}
+                                    />
+                                    <Input
+                                      type="date"
+                                      value={el.item.date}
+                                      onChange={(e) => {
+                                        setElements((arr) =>
+                                          arr.map((it, i) => (i === idx && it.type === "quote" ? { ...it, item: { ...it.item, date: e.target.value } } : it)),
+                                        )
+                                      }}
+                                    />
+                                    <textarea
+                                      className="w-full rounded border bg-background p-2 text-sm"
+                                      rows={4}
+                                      value={el.item.content}
+                                      onChange={(e) => {
+                                        setElements((arr) =>
+                                          arr.map((it, i) =>
+                                            i === idx && it.type === "quote" ? { ...it, item: { ...it.item, content: e.target.value } } : it,
+                                          ),
+                                        )
+                                      }}
+                                    />
+                                    <input
+                                      type="file"
+                                      accept="image/*"
+                                      onChange={(e) => {
+                                        const f = e.target.files?.[0]
+                                        if (!f) return
+                                        const url = URL.createObjectURL(f)
+                                        setElements((arr) =>
+                                          arr.map((it, i) =>
+                                            i === idx && it.type === "quote"
+                                              ? { ...it, item: { ...it.item, signatureDataUrl: url } }
+                                              : it,
+                                          ),
+                                        )
+                                      }}
+                                    />
+                                  </div>
+                                )}
+                                {el.type === "docs" && (
+                                  <div className="flex gap-2">
+                                    <Button
+                                      variant="outline"
+                                      onClick={() => {
+                                        setElements((arr) => arr.map((it, i) => (i === idx && it.type === "docs" ? { ...it, items: docs } : it)))
+                                      }}
+                                    >
+                                      Actualizar con documentos actuales
+                                    </Button>
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="mt-2">
+                                {el.type === "heading" && <div className="text-sm">{el.text}</div>}
+                                {el.type === "text" && <div className="text-sm" dangerouslySetInnerHTML={{ __html: el.html }} />}
+                                {el.type === "image" && <img src={el.src} alt={el.alt || ""} className="max-h-36" />}
+                                {el.type === "table" && (
+                                  <table className="w-full border-collapse">
+                                    <tbody>
+                                      {el.type === "table" &&
+                                        el.rows.map((row: string[], rIdx: number) => (
+                                          <tr key={rIdx}>
+                                            {row.map((cell: string, cIdx: number) => (
+                                              <td key={cIdx} className="border px-2 py-1 text-sm">{cell}</td>
+                                            ))}
+                                          </tr>
+                                        ))}
+                                    </tbody>
+                                  </table>
+                                )}
+                                {el.type === "matrix" && <div className="text-xs text-muted-foreground">{el.rows.length} filas</div>}
+                                {el.type === "quote" && <div className="text-sm">{el.item.name} · {el.item.role}</div>}
+                                {el.type === "docs" && <div className="text-xs text-muted-foreground">{el.items?.length || 0} documentos</div>}
+                                {el.type === "divider" && <hr />}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
                 <div>
                   <div className="rounded border p-3">
@@ -1193,65 +1801,6 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
                 </Alert>
               )}
               <div className="flex flex-wrap justify-end gap-2">
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    startTransition(async () => {
-                      const tpl = {
-                        pdfFont,
-                        pdfFontSize,
-                        pdfColor,
-                        editorSections,
-                        coverTitle,
-                        coverSubtitle,
-                        summaryText,
-                        matrixRows,
-                        recs,
-                      }
-                      await updateSettings([{ key: "pdf_template_default", value: JSON.stringify(tpl) }, { key: "responsible_name", value: responsibleName }])
-                    })
-                  }}
-                >
-                  Guardar como plantilla
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={async () => {
-                    try {
-                      const resp = await fetch("/api/settings/pdf-template")
-                      const j = await resp.json()
-                      const raw = j.template || ""
-                      if (!raw) return
-                      const tpl = JSON.parse(String(raw))
-                      setPdfFont(tpl.pdfFont || "sans-serif")
-                      setPdfFontSize(Number(tpl.pdfFontSize) || 14)
-                      setPdfColor(tpl.pdfColor || "#111827")
-                      setEditorSections(Array.isArray(tpl.editorSections) ? tpl.editorSections : ["cover", "summary", "matrix", "recs"])
-                      setCoverTitle(tpl.coverTitle || "")
-                      setCoverSubtitle(tpl.coverSubtitle || "")
-                      setSummaryText(tpl.summaryText || "")
-                      setMatrixRows(Array.isArray(tpl.matrixRows) ? tpl.matrixRows : [])
-                      setRecs(Array.isArray(tpl.recs) ? tpl.recs : [])
-                    } catch {}
-                  }}
-                >
-                  Cargar plantilla
-                </Button>
-                <Button
-                  onClick={() => {
-                    if (!validateEditor()) return
-                    const html = buildEditorHtml()
-                    const blob = new Blob([html], { type: "text/html" })
-                    const url = URL.createObjectURL(blob)
-                    const a = document.createElement("a")
-                    a.href = url
-                    a.download = `${coverTitle || "informe"}.html`
-                    a.click()
-                    URL.revokeObjectURL(url)
-                  }}
-                >
-                  Exportar HTML
-                </Button>
                 <Button
                   onClick={() => {
                     if (!validateEditor()) return
@@ -1285,227 +1834,7 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
           </Card>
         </TabsContent>
 
-        <TabsContent value="manual" className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Nuevo Informe Manual</CardTitle>
-              <CardDescription>Redacta y guarda un informe personalizado</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-2">
-                  <p className="text-sm">Titulo</p>
-                  <Input value={manualTitle} onChange={(e) => setManualTitle(e.target.value)} placeholder="Titulo del informe" />
-                </div>
-                <div className="space-y-2">
-                  <p className="text-sm">Desde</p>
-                  <Input type="date" value={manualDateFrom} onChange={(e) => setManualDateFrom(e.target.value)} />
-                </div>
-                <div className="space-y-2">
-                  <p className="text-sm">Hasta</p>
-                  <Input type="date" value={manualDateTo} onChange={(e) => setManualDateTo(e.target.value)} />
-                </div>
-              </div>
-              <div className="space-y-2">
-                <p className="text-sm">Contenido (Markdown)</p>
-                <textarea
-                  className="w-full rounded-md border border-input bg-background p-2 text-sm"
-                  rows={16}
-                  value={manualContent}
-                  onChange={(e) => setManualContent(e.target.value)}
-                  placeholder="# Informe\n\nContenido..."
-                />
-              </div>
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm font-medium">Adjuntar hallazgos</p>
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      disabled={findingsLoading}
-                      onClick={() => {
-                        setFindingsLoading(true)
-                        startTransition(async () => {
-                          try {
-                            const items = (await getFindings(projectId)) as unknown as FindingRow[]
-                            setFindingsList(
-                              (items || []).map((f) => ({
-                                id: f.id,
-                                title: f.title,
-                                description: f.description ?? null,
-                                severity: f.severity,
-                                status: f.status,
-                                location: f.location ?? null,
-                                created_at: f.created_at,
-                                photos: Array.isArray(f.photos) ? f.photos : null,
-                              })),
-                            )
-                          } finally {
-                            setFindingsLoading(false)
-                          }
-                        })
-                      }}
-                    >
-                      {findingsLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                      Buscar hallazgos
-                    </Button>
-                    <Input
-                      placeholder="Buscar por #ID o texto"
-                      value={findingsQuery}
-                      onChange={(e) => setFindingsQuery(e.target.value)}
-                    />
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  {findingsList.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">No hay hallazgos cargados</p>
-                  ) : (
-                    <div className="grid gap-2">
-                      {findingsList
-                        .filter((f) => {
-                          const q = findingsQuery.trim()
-                          if (!q) return true
-                          if (q.startsWith("#")) {
-                            const idStr = q.slice(1)
-                            const idNum = Number(idStr)
-                            return f.id === idNum
-                          }
-                          const s = q.toLowerCase()
-                          return f.title.toLowerCase().includes(s) || (f.description || "").toLowerCase().includes(s)
-                        })
-                        .slice(0, 10)
-                        .map((f) => {
-                          const checked = selectedFindingIds.includes(f.id)
-                          return (
-                            <div key={f.id} className="flex items-center justify-between rounded border px-3 py-2">
-                              <div className="flex items-center gap-3">
-                                <div className="flex h-8 w-8 items-center justify-center rounded bg-muted text-xs">#{f.id}</div>
-                                <div>
-                                  <p className="text-sm font-medium">{f.title}</p>
-                                  <div className="text-xs text-muted-foreground">
-                                    {f.severity} · {f.status} · {formatDate(f.created_at)}
-                                  </div>
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <Badge variant="outline">{f.location || "-"}</Badge>
-                                <Button
-                                  variant={checked ? "secondary" : "outline"}
-                                  size="sm"
-                                  onClick={() => {
-                                    setSelectedFindingIds((prev) =>
-                                      checked ? prev.filter((id) => id !== f.id) : [...prev, f.id],
-                                    )
-                                  }}
-                                >
-                                  {checked ? "Quitar" : "Agregar"}
-                                </Button>
-                              </div>
-                            </div>
-                          )
-                        })}
-                    </div>
-                  )}
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    variant="outline"
-                    disabled={selectedFindingIds.length === 0}
-                    onClick={() => {
-                      const selected = findingsList.filter((f) => selectedFindingIds.includes(f.id))
-                      const blocks = selected.map((f) => {
-                        const lines = [
-                          `### Hallazgo #${f.id} - ${f.title}`,
-                          `- Severidad: ${f.severity}`,
-                          `- Estado: ${f.status}`,
-                          `- Ubicacion: ${f.location || "-"}`,
-                          `- Fecha: ${formatDate(f.created_at)}`,
-                          f.description ? `\n${f.description}` : "",
-                          Array.isArray(f.photos) && f.photos.length
-                            ? `\n${f.photos
-                                .slice(0, 3)
-                                .map((_, i) => `![Hallazgo #${f.id} Foto ${i + 1}](/api/findings/photo?id=${f.id}&index=${i})`)
-                                .join("\n")}`
-                            : "",
-                        ]
-                        return lines.filter(Boolean).join("\n")
-                      })
-                      const merged = `${manualContent}\n\n${blocks.join("\n\n")}`.trim()
-                      setManualContent(merged)
-                    }}
-                  >
-                    Insertar selección
-                  </Button>
-                  <Button
-                    variant="outline"
-                    disabled={selectedFindingIds.length === 0}
-                    onClick={() => {
-                      const idsStr = selectedFindingIds.map((id) => `#${id}`).join(", ")
-                      const merged = `${manualContent}\n\nIncidentes seleccionados: ${idsStr}`.trim()
-                      setManualContent(merged)
-                    }}
-                  >
-                    Insertar números de incidentes
-                  </Button>
-                  <Button
-                    variant="outline"
-                    disabled={selectedFindingIds.length === 0}
-                    onClick={() => {
-                      const total = selectedFindingIds.length
-                      const merged = `${manualContent}\n\nTotal de incidentes seleccionados: ${total}`.trim()
-                      setManualContent(merged)
-                    }}
-                  >
-                    Insertar conteo de incidentes
-                  </Button>
-                </div>
-              </div>
-              <div className="flex justify-end gap-2">
-                <Button
-                  disabled={savingManual || !manualTitle || !manualDateFrom || !manualDateTo || !manualContent}
-                  onClick={() => {
-                    setSavingManual(true)
-                    startTransition(async () => {
-                      try {
-                        const id = await createManualReport(manualTitle, manualDateFrom, manualDateTo, manualContent, projectId)
-                        if (id) {
-                          const newReport: GeneratedReport = {
-                            id,
-                            report_type: "manual",
-                            title: manualTitle,
-                            date_from: manualDateFrom,
-                            date_to: manualDateTo,
-                            created_at: new Date().toISOString(),
-                          }
-                          setGeneratedReports((prev) => [newReport, ...prev])
-                          setViewingReport({ title: manualTitle, content: manualContent })
-                          setViewingId(id)
-                          setEditTitle(manualTitle)
-                          setEditContent(manualContent)
-                          setIsViewOpen(true)
-                          setIsEditing(false)
-                          setManualTitle("")
-                          setManualDateFrom("")
-                          setManualDateTo("")
-                          setManualContent("")
-                        } else {
-                          setError("No se pudo crear el informe")
-                        }
-                      } catch {
-                        setError("No se pudo crear el informe")
-                      } finally {
-                        setSavingManual(false)
-                      }
-                    })
-                  }}
-                >
-                  {savingManual ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                  Guardar Informe
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
+        
 
         <TabsContent value="history">
           <Card>

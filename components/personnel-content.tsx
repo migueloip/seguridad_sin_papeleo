@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useTransition } from "react"
+import { useState, useTransition, useEffect } from "react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -8,6 +8,8 @@ import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Progress } from "@/components/ui/progress"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import {
   Dialog,
   DialogContent,
@@ -18,6 +20,8 @@ import {
 } from "@/components/ui/dialog"
 import { Search, Plus, Users, CheckCircle, AlertCircle, FileText, Edit2, Trash2 } from "lucide-react"
 import { createWorker, updateWorker, deleteWorker } from "@/app/actions/workers"
+import { getDocuments, createDocument, findDocumentTypeByName, getDocumentTypes } from "@/app/actions/documents"
+import { createAdmonition, getAdmonitions, updateAdmonition, archiveAdmonition, getAdmonitionStats } from "@/app/actions/admonitions"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { isValidRut, normalizeRut } from "@/lib/utils"
@@ -40,12 +44,54 @@ interface Worker {
 
 export function PersonnelContent({ initialWorkers, projectId }: { initialWorkers: Worker[]; projectId?: number }) {
   const [search, setSearch] = useState("")
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => {
+    setMounted(true)
+  }, [])
   const [workers, setWorkers] = useState<Worker[]>(initialWorkers)
   const [isPending, startTransition] = useTransition()
   const [isCreateOpen, setIsCreateOpen] = useState(false)
   const [editingWorker, setEditingWorker] = useState<Worker | null>(null)
   const [isEditOpen, setIsEditOpen] = useState(false)
   const router = useRouter()
+
+  const [isAdmonitionOpen, setIsAdmonitionOpen] = useState(false)
+  const [activeWorkerId, setActiveWorkerId] = useState<number | null>(null)
+  const [admonitions, setAdmonitions] = useState<
+    Array<
+      {
+        id: number
+        worker_id: number
+        admonition_date: string
+        admonition_type: "verbal" | "escrita" | "suspension"
+        reason: string
+        supervisor_signature: string | null
+        status: "active" | "archived" | "archivada"
+        approval_status: "pending" | "approved" | "rejected"
+        first_name: string
+        last_name: string
+        company: string | null
+        role: string | null
+      } & { attachments?: { file_name: string; file_url: string | null; mime?: string | null }[] | null }
+    >
+  >([])
+  const [admonitionFilters, setAdmonitionFilters] = useState({
+    from: "",
+    to: "",
+    type: "todos",
+    status: "todos",
+    approval_status: "todos",
+  })
+  const [admonitionForm, setAdmonitionForm] = useState({
+    worker_id: "",
+    admonition_date: new Date().toISOString().slice(0, 10),
+    admonition_type: "verbal" as "verbal" | "escrita" | "suspension",
+    reason: "",
+    supervisor_signature: "" as string | null,
+    attachments: [] as { file_name: string; file_url: string | null; mime?: string | null }[],
+  })
+  const [candidateDocs, setCandidateDocs] = useState<Array<{ id: number; file_name: string; file_url: string | null }>>([])
+  const [newAttachment, setNewAttachment] = useState<{ file: File | null; file_name: string }>({ file: null, file_name: "" })
 
   const [newWorker, setNewWorker] = useState({
     rut: "",
@@ -251,6 +297,7 @@ export function PersonnelContent({ initialWorkers, projectId }: { initialWorkers
     criticos: workers.filter((p) => getDocStatus(p) === "critico").length,
   }
 
+  if (!mounted) return null
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -583,16 +630,537 @@ export function PersonnelContent({ initialWorkers, projectId }: { initialWorkers
 
                   <div className="flex items-center justify-between">
                     {getStatusBadge(docStatus)}
-                    <Button variant="outline" size="sm">
+                    <div className="flex gap-2">
+                      <Button variant="outline" size="sm" onClick={() => {
+                        setActiveWorkerId(person.id)
+                        setIsAdmonitionOpen(true)
+                        startTransition(async () => {
+                          try {
+                            const rows = await getAdmonitions({ worker_id: person.id })
+                            const normalized = (rows || []).map((a: any) => ({
+                              ...a,
+                              admonition_date:
+                                typeof a.admonition_date === "string"
+                                  ? a.admonition_date
+                                  : new Date(a.admonition_date).toISOString().slice(0, 10),
+                            }))
+                            setAdmonitions(normalized as any)
+                            const docs = await getDocuments(person.id)
+                            setCandidateDocs((docs || []).map((d: any) => ({ id: d.id, file_name: d.file_name, file_url: d.file_url || null })))
+                            setAdmonitionForm((f) => ({ ...f, worker_id: String(person.id) }))
+                          } catch {}
+                        })
+                      }}>
+                        Registrar Amonestación
+                      </Button>
+                      <Button variant="outline" size="sm">
                       <FileText className="mr-2 h-4 w-4" />
                       Ver Docs
-                    </Button>
+                      </Button>
+                    </div>
                   </div>
                 </CardContent>
               </Card>
             )
           })
         )}
+      </div>
+
+      <Dialog open={isAdmonitionOpen} onOpenChange={(v) => setIsAdmonitionOpen(v)}>
+        <DialogContent className="max-h-[80vh] max-w-4xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Cartas de Amonestación</DialogTitle>
+            <DialogDescription>Registro, historial y aprobación</DialogDescription>
+          </DialogHeader>
+          <Tabs defaultValue="create" className="space-y-4">
+            <TabsList>
+              <TabsTrigger value="create">Registrar</TabsTrigger>
+              <TabsTrigger value="history">Historial</TabsTrigger>
+              <TabsTrigger value="stats">Reportes</TabsTrigger>
+            </TabsList>
+            <TabsContent value="create">
+              <div className="grid gap-3">
+                <div>
+                  <Label>Empleado *</Label>
+                  <Select
+                    value={admonitionForm.worker_id}
+                    onValueChange={(val) => setAdmonitionForm((f) => ({ ...f, worker_id: val }))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Selecciona un empleado" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {workers.map((w) => (
+                        <SelectItem key={w.id} value={String(w.id)}>
+                          {w.first_name} {w.last_name} {w.company ? `· ${w.company}` : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label>Fecha *</Label>
+                    <Input
+                      type="date"
+                      value={admonitionForm.admonition_date}
+                      onChange={(e) => setAdmonitionForm((f) => ({ ...f, admonition_date: e.target.value }))}
+                    />
+                  </div>
+                  <div>
+                    <Label>Tipo *</Label>
+                    <Select
+                      value={admonitionForm.admonition_type}
+                      onValueChange={(val) =>
+                        setAdmonitionForm((f) => ({ ...f, admonition_type: val as "verbal" | "escrita" | "suspension" }))
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Selecciona el tipo" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="verbal">Verbal</SelectItem>
+                        <SelectItem value="escrita">Escrita</SelectItem>
+                        <SelectItem value="suspension">Suspensión</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div>
+                  <Label>Motivo detallado *</Label>
+                  <textarea
+                    className="w-full rounded border bg-background p-2 text-sm"
+                    rows={6}
+                    value={admonitionForm.reason}
+                    onChange={(e) => setAdmonitionForm((f) => ({ ...f, reason: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <Label>Sanción</Label>
+                  <Input
+                    placeholder="p. ej., Advertencia escrita, suspensión 2 días"
+                    value={admonitionForm.supervisor_signature || ""}
+                    onChange={(e) => setAdmonitionForm((f) => ({ ...f, supervisor_signature: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <Label>Adjuntar documentos relacionados</Label>
+                  <div className="grid gap-2">
+                    {candidateDocs.slice(0, 10).map((d) => {
+                      const selected = admonitionForm.attachments.some((a) => a.file_name === d.file_name)
+                      return (
+                        <div key={d.id} className="flex items-center justify-between rounded border px-3 py-2">
+                          <div>
+                            <p className="text-sm font-medium">{d.file_name}</p>
+                            <p className="text-xs text-muted-foreground">{d.file_url ? "Con archivo" : "Sin archivo"}</p>
+                          </div>
+                          <Button
+                            variant={selected ? "secondary" : "outline"}
+                            size="sm"
+                            onClick={() => {
+                              setAdmonitionForm((f) => {
+                                const next = selected
+                                  ? f.attachments.filter((a) => a.file_name !== d.file_name)
+                                  : [...f.attachments, { file_name: d.file_name, file_url: d.file_url, mime: null }]
+                                return { ...f, attachments: next }
+                              })
+                            }}
+                          >
+                            {selected ? "Quitar" : "Agregar"}
+                          </Button>
+                        </div>
+                      )
+                    })}
+                    <div className="rounded border p-3">
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <div>
+                          <Label>Archivo</Label>
+                          <Input
+                            type="file"
+                            onChange={(e) => {
+                              const f = e.target.files?.[0] || null
+                              setNewAttachment({ file: f, file_name: f?.name || "" })
+                            }}
+                          />
+                        </div>
+                        <div>
+                          <Label>Nombre del archivo</Label>
+                          <Input
+                            value={newAttachment.file_name}
+                            onChange={(e) => setNewAttachment((prev) => ({ ...prev, file_name: e.target.value }))}
+                            placeholder="nombre.ext"
+                          />
+                        </div>
+                      </div>
+                      <div className="mt-2 flex justify-end">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            if (!admonitionForm.worker_id) {
+                              toast.error("Selecciona el empleado antes de subir un documento")
+                              return
+                            }
+                            if (!newAttachment.file || !newAttachment.file_name) {
+                              toast.error("Selecciona un archivo y nombre")
+                              return
+                            }
+                            startTransition(async () => {
+                              try {
+                                const fileUrl = await new Promise<string>((resolve, reject) => {
+                                  const reader = new FileReader()
+                                  reader.onload = () => resolve(reader.result as string)
+                                  reader.onerror = reject
+                                  reader.readAsDataURL(newAttachment.file as File)
+                                })
+                                let docTypeId: number | undefined
+                                const otros = await findDocumentTypeByName("Otros")
+                                if (otros?.id) {
+                                  docTypeId = otros.id
+                                } else {
+                                  const anexo = await findDocumentTypeByName("Anexo")
+                                  if (anexo?.id) {
+                                    docTypeId = anexo.id
+                                  } else {
+                                    const contrato = await findDocumentTypeByName("Contrato")
+                                    if (contrato?.id) {
+                                      docTypeId = contrato.id
+                                    } else {
+                                      const all = await getDocumentTypes()
+                                      docTypeId = all[0]?.id
+                                    }
+                                  }
+                                }
+                                if (!docTypeId) {
+                                  toast.error("No hay tipos de documento disponibles")
+                                  return
+                                }
+                                const created = await createDocument({
+                                  worker_id: Number(admonitionForm.worker_id),
+                                  document_type_id: docTypeId,
+                                  file_name: newAttachment.file_name,
+                                  file_url: fileUrl,
+                                })
+                                setCandidateDocs((prev) => [{ id: created.id, file_name: created.file_name, file_url: created.file_url || null }, ...prev])
+                                setAdmonitionForm((f) => ({
+                                  ...f,
+                                  attachments: [{ file_name: created.file_name, file_url: created.file_url || null, mime: null }, ...f.attachments],
+                                }))
+                                setNewAttachment({ file: null, file_name: "" })
+                                toast.success("Documento subido y adjuntado")
+                              } catch {
+                                toast.error("No se pudo subir el documento")
+                              }
+                            })
+                          }}
+                        >
+                          Subir y adjuntar
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex justify-end gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => setIsAdmonitionOpen(false)}
+                  >
+                    Cancelar
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      if (!admonitionForm.worker_id || !admonitionForm.admonition_date || !admonitionForm.reason) {
+                        toast.error("Completa los campos obligatorios")
+                        return
+                      }
+                      startTransition(async () => {
+                        try {
+                          const created = await createAdmonition({
+                            worker_id: Number(admonitionForm.worker_id),
+                            admonition_date: admonitionForm.admonition_date,
+                            admonition_type: admonitionForm.admonition_type,
+                            reason: admonitionForm.reason,
+                            supervisor_signature: admonitionForm.supervisor_signature,
+                            attachments: admonitionForm.attachments,
+                          })
+                          const rows = await getAdmonitions({ worker_id: Number(admonitionForm.worker_id) })
+                          const normalized = (rows || []).map((a: any) => ({
+                            ...a,
+                            admonition_date:
+                              typeof a.admonition_date === "string"
+                                ? a.admonition_date
+                                : new Date(a.admonition_date).toISOString().slice(0, 10),
+                          }))
+                          setAdmonitions(normalized as any)
+                          toast.success("Amonestación registrada y enviada para aprobación")
+                          setAdmonitionForm({
+                            worker_id: admonitionForm.worker_id,
+                            admonition_date: new Date().toISOString().slice(0, 10),
+                            admonition_type: "verbal",
+                            reason: "",
+                            supervisor_signature: "",
+                            attachments: [],
+                          })
+                        } catch (e) {
+                          toast.error("No se pudo registrar la amonestación")
+                        }
+                      })
+                    }}
+                  >
+                    Guardar y enviar aprobación
+                  </Button>
+                </div>
+              </div>
+            </TabsContent>
+            <TabsContent value="history">
+              <div className="space-y-3">
+                <div className="grid grid-cols-4 gap-2">
+                  <div>
+                    <Label>Desde</Label>
+                    <Input type="date" value={admonitionFilters.from} onChange={(e) => setAdmonitionFilters((f) => ({ ...f, from: e.target.value }))} />
+                  </div>
+                  <div>
+                    <Label>Hasta</Label>
+                    <Input type="date" value={admonitionFilters.to} onChange={(e) => setAdmonitionFilters((f) => ({ ...f, to: e.target.value }))} />
+                  </div>
+                  <div>
+                    <Label>Tipo</Label>
+                    <Select value={admonitionFilters.type} onValueChange={(v) => setAdmonitionFilters((f) => ({ ...f, type: v }))}>
+                      <SelectTrigger><SelectValue placeholder="Tipo" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="todos">Todos</SelectItem>
+                        <SelectItem value="verbal">Verbal</SelectItem>
+                        <SelectItem value="escrita">Escrita</SelectItem>
+                        <SelectItem value="suspension">Suspensión</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label>Estado</Label>
+                    <Select value={admonitionFilters.status} onValueChange={(v) => setAdmonitionFilters((f) => ({ ...f, status: v }))}>
+                      <SelectTrigger><SelectValue placeholder="Estado" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="todos">Todos</SelectItem>
+                        <SelectItem value="active">Activa</SelectItem>
+                        <SelectItem value="archived">Archivada</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div>
+                  <Label>Aprobación</Label>
+                  <Select value={admonitionFilters.approval_status} onValueChange={(v) => setAdmonitionFilters((f) => ({ ...f, approval_status: v }))}>
+                    <SelectTrigger><SelectValue placeholder="Aprobación" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="todos">Todos</SelectItem>
+                      <SelectItem value="pending">Pendiente</SelectItem>
+                      <SelectItem value="approved">Aprobada</SelectItem>
+                      <SelectItem value="rejected">Rechazada</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      startTransition(async () => {
+                        try {
+                          const rows = await getAdmonitions({
+                            worker_id: activeWorkerId || undefined,
+                            from: admonitionFilters.from || undefined,
+                            to: admonitionFilters.to || undefined,
+                            type: admonitionFilters.type as any,
+                            status: admonitionFilters.status as any,
+                            approval_status: admonitionFilters.approval_status as any,
+                          })
+                          const normalized = (rows || []).map((a: any) => ({
+                            ...a,
+                            admonition_date:
+                              typeof a.admonition_date === "string"
+                                ? a.admonition_date
+                                : new Date(a.admonition_date).toISOString().slice(0, 10),
+                          }))
+                          setAdmonitions(normalized as any)
+                        } catch {}
+                      })
+                    }}
+                  >
+                    Aplicar filtros
+                  </Button>
+                </div>
+                <div className="grid gap-2">
+                  {admonitions.length === 0 ? (
+                    <Card><CardContent className="p-4 text-center text-muted-foreground">Sin amonestaciones</CardContent></Card>
+                  ) : (
+                    admonitions.map((a) => (
+                      <Card key={a.id}>
+                        <CardContent className="p-4">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="text-sm font-medium">
+                                #{a.id} · {a.first_name} {a.last_name} · {a.company || "Sin empresa"}
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                {a.admonition_date} · {a.admonition_type} · {a.approval_status} · {a.status}
+                              </p>
+                            </div>
+                            <div className="flex gap-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  startTransition(async () => {
+                                    try {
+                                      await updateAdmonition(a.id, { approval_status: a.approval_status === "approved" ? "pending" : "approved" })
+                                      const rows = await getAdmonitions({ worker_id: activeWorkerId || undefined })
+                                      const normalized = (rows || []).map((a: any) => ({
+                                        ...a,
+                                        admonition_date:
+                                          typeof a.admonition_date === "string"
+                                            ? a.admonition_date
+                                            : new Date(a.admonition_date).toISOString().slice(0, 10),
+                                      }))
+                                      setAdmonitions(normalized as any)
+                                    } catch {}
+                                  })
+                                }}
+                              >
+                                {a.approval_status === "approved" ? "Marcar pendiente" : "Aprobar"}
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  startTransition(async () => {
+                                    try {
+                                      await updateAdmonition(a.id, { approval_status: "rejected" })
+                                      const rows = await getAdmonitions({ worker_id: activeWorkerId || undefined })
+                                      const normalized = (rows || []).map((a: any) => ({
+                                        ...a,
+                                        admonition_date:
+                                          typeof a.admonition_date === "string"
+                                            ? a.admonition_date
+                                            : new Date(a.admonition_date).toISOString().slice(0, 10),
+                                      }))
+                                      setAdmonitions(normalized as any)
+                                    } catch {}
+                                  })
+                                }}
+                              >
+                                Rechazar
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  startTransition(async () => {
+                                    try {
+                                      await archiveAdmonition(a.id)
+                                      const rows = await getAdmonitions({ worker_id: activeWorkerId || undefined })
+                                      const normalized = (rows || []).map((a: any) => ({
+                                        ...a,
+                                        admonition_date:
+                                          typeof a.admonition_date === "string"
+                                            ? a.admonition_date
+                                            : new Date(a.admonition_date).toISOString().slice(0, 10),
+                                      }))
+                                      setAdmonitions(normalized as any)
+                                    } catch {}
+                                  })
+                                }}
+                              >
+                                Archivar
+                              </Button>
+                            </div>
+                          </div>
+                          <p className="mt-2 text-sm">{a.reason}</p>
+                          {Array.isArray(a.attachments) && a.attachments.length > 0 ? (
+                            <div className="mt-2 grid gap-2">
+                              {a.attachments.map((att, idx) => (
+                                <div key={idx} className="text-xs text-muted-foreground">
+                                  {att.file_name} {att.file_url ? "· archivo adjunto" : ""}
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                        </CardContent>
+                      </Card>
+                    ))
+                  )}
+                </div>
+              </div>
+            </TabsContent>
+            <TabsContent value="stats">
+              <StatsPanel />
+            </TabsContent>
+          </Tabs>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
+
+function StatsPanel() {
+  const [isPending, startTransition] = useTransition()
+  const [from, setFrom] = useState("")
+  const [to, setTo] = useState("")
+  const [byDept, setByDept] = useState<Array<{ department: string | null; total: number }>>([])
+  const [byType, setByType] = useState<Array<{ admonition_type: string; total: number }>>([])
+  const [byMonth, setByMonth] = useState<Array<{ month: string; total: number }>>([])
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-3 gap-2">
+        <div>
+          <Label>Desde</Label>
+          <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+        </div>
+        <div>
+          <Label>Hasta</Label>
+          <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+        </div>
+        <div className="flex items-end">
+          <Button
+            variant="outline"
+            onClick={() => {
+              startTransition(async () => {
+                try {
+                  const stats = await getAdmonitionStats({ from: from || undefined, to: to || undefined })
+                  setByDept(stats.byDepartment as any)
+                  setByType(stats.byType as any)
+                  setByMonth(stats.byMonth as any)
+                } catch {}
+              })
+            }}
+          >
+            Generar
+          </Button>
+        </div>
+      </div>
+      <div className="grid gap-3 md:grid-cols-3">
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-sm text-muted-foreground">Por Departamento</p>
+            <div className="mt-2 space-y-1 text-sm">
+              {byDept.length === 0 ? <p className="text-muted-foreground">Sin datos</p> : byDept.map((d, i) => <p key={i}>{d.department || "Sin depto"}: {d.total}</p>)}
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-sm text-muted-foreground">Por Tipo</p>
+            <div className="mt-2 space-y-1 text-sm">
+              {byType.length === 0 ? <p className="text-muted-foreground">Sin datos</p> : byType.map((t, i) => <p key={i}>{t.admonition_type}: {t.total}</p>)}
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-sm text-muted-foreground">Por Mes</p>
+            <div className="mt-2 space-y-1 text-sm">
+              {byMonth.length === 0 ? <p className="text-muted-foreground">Sin datos</p> : byMonth.map((m, i) => <p key={i}>{m.month}: {m.total}</p>)}
+            </div>
+          </CardContent>
+        </Card>
       </div>
     </div>
   )

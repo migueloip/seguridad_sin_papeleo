@@ -4,7 +4,7 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useEffect, useState } from "react"
 import { cn } from "@/lib/utils"
-import { LayoutDashboard, FileText, ClipboardCheck, FileBarChart, AlertTriangle, Users, Settings, HardHat, X } from "lucide-react"
+import { LayoutDashboard, FileText, ClipboardCheck, FileBarChart, AlertTriangle, Users, Settings, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { logout } from "@/app/actions/auth"
 
@@ -63,9 +63,7 @@ export function Sidebar({ open, onClose, user }: SidebarComponentProps) {
           {/* Logo */}
           <div className="flex h-16 items-center justify-between px-6 border-b border-sidebar-border">
             <Link href="/" className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-sidebar-primary">
-                <HardHat className="h-5 w-5 text-sidebar-primary-foreground" />
-              </div>
+              <img src="/logo_safework.png" alt="Logo" className="h-18 w-18 object-contain" />
               <div className="flex flex-col">
                 <span className="text-lg font-semibold text-sidebar-foreground">Easysecure</span>
                 <span className="text-xs text-sidebar-foreground/60">{secondaryText}</span>

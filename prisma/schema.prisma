@@ -5,6 +5,7 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 model User {
@@ -24,6 +25,7 @@ model User {
   checklistCategories ChecklistCategory[]
   checklistTemplates  ChecklistTemplate[]
   settings      Setting[]
+  admonitions   Admonition[]
 
   @@map("users")
 }
@@ -76,8 +78,36 @@ model Worker {
   user        User?     @relation(fields: [user_id], references: [id], onDelete: Cascade)
   project     Project?  @relation(fields: [project_id], references: [id], onDelete: SetNull)
   documents   Document[]
+  admonitions Admonition[]
 
   @@map("workers")
+}
+
+model Admonition {
+  id                  Int       @id @default(autoincrement())
+  user_id             Int?
+  worker_id           Int
+  admonition_date     DateTime
+  admonition_type     String
+  reason              String
+  supervisor_signature String?
+  attachments         Json?
+  status              String    @default("active")
+  approval_status     String    @default("pending")
+  approved_at         DateTime?
+  rejected_at         DateTime?
+  created_at          DateTime  @default(now())
+  updated_at          DateTime  @default(now())
+  user                User?     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  worker              Worker    @relation(fields: [worker_id], references: [id], onDelete: Cascade)
+
+  @@map("admonitions")
+  @@index([user_id], map: "idx_admonitions_user")
+  @@index([worker_id], map: "idx_admonitions_worker")
+  @@index([admonition_type], map: "idx_admonitions_type")
+  @@index([status], map: "idx_admonitions_status")
+  @@index([approval_status], map: "idx_admonitions_approval")
+  @@index([admonition_date], map: "idx_admonitions_date")
 }
 
 model DocumentType {

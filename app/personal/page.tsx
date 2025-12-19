@@ -10,7 +10,9 @@ export default async function PersonnelPage() {
   const workers = await getWorkers()
 
   return (
-    <DashboardLayout user={session as any}>
+    <DashboardLayout
+      user={session ? { email: String(session.email), name: session.name ?? null, role: session.role ?? null } : undefined}
+    >
       <PersonnelContent initialWorkers={workers as any} />
     </DashboardLayout>
   )
