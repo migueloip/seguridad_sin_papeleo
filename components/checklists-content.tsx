@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState, useTransition } from "react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -17,8 +17,8 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Plus, ClipboardCheck, Clock, CheckCircle, AlertTriangle, Camera } from "lucide-react"
-import { useTransition, useEffect } from "react"
 import { createChecklistTemplate } from "@/app/actions/checklists"
+import type { ChecklistTemplateAiItem, ChecklistTemplateRow, CompletedChecklistRow } from "@/app/actions/checklists"
 
 interface ChecklistItem {
   id: string
@@ -37,39 +37,14 @@ interface Checklist {
   completedAt?: string
 }
 
-interface TemplateRow {
-  id: number
-  user_id?: number
-  category_id?: number | null
-  name: string
-  description?: string | null
-  items?: { items?: ChecklistItem[] } | null
-  category_name?: string | null
-}
-
-interface CompletedRow {
-  id: number
-  user_id?: number
-  template_id: number
-  project_id?: number | null
-  inspector_name: string
-  location?: string | null
-  responses?: Record<string, boolean | string> | null
-  notes?: string | null
-  completed_at: string | Date
-  template_name?: string | null
-  project_name?: string | null
-}
-
-
-
-export function ChecklistsContent({ templates, completed }: { templates: TemplateRow[]; completed: CompletedRow[] }) {
+export function ChecklistsContent({ templates, completed }: { templates: ChecklistTemplateRow[]; completed: CompletedChecklistRow[] }) {
   const mappedFromTemplates: Checklist[] = useMemo(() => {
-    return (templates || []).map((t: TemplateRow) => {
-      const arr = Array.isArray(t?.items?.items) ? t.items!.items! : []
-      const items: ChecklistItem[] = arr.map((it: ChecklistItem, idx: number) => ({
-        id: it.id ?? `tmpl-${t.id}-${idx}`,
-        text: it.text ?? String(it),
+    return (templates || []).map((t) => {
+      const source = t.items?.items
+      const arr: ChecklistTemplateAiItem[] = Array.isArray(source) ? source : []
+      const items: ChecklistItem[] = arr.map((it, idx) => ({
+        id: String(it.id ?? `tmpl-${t.id}-${idx}`),
+        text: it.text ?? "",
         checked: Boolean(it.checked),
         hasIssue: Boolean(it.hasIssue),
         note: it.note,
@@ -145,17 +120,20 @@ export function ChecklistsContent({ templates, completed }: { templates: Templat
   }
 
   const mappedFromCompleted: Checklist[] = useMemo(() => {
-    return (completed || []).map((c: CompletedRow) => {
-      const tmpl = (templates || []).find((t: TemplateRow) => t.id === c.template_id)
-      const source = Array.isArray(tmpl?.items?.items) ? tmpl!.items!.items! : []
+    return (completed || []).map((c) => {
+      const tmpl = (templates || []).find((t) => t.id === c.template_id)
+      const source = tmpl?.items?.items
+      const arr: ChecklistTemplateAiItem[] = Array.isArray(source) ? source : []
       const responses = c?.responses || {}
-      const items: ChecklistItem[] = source.map((it: ChecklistItem, idx: number) => {
-        const resp = (responses as Record<string, boolean | string>)[it.id]
+      const tmplId = tmpl?.id ?? c.template_id
+      const items: ChecklistItem[] = arr.map((it, idx) => {
+        const itemId = String(it.id ?? `tmpl-${tmplId}-${idx}`)
+        const resp = (responses as Record<string, boolean | string>)[itemId]
         const isBool = typeof resp === "boolean"
         const isStr = typeof resp === "string"
         return {
-          id: it.id ?? `comp-${c.id}-${idx}`,
-          text: it.text ?? String(it),
+          id: itemId,
+          text: it.text ?? "",
           checked: isBool ? (resp as boolean) : Boolean(it.checked ?? true),
           hasIssue: isStr ? true : Boolean(it.hasIssue),
           note: isStr ? (resp as string) : it.note,

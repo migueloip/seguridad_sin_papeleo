@@ -7,6 +7,7 @@ import type { LanguageModel } from "ai"
 import { getSetting } from "./settings"
 import { getModel } from "@/lib/ai"
 import { getCurrentUserId } from "@/lib/auth"
+import type { DesignerElement, EditorState, MatrixRow, Severity, Status } from "@/lib/pdf-editor"
 
 export interface ReportData {
   period: string
@@ -321,6 +322,231 @@ El informe debe ser profesional, conciso y orientado a la accion. Usa formato Ma
     console.error("Error generating AI report:", error)
     throw new Error("Error al generar el informe con IA. Verifica tu API Key en Configuracion.")
   }
+}
+
+type FillPdfDesignerArgs = {
+  period: string
+  projectId?: number
+  request?: string
+  state: EditorState
+}
+
+const parseJsonFromAiText = (text: string): unknown => {
+  const cleaned = String(text || "").replace(/```json\n?|\n?```/g, "").trim()
+  try {
+    return JSON.parse(cleaned)
+  } catch {
+    const m = cleaned.match(/\{[\s\S]*\}/)
+    if (m) return JSON.parse(m[0])
+  }
+  return null
+}
+
+const normalizeMatrixRows = (rows: unknown): MatrixRow[] => {
+  if (!Array.isArray(rows)) return []
+  const sev: Severity[] = ["alta", "medio", "bajo"]
+  const st: Status[] = ["pendiente", "en progreso", "resuelto"]
+  return rows
+    .map((r): MatrixRow | null => {
+      if (!r || typeof r !== "object") return null
+      const rec = r as Record<string, unknown>
+      const description = typeof rec.description === "string" ? rec.description : ""
+      const severity = typeof rec.severity === "string" && (sev as string[]).includes(rec.severity) ? (rec.severity as Severity) : "medio"
+      const status = typeof rec.status === "string" && (st as string[]).includes(rec.status) ? (rec.status as Status) : "pendiente"
+      const date = typeof rec.date === "string" ? rec.date.slice(0, 10) : ""
+      const category = typeof rec.category === "string" ? rec.category : null
+      const owner = typeof rec.owner === "string" ? rec.owner : null
+      if (!description || !date) return null
+      return { description, severity, status, date, category, owner }
+    })
+    .filter((x): x is MatrixRow => x !== null)
+}
+
+const mergeDesignerElements = (template: DesignerElement[], filled: unknown): DesignerElement[] => {
+  const filledArr = Array.isArray(filled) ? filled : []
+  const byId = new Map<string, unknown>()
+  for (const item of filledArr) {
+    if (!item || typeof item !== "object") continue
+    const rec = item as Record<string, unknown>
+    if (typeof rec.id === "string") byId.set(rec.id, item)
+  }
+
+  return template.map((el) => {
+    const raw = byId.get(el.id)
+    if (!raw || typeof raw !== "object") return el
+    const rec = raw as Record<string, unknown>
+    if (rec.type !== el.type) return el
+
+    if (el.type === "heading") {
+      return {
+        ...el,
+        text: typeof rec.text === "string" ? rec.text : el.text,
+        align: rec.align === "left" || rec.align === "center" || rec.align === "right" ? (rec.align as "left" | "center" | "right") : el.align,
+      }
+    }
+    if (el.type === "text") {
+      return {
+        ...el,
+        html: typeof rec.html === "string" ? rec.html : el.html,
+        align: rec.align === "left" || rec.align === "center" || rec.align === "right" ? (rec.align as "left" | "center" | "right") : el.align,
+      }
+    }
+    if (el.type === "plain_text") {
+      return {
+        ...el,
+        text: typeof rec.text === "string" ? rec.text : el.text,
+        align: rec.align === "left" || rec.align === "center" || rec.align === "right" ? (rec.align as "left" | "center" | "right") : el.align,
+      }
+    }
+    if (el.type === "simple_section") {
+      const bulletsRaw = (rec as Record<string, unknown>).bullets
+      const bullets =
+        Array.isArray(bulletsRaw) && bulletsRaw.every((x: unknown): x is string => typeof x === "string") ? bulletsRaw : el.bullets
+      const chipsRaw = (rec as Record<string, unknown>).chips
+      const chips =
+        Array.isArray(chipsRaw) && chipsRaw.every((x: unknown): x is string => typeof x === "string") ? chipsRaw : el.chips
+      return {
+        ...el,
+        title: typeof rec.title === "string" ? rec.title : el.title,
+        subtitle: typeof rec.subtitle === "string" ? rec.subtitle : el.subtitle,
+        body: typeof rec.body === "string" ? rec.body : el.body,
+        bullets,
+        chips,
+        align: rec.align === "left" || rec.align === "center" || rec.align === "right" ? (rec.align as "left" | "center" | "right") : el.align,
+      }
+    }
+    if (el.type === "list") {
+      const itemsRaw = (rec as Record<string, unknown>).items
+      const items = Array.isArray(itemsRaw) && itemsRaw.every((x: unknown): x is string => typeof x === "string") ? itemsRaw : el.items
+      return {
+        ...el,
+        ordered: typeof rec.ordered === "boolean" ? rec.ordered : el.ordered,
+        items,
+        align: rec.align === "left" || rec.align === "center" || rec.align === "right" ? (rec.align as "left" | "center" | "right") : el.align,
+      }
+    }
+    if (el.type === "table") {
+      const rows = Array.isArray((rec as Record<string, unknown>).rows) ? (rec as Record<string, unknown>).rows : null
+      const validRows =
+        Array.isArray(rows) &&
+        rows.every((row) => Array.isArray(row) && row.every((cell) => typeof cell === "string"))
+          ? (rows as string[][])
+          : el.rows
+      return { ...el, rows: validRows }
+    }
+    if (el.type === "matrix") {
+      const nextRows = normalizeMatrixRows((rec as Record<string, unknown>).rows)
+      return { ...el, rows: nextRows.length > 0 ? nextRows : el.rows }
+    }
+    if (el.type === "quote") {
+      const item = (rec as Record<string, unknown>).item
+      if (!item || typeof item !== "object") return el
+      const ir = item as Record<string, unknown>
+      return {
+        ...el,
+        item: {
+          ...el.item,
+          name: typeof ir.name === "string" ? ir.name : el.item.name,
+          role: typeof ir.role === "string" ? ir.role : el.item.role,
+          date: typeof ir.date === "string" ? ir.date : el.item.date,
+          content: typeof ir.content === "string" ? ir.content : el.item.content,
+          signatureDataUrl: typeof ir.signatureDataUrl === "string" ? ir.signatureDataUrl : el.item.signatureDataUrl,
+        },
+      }
+    }
+    if (el.type === "docs") {
+      const items = (rec as Record<string, unknown>).items
+      if (!Array.isArray(items)) return el
+      const next = items
+        .map((it) => {
+          if (!it || typeof it !== "object") return null
+          const r = it as Record<string, unknown>
+          const name = typeof r.name === "string" ? r.name : ""
+          const type = typeof r.type === "string" ? r.type : ""
+          const previewUrl = typeof r.previewUrl === "string" ? r.previewUrl : null
+          if (!name || !type) return null
+          if (!["pdf", "word", "excel", "other"].includes(type)) return null
+          return { name, type: type as "pdf" | "word" | "excel" | "other", previewUrl }
+        })
+        .filter((x): x is NonNullable<typeof x> => x !== null)
+      return { ...el, items: next.length > 0 ? next : el.items }
+    }
+    return el
+  })
+}
+
+export async function fillPdfDesignerWithAI(args: FillPdfDesignerArgs): Promise<{
+  coverTitle: string
+  coverSubtitle: string
+  elements: DesignerElement[]
+}> {
+  const userId = await getCurrentUserId()
+  if (!userId) {
+    throw new Error("Debes iniciar sesión")
+  }
+  const apiKey = await getSetting("ai_api_key")
+  const aiModel = (await getSetting("ai_model")) || "gemini-2.5-flash"
+  const aiProvider = "google"
+
+  const data = await getReportData(args.period, args.projectId)
+  const state = args.state
+  const templateElements = Array.isArray(state.elements) ? (state.elements as DesignerElement[]) : []
+  const request = String(args.request || "").trim()
+
+  const fallbackSummary = [
+    `Periodo: ${data.dateFrom} al ${data.dateTo}`,
+    `Documentos: total ${data.documents.total}, vigentes ${data.documents.valid}, por vencer ${data.documents.expiring}, vencidos ${data.documents.expired}`,
+    `Hallazgos: total ${data.findings.total}, abiertos ${data.findings.open}, resueltos ${data.findings.resolved}`,
+    `Personal: total ${data.workers.total}`,
+  ].join("\n")
+
+  if (!apiKey) {
+    const filled = templateElements.map((el) => {
+      if (el.type === "plain_text" && !el.text.trim()) return { ...el, text: fallbackSummary }
+      if (el.type === "simple_section" && !el.body.trim())
+        return { ...el, title: el.title || "Resumen", body: fallbackSummary, bullets: el.bullets || [], chips: el.chips || [] }
+      if (el.type === "heading" && el.level === 1 && (!el.text.trim() || el.text.trim() === "Título")) return { ...el, text: state.coverTitle || "Informe" }
+      return el
+    })
+    return { coverTitle: state.coverTitle, coverSubtitle: state.coverSubtitle, elements: filled }
+  }
+
+  const templateJson = {
+    coverTitle: state.coverTitle,
+    coverSubtitle: state.coverSubtitle,
+    elements: templateElements,
+  }
+
+  const prompt = `Devuelve SOLO JSON válido (sin Markdown, sin explicaciones).
+
+OBJETIVO:
+Rellenar el contenido de un documento PDF basado en el diseño del usuario. Debes mantener EXACTAMENTE el mismo formato/estructura del JSON entregado en TEMPLATE_JSON:
+- No agregues ni elimines elementos.
+- No cambies id ni type.
+- Solo rellena/actualiza campos de contenido (text/html/body/items/rows/etc).
+
+PEDIDO_DEL_USUARIO:
+${request || "Rellena el documento con información relevante del periodo y recomendaciones."}
+
+DATOS_DEL_SISTEMA (JSON):
+${JSON.stringify(data)}
+
+TEMPLATE_JSON (JSON):
+${JSON.stringify(templateJson)}
+`
+
+  const model = getModel(aiProvider, aiModel, apiKey) as unknown as LanguageModel
+  const { text } = await generateText({ model, prompt })
+  const parsed = parseJsonFromAiText(text)
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("La IA no devolvió un JSON válido")
+  }
+  const rec = parsed as Record<string, unknown>
+  const coverTitle = typeof rec.coverTitle === "string" ? rec.coverTitle : state.coverTitle
+  const coverSubtitle = typeof rec.coverSubtitle === "string" ? rec.coverSubtitle : state.coverSubtitle
+  const elements = mergeDesignerElements(templateElements, rec.elements)
+
+  return { coverTitle, coverSubtitle, elements }
 }
 
 export async function getGeneratedReports(projectId?: number) {

@@ -21,7 +21,7 @@ export default async function ProjectChecklistsPage({ params }: { params: Promis
     <DashboardLayout
       user={session ? { email: String(session.email), name: session.name ?? null, role: session.role ?? null } : undefined}
     >
-      <ChecklistsContent templates={templates as any} completed={completed as any} />
+      <ChecklistsContent templates={templates} completed={completed} />
     </DashboardLayout>
   )
 }

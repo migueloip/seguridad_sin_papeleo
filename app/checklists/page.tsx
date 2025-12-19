@@ -9,8 +9,8 @@ export default async function ChecklistsPage() {
   if (!session) redirect("/auth/login")
   const [templates, completed] = await Promise.all([getChecklistTemplates(), getCompletedChecklists()])
   return (
-    <DashboardLayout user={session as any}>
-      <ChecklistsContent templates={templates as any} completed={completed as any} />
+    <DashboardLayout user={{ email: String(session.email), name: session.name ?? null, role: session.role ?? null }}>
+      <ChecklistsContent templates={templates} completed={completed} />
     </DashboardLayout>
   )
 }

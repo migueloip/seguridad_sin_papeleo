@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { validateEditorState, buildEditorHtmlFromState, type EditorState } from "./pdf-editor"
+import { validateEditorState, buildEditorHtmlFromState, buildDesignerHtmlFromState, type EditorState } from "./pdf-editor"
 
 describe("validateEditorState", () => {
   it("valida campos obligatorios y secciones vacías", () => {
@@ -51,5 +51,32 @@ describe("buildEditorHtmlFromState", () => {
     expect(html).toMatch(/Citas de Personal/)
     expect(html).toMatch(/page-number/)
     expect(html).toMatch(/Responsable: Responsable/)
+  })
+})
+
+describe("buildDesignerHtmlFromState", () => {
+  it("renderiza simple_section", () => {
+    const s: EditorState = {
+      pdfFont: "sans-serif",
+      pdfFontSize: 14,
+      pdfColor: "#111827",
+      editorSections: ["cover", "summary", "matrix", "quotes", "recs"],
+      coverTitle: "Informe",
+      coverSubtitle: "Subtítulo",
+      summaryText: "Texto",
+      matrixRows: [{ description: "Desc", severity: "medio", status: "pendiente", date: "2024-01-01" }],
+      recs: ["Acción 1"],
+      brandLogo: null,
+      responsibleName: "Responsable",
+      pdfA: false,
+      designerEnabled: true,
+      elements: [
+        { id: "sec-1", type: "simple_section", title: "Resumen", subtitle: "KPIs", body: "Línea 1", bullets: ["Uno"], chips: ["A"], align: "left" },
+      ],
+    }
+    const html = buildDesignerHtmlFromState(s)
+    expect(html).toMatch(/Resumen/)
+    expect(html).toMatch(/KPIs/)
+    expect(html).toMatch(/Línea 1/)
   })
 })

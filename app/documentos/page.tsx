@@ -11,8 +11,8 @@ export default async function DocumentsPage() {
   const [documents, workers, documentTypes] = await Promise.all([getDocuments(), getWorkers(), getDocumentTypes()])
 
   return (
-    <DashboardLayout user={session as any}>
-      <DocumentsContent initialDocuments={documents as any} workers={workers as any} documentTypes={documentTypes as any} />
+    <DashboardLayout user={{ email: String(session.email), name: session.name ?? null, role: session.role ?? null }}>
+      <DocumentsContent initialDocuments={documents} workers={workers} documentTypes={documentTypes} />
     </DashboardLayout>
   )
 }

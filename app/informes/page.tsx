@@ -10,7 +10,7 @@ export default async function ReportsPage() {
   const reports = await getGeneratedReports()
 
   return (
-    <DashboardLayout user={session as any}>
+    <DashboardLayout user={{ email: String(session.email), name: session.name ?? null, role: session.role ?? null }}>
       <ReportsContentClient initialReports={reports} />
     </DashboardLayout>
   )

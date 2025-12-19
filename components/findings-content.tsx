@@ -35,6 +35,38 @@ interface Finding {
   created_at: string
 }
 
+async function prepareImageForVision(dataUrl: string): Promise<{ dataUrl: string; mime: string; base64: string }> {
+  if (!dataUrl.startsWith("data:image/")) {
+    return { dataUrl, mime: "image/png", base64: dataUrl.split(",")[1] || "" }
+  }
+  const img = new Image()
+  img.decoding = "async"
+  await new Promise<void>((resolve, reject) => {
+    img.onload = () => resolve()
+    img.onerror = () => reject(new Error("No se pudo cargar la imagen"))
+    img.src = dataUrl
+  })
+
+  const maxSide = 1600
+  const w = img.naturalWidth || img.width
+  const h = img.naturalHeight || img.height
+  const maxDim = Math.max(w, h)
+  const scale = maxDim > maxSide ? maxSide / maxDim : 1
+
+  const canvas = document.createElement("canvas")
+  canvas.width = Math.max(1, Math.round(w * scale))
+  canvas.height = Math.max(1, Math.round(h * scale))
+  const ctx = canvas.getContext("2d")
+  if (!ctx) {
+    return { dataUrl, mime: "image/png", base64: dataUrl.split(",")[1] || "" }
+  }
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+
+  const mime = "image/jpeg"
+  const optimizedDataUrl = canvas.toDataURL(mime, 0.82)
+  return { dataUrl: optimizedDataUrl, mime, base64: optimizedDataUrl.split(",")[1] || "" }
+}
+
 export function FindingsContent({ initialFindings, projectId }: { initialFindings: Finding[]; projectId?: number }) {
   const [mounted, setMounted] = useState(false)
   useEffect(() => {
@@ -81,6 +113,7 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
 
   const filteredFindings = findings.filter((f) => {
     if (filter === "todos") return true
+    if (filter === "resolved") return f.status === "resolved" || f.status === "closed"
     return f.status === filter
   })
 
@@ -139,7 +172,7 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
         return (
           <Badge className="bg-success text-success-foreground">
             <CheckCircle className="mr-1 h-3 w-3" />
-            Cerrado
+            Completado
           </Badge>
         )
       default:
@@ -150,16 +183,16 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
   const closeFinding = (id: number) => {
     startTransition(async () => {
       const notes = correctiveById[id] ?? ""
-      const updated = await updateFinding(id, { status: "resolved", resolution_notes: notes || undefined })
+      await updateFinding(id, { status: "resolved", resolution_notes: notes || undefined })
       setFindings((prev) =>
-        prev.map((f) => (f.id === id ? { ...f, status: "resolved", resolution_notes: (updated as any).resolution_notes } : f)),
+        prev.map((f) => (f.id === id ? { ...f, status: "resolved", resolution_notes: notes || null } : f)),
       )
     })
   }
 
   const reopenFinding = (id: number) => {
     startTransition(async () => {
-      const updated = await updateFinding(id, { status: "open" })
+      await updateFinding(id, { status: "open" })
       setFindings((prev) => prev.map((f) => (f.id === id ? { ...f, status: "open" } : f)))
     })
   }
@@ -181,7 +214,9 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
   const saveEdit = () => {
     if (!editFinding) return
     startTransition(async () => {
-      const updated = await updateFinding(editFinding.id, {
+      const nextStatus: "in_progress" | undefined =
+        editFinding.status === "open" && editForm.resolution_notes.trim() ? "in_progress" : undefined
+      await updateFinding(editFinding.id, {
         title: editForm.title || undefined,
         description: editForm.description || undefined,
         severity: editForm.severity || undefined,
@@ -189,9 +224,24 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
         responsible_person: editForm.responsible_person || undefined,
         due_date: editForm.due_date || undefined,
         resolution_notes: editForm.resolution_notes || undefined,
+        status: nextStatus,
       })
       setFindings((prev) =>
-        prev.map((f) => (f.id === editFinding.id ? ({ ...(updated as any), project_name: f.project_name } as any) : f)),
+        prev.map((f) =>
+          f.id === editFinding.id
+            ? {
+                ...f,
+                title: editForm.title,
+                description: editForm.description || null,
+                severity: editForm.severity,
+                location: editForm.location || null,
+                responsible_person: editForm.responsible_person || null,
+                due_date: editForm.due_date || null,
+                resolution_notes: editForm.resolution_notes || null,
+                status: nextStatus ?? f.status,
+              }
+            : f,
+        ),
       )
       setCorrectiveById((prev) => ({ ...prev, [editFinding.id]: editForm.resolution_notes }))
       setIsEditOpen(false)
@@ -218,7 +268,8 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
         photos: imageDataUrl ? [imageDataUrl] : undefined,
       })
 
-      setFindings((prev) => [{ ...(created as any), project_name: null } as any, ...prev])
+      const createdFinding = created as unknown as Finding
+      setFindings((prev) => [{ ...createdFinding, project_name: null }, ...prev])
       setNewFinding({
         title: "",
         description: "",
@@ -339,8 +390,8 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
                         if (!imageDataUrl || !imageMimeType) return
                         setIsScanning(true)
                         try {
-                          const base64 = imageDataUrl.split(",")[1] || ""
-                          const result = await scanFindingImage(base64, imageMimeType)
+                          const prepared = await prepareImageForVision(imageDataUrl)
+                          const result = await scanFindingImage(prepared.base64, prepared.mime)
                           setNewFinding((prev) => ({
                             title: prev.title || result.title || "",
                             description: prev.description || result.description || "",
@@ -349,6 +400,10 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
                             responsible_person: prev.responsible_person || result.responsible_person || "",
                             due_date: prev.due_date || result.due_date || "",
                           }))
+                        } catch (e) {
+                          const msg =
+                            e instanceof Error ? e.message : "No se pudo escanear con IA. Intenta con otra imagen."
+                          alert(msg)
                         } finally {
                           setIsScanning(false)
                         }
@@ -429,7 +484,7 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-muted-foreground">Cerrados</p>
+                <p className="text-sm text-muted-foreground">Completados</p>
                 <p className="text-2xl font-bold text-success">{stats.cerrados}</p>
               </div>
               <CheckCircle className="h-8 w-8 text-success" />
@@ -448,7 +503,7 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
             <SelectItem value="todos">Todos</SelectItem>
             <SelectItem value="open">Abiertos</SelectItem>
             <SelectItem value="in_progress">En Proceso</SelectItem>
-            <SelectItem value="resolved">Cerrados</SelectItem>
+            <SelectItem value="resolved">Completados</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -597,13 +652,20 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
                                   onClick={() => {
                                     const notes = correctiveById[finding.id] ?? ""
                                     startTransition(async () => {
-                                      const updated = await updateFinding(finding.id, {
+                                      const shouldMoveToInProgress =
+                                        finding.status === "open" && notes.trim().length > 0
+                                      await updateFinding(finding.id, {
                                         resolution_notes: notes || undefined,
+                                        status: shouldMoveToInProgress ? "in_progress" : undefined,
                                       })
                                       setFindings((prev) =>
                                         prev.map((f) =>
                                           f.id === finding.id
-                                            ? { ...f, resolution_notes: (updated as any).resolution_notes }
+                                            ? {
+                                                ...f,
+                                                status: shouldMoveToInProgress ? "in_progress" : f.status,
+                                                resolution_notes: notes || null,
+                                              }
                                             : f,
                                         ),
                                       )

@@ -73,6 +73,50 @@ interface UploadedFile {
   }
 }
 
+async function prepareImageDataUrlForVision(
+  dataUrl: string,
+  opts?: { maxSide?: number; quality?: number },
+): Promise<{ dataUrl: string; mime: string; base64: string }> {
+  if (!dataUrl.startsWith("data:image/")) {
+    const mime = "image/png"
+    return { dataUrl, mime, base64: dataUrl.split(",")[1] || "" }
+  }
+
+  const img = new Image()
+  img.decoding = "async"
+  await new Promise<void>((resolve, reject) => {
+    img.onload = () => resolve()
+    img.onerror = () => reject(new Error("No se pudo cargar la imagen"))
+    img.src = dataUrl
+  })
+
+  const maxSide = opts?.maxSide ?? 2200
+  const quality = opts?.quality ?? 0.9
+  const w = img.naturalWidth || img.width
+  const h = img.naturalHeight || img.height
+  const maxDim = Math.max(w, h)
+  const scale = maxDim > maxSide ? maxSide / maxDim : 1
+
+  if (scale === 1) {
+    const mime = dataUrl.match(/^data:([^;]+);base64,/)?.[1] || "image/png"
+    return { dataUrl, mime, base64: dataUrl.split(",")[1] || "" }
+  }
+
+  const canvas = document.createElement("canvas")
+  canvas.width = Math.max(1, Math.round(w * scale))
+  canvas.height = Math.max(1, Math.round(h * scale))
+  const ctx = canvas.getContext("2d")
+  if (!ctx) {
+    const mime = dataUrl.match(/^data:([^;]+);base64,/)?.[1] || "image/png"
+    return { dataUrl, mime, base64: dataUrl.split(",")[1] || "" }
+  }
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+
+  const mime = "image/jpeg"
+  const optimizedDataUrl = canvas.toDataURL(mime, quality)
+  return { dataUrl: optimizedDataUrl, mime, base64: optimizedDataUrl.split(",")[1] || "" }
+}
+
 function extractDataFromText(text: string): ExtractedData {
   // Buscar RUT chileno (formato XX.XXX.XXX-X o XXXXXXXX-X)
   const rutMatch = text.match(/\b(\d{1,2}\.?\d{3}\.?\d{3}-[\dkK])\b/i)
@@ -244,7 +288,7 @@ export function UploadContent({ projectId }: { projectId?: number }) {
         ),
       )
     }
-  }, [])
+  }, [workers])
 
   const processFile = useCallback(
     async (file: File, id: string) => {
@@ -293,6 +337,13 @@ export function UploadContent({ projectId }: { projectId?: number }) {
               return
             }
           }
+
+          try {
+            const prepared = await prepareImageDataUrlForVision(dataUrl, { maxSide: 2200, quality: 0.9 })
+            base64 = prepared.base64
+            mime = prepared.mime
+            dataUrl = prepared.dataUrl
+          } catch {}
 
           try {
             const classification = await classifyUpload(base64, mime)
@@ -518,11 +569,16 @@ export function UploadContent({ projectId }: { projectId?: number }) {
         ((fileData.editedData?.tipoDocumento ? String(fileData.editedData?.tipoDocumento) + " - " : "") +
           (fileData.editedData?.nombre ? String(fileData.editedData?.nombre) : ""))
       const photos = fileData.dataUrl ? [fileData.dataUrl] : undefined
+      const aiSeverity = ai?.severity
+      const severity: "low" | "medium" | "high" | "critical" =
+        aiSeverity === "low" || aiSeverity === "medium" || aiSeverity === "high" || aiSeverity === "critical"
+          ? aiSeverity
+          : "medium"
       await createFinding({
         project_id: projectId,
         title,
         description: description || undefined,
-        severity: (ai?.severity as any) || "medium",
+        severity,
         location: ai?.location || undefined,
         responsible_person: ai?.responsible_person || undefined,
         due_date: ai?.due_date || undefined,

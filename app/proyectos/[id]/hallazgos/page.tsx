@@ -21,7 +21,7 @@ export default async function ProjectFindingsPage({ params }: { params: Promise<
     <DashboardLayout
       user={session ? { email: String(session.email), name: session.name ?? null, role: session.role ?? null } : undefined}
     >
-      <FindingsContent initialFindings={findings as any} projectId={id} />
+      <FindingsContent initialFindings={findings} projectId={id} />
     </DashboardLayout>
   )
 }

@@ -22,7 +22,7 @@ export default async function ProjectDocumentsPage({ params }: { params: Promise
     <DashboardLayout
       user={session ? { email: String(session.email), name: session.name ?? null, role: session.role ?? null } : undefined}
     >
-      <DocumentsContent initialDocuments={documents as any} workers={workers as any} documentTypes={documentTypes as any} />
+      <DocumentsContent initialDocuments={documents} workers={workers} documentTypes={documentTypes} />
     </DashboardLayout>
   )
 }

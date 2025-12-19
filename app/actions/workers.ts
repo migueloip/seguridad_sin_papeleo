@@ -6,15 +6,24 @@ import { getCurrentUserId } from "@/lib/auth"
 import { revalidatePath } from "next/cache"
 import { formatRut, normalizeRut, isValidRut } from "@/lib/utils"
 
+export type WorkerRow = Worker & {
+  project_name: string | null
+  valid_docs: number
+  expiring_docs: number
+  expired_docs: number
+  admonitions_count: number
+}
+
 export async function getWorkers(projectId?: number) {
   const userId = await getCurrentUserId()
   if (!userId) return []
   if (projectId) {
-    return sql`
+    return sql<WorkerRow>`
       SELECT w.*, p.name as project_name,
-        (SELECT COUNT(*) FROM documents d WHERE d.worker_id = w.id AND d.status = 'valid') as valid_docs,
-        (SELECT COUNT(*) FROM documents d WHERE d.worker_id = w.id AND d.status = 'expiring') as expiring_docs,
-        (SELECT COUNT(*) FROM documents d WHERE d.worker_id = w.id AND d.status = 'expired') as expired_docs
+        (SELECT COUNT(*)::int FROM documents d WHERE d.worker_id = w.id AND d.status = 'valid' AND d.user_id = ${userId}) as valid_docs,
+        (SELECT COUNT(*)::int FROM documents d WHERE d.worker_id = w.id AND d.status = 'expiring' AND d.user_id = ${userId}) as expiring_docs,
+        (SELECT COUNT(*)::int FROM documents d WHERE d.worker_id = w.id AND d.status = 'expired' AND d.user_id = ${userId}) as expired_docs,
+        (SELECT COUNT(*)::int FROM admonitions a WHERE a.worker_id = w.id AND a.user_id = ${userId}) as admonitions_count
       FROM workers w
       LEFT JOIN projects p ON w.project_id = p.id
       WHERE w.project_id = ${projectId} AND w.user_id = ${userId}
@@ -22,11 +31,12 @@ export async function getWorkers(projectId?: number) {
     `
   }
 
-  return sql`
+  return sql<WorkerRow>`
     SELECT w.*, p.name as project_name,
-      (SELECT COUNT(*) FROM documents d WHERE d.worker_id = w.id AND d.status = 'valid') as valid_docs,
-      (SELECT COUNT(*) FROM documents d WHERE d.worker_id = w.id AND d.status = 'expiring') as expiring_docs,
-      (SELECT COUNT(*) FROM documents d WHERE d.worker_id = w.id AND d.status = 'expired') as expired_docs
+      (SELECT COUNT(*)::int FROM documents d WHERE d.worker_id = w.id AND d.status = 'valid' AND d.user_id = ${userId}) as valid_docs,
+      (SELECT COUNT(*)::int FROM documents d WHERE d.worker_id = w.id AND d.status = 'expiring' AND d.user_id = ${userId}) as expiring_docs,
+      (SELECT COUNT(*)::int FROM documents d WHERE d.worker_id = w.id AND d.status = 'expired' AND d.user_id = ${userId}) as expired_docs,
+      (SELECT COUNT(*)::int FROM admonitions a WHERE a.worker_id = w.id AND a.user_id = ${userId}) as admonitions_count
     FROM workers w
     LEFT JOIN projects p ON w.project_id = p.id
     WHERE w.user_id = ${userId}

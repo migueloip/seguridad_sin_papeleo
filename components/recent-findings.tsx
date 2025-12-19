@@ -40,8 +40,11 @@ export function RecentFindings({ findings }: { findings: Finding[] }) {
             En Proceso
           </Badge>
         )
+      case "resolved":
+      case "closed":
+        return <Badge className="bg-success text-success-foreground">Completado</Badge>
       default:
-        return <Badge className="bg-success text-success-foreground">Resuelto</Badge>
+        return <Badge className="bg-success text-success-foreground">Completado</Badge>
     }
   }
 

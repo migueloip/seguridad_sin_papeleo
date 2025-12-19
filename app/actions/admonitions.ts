@@ -1,78 +1,83 @@
 "use server"
 
 import { sql } from "@/lib/db"
-import type { Admonition, AdmonitionAttachment, Worker } from "@/lib/db"
+import type { Admonition, AdmonitionAttachment } from "@/lib/db"
 import { getCurrentUserId } from "@/lib/auth"
 import { revalidatePath } from "next/cache"
-import { getSetting } from "./settings"
-import nodemailer from "nodemailer"
+
+let schemaEnsured: Promise<void> | null = null
 
 async function ensureAdmonitionsSchema() {
-  try {
-    await sql`
-      CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        email VARCHAR(255) UNIQUE NOT NULL,
-        name VARCHAR(255),
-        password_hash VARCHAR(255) NOT NULL,
-        role VARCHAR(50) DEFAULT 'user',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `
-    await sql`
-      CREATE TABLE IF NOT EXISTS workers (
-        id SERIAL PRIMARY KEY,
-        rut VARCHAR(20) UNIQUE NOT NULL,
-        first_name VARCHAR(100) NOT NULL,
-        last_name VARCHAR(100) NOT NULL,
-        role VARCHAR(100),
-        company VARCHAR(255),
-        phone VARCHAR(20),
-        email VARCHAR(255),
-        project_id INTEGER,
-        status VARCHAR(50) DEFAULT 'active',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `
-    await sql`
-      CREATE TABLE IF NOT EXISTS admonitions (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        worker_id INTEGER REFERENCES workers(id) ON DELETE CASCADE,
-        admonition_date DATE NOT NULL,
-        admonition_type VARCHAR(50) NOT NULL,
-        reason TEXT NOT NULL,
-        supervisor_signature TEXT,
-        attachments JSONB,
-        status VARCHAR(50) DEFAULT 'active',
-        approval_status VARCHAR(50) DEFAULT 'pending',
-        approved_at TIMESTAMP,
-        rejected_at TIMESTAMP,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `
-    await sql`CREATE INDEX IF NOT EXISTS idx_admonitions_user ON admonitions(user_id)`
-    await sql`CREATE INDEX IF NOT EXISTS idx_admonitions_worker ON admonitions(worker_id)`
-    await sql`CREATE INDEX IF NOT EXISTS idx_admonitions_type ON admonitions(admonition_type)`
-    await sql`CREATE INDEX IF NOT EXISTS idx_admonitions_status ON admonitions(status)`
-    await sql`CREATE INDEX IF NOT EXISTS idx_admonitions_approval ON admonitions(approval_status)`
-    await sql`CREATE INDEX IF NOT EXISTS idx_admonitions_date ON admonitions(admonition_date)`
-    await sql`
-      CREATE TABLE IF NOT EXISTS notifications (
-        id SERIAL PRIMARY KEY,
-        type VARCHAR(50) NOT NULL,
-        title VARCHAR(255) NOT NULL,
-        message TEXT,
-        related_id INTEGER,
-        related_type VARCHAR(50),
-        is_read BOOLEAN DEFAULT false,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `
-    await sql`CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(is_read)`
-  } catch {}
+  if (!schemaEnsured) {
+    schemaEnsured = (async () => {
+      try {
+        await sql`
+          CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            email VARCHAR(255) UNIQUE NOT NULL,
+            name VARCHAR(255),
+            password_hash VARCHAR(255) NOT NULL,
+            role VARCHAR(50) DEFAULT 'user',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          )
+        `
+        await sql`
+          CREATE TABLE IF NOT EXISTS workers (
+            id SERIAL PRIMARY KEY,
+            rut VARCHAR(20) UNIQUE NOT NULL,
+            first_name VARCHAR(100) NOT NULL,
+            last_name VARCHAR(100) NOT NULL,
+            role VARCHAR(100),
+            company VARCHAR(255),
+            phone VARCHAR(20),
+            email VARCHAR(255),
+            project_id INTEGER,
+            status VARCHAR(50) DEFAULT 'active',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          )
+        `
+        await sql`
+          CREATE TABLE IF NOT EXISTS admonitions (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            worker_id INTEGER REFERENCES workers(id) ON DELETE CASCADE,
+            admonition_date DATE NOT NULL,
+            admonition_type VARCHAR(50) NOT NULL,
+            reason TEXT NOT NULL,
+            supervisor_signature TEXT,
+            attachments JSONB,
+            status VARCHAR(50) DEFAULT 'active',
+            approval_status VARCHAR(50) DEFAULT 'pending',
+            approved_at TIMESTAMP,
+            rejected_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          )
+        `
+        await sql`CREATE INDEX IF NOT EXISTS idx_admonitions_user ON admonitions(user_id)`
+        await sql`CREATE INDEX IF NOT EXISTS idx_admonitions_worker ON admonitions(worker_id)`
+        await sql`CREATE INDEX IF NOT EXISTS idx_admonitions_type ON admonitions(admonition_type)`
+        await sql`CREATE INDEX IF NOT EXISTS idx_admonitions_status ON admonitions(status)`
+        await sql`CREATE INDEX IF NOT EXISTS idx_admonitions_approval ON admonitions(approval_status)`
+        await sql`CREATE INDEX IF NOT EXISTS idx_admonitions_date ON admonitions(admonition_date)`
+        await sql`
+          CREATE TABLE IF NOT EXISTS notifications (
+            id SERIAL PRIMARY KEY,
+            type VARCHAR(50) NOT NULL,
+            title VARCHAR(255) NOT NULL,
+            message TEXT,
+            related_id INTEGER,
+            related_type VARCHAR(50),
+            is_read BOOLEAN DEFAULT false,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          )
+        `
+        await sql`CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(is_read)`
+      } catch {}
+    })()
+  }
+  await schemaEnsured
 }
 
 type CreateAdmonitionInput = {
@@ -171,8 +176,6 @@ export async function createAdmonition(data: CreateAdmonitionInput): Promise<Adm
     `
   } catch {}
 
-  await sendAdmonitionEmail(inserted.id, "Creación de amonestación pendiente de aprobación")
-
   revalidatePath("/personal")
   return inserted
 }
@@ -208,7 +211,6 @@ export async function updateAdmonition(id: number, data: UpdateAdmonitionInput):
         VALUES ('admonition_approved', 'Amonestación aprobada', ${`La amonestación #${id} fue aprobada`}, ${id}, 'admonition', false)
       `
     } catch {}
-    await sendAdmonitionEmail(id, "Amonestación aprobada")
   } else if (approval === "rejected") {
     try {
       await sql`
@@ -216,7 +218,6 @@ export async function updateAdmonition(id: number, data: UpdateAdmonitionInput):
         VALUES ('admonition_rejected', 'Amonestación rechazada', ${`La amonestación #${id} fue rechazada`}, ${id}, 'admonition', false)
       `
     } catch {}
-    await sendAdmonitionEmail(id, "Amonestación rechazada")
   }
 
   revalidatePath("/personal")
@@ -232,6 +233,14 @@ export async function archiveAdmonition(id: number): Promise<void> {
     SET status = 'archived', updated_at = CURRENT_TIMESTAMP
     WHERE id = ${id} AND user_id = ${userId}
   `
+  revalidatePath("/personal")
+}
+
+export async function deleteAdmonition(id: number): Promise<void> {
+  const userId = await getCurrentUserId()
+  if (!userId) throw new Error("Debes iniciar sesión")
+  await ensureAdmonitionsSchema()
+  await sql`DELETE FROM admonitions WHERE id = ${id} AND user_id = ${userId}`
   revalidatePath("/personal")
 }
 
@@ -270,43 +279,4 @@ export async function getAdmonitionStats(params?: { from?: string; to?: string }
     ORDER BY month DESC
   `
   return { byDepartment, byType, byMonth }
-}
-
-async function sendAdmonitionEmail(admonitionId: number, subject: string) {
-  try {
-    const host = await getSetting("smtp_host")
-    const portStr = await getSetting("smtp_port")
-    const user = await getSetting("smtp_user")
-    const pass = await getSetting("smtp_pass")
-    const from = (await getSetting("smtp_from")) || "noreply@ssp.local"
-    const hrEmail = await getSetting("hr_email")
-    if (!host || !portStr || !user || !pass || !from) return
-    const port = Number(portStr)
-    const [adm] = await sql<Admonition>`SELECT * FROM admonitions WHERE id = ${admonitionId} LIMIT 1`
-    const [worker] = await sql<Worker>`SELECT * FROM workers WHERE id = ${adm.worker_id} LIMIT 1`
-
-    const transporter = nodemailer.createTransport({
-      host,
-      port,
-      secure: port === 465,
-      auth: { user, pass },
-    })
-
-    const toList = [hrEmail, worker?.email].filter(Boolean).join(", ")
-    if (!toList) return
-    const text = `Amonestación #${admonitionId}
-Empleado: ${worker?.first_name || "-"} ${worker?.last_name || "-"}
-Fecha: ${adm.admonition_date}
-Tipo: ${adm.admonition_type}
-Motivo: ${adm.reason}
-Sanción: ${adm.supervisor_signature || "-"}
-Estado: ${adm.approval_status}`
-    await transporter.sendMail({
-      from,
-      to: toList,
-      subject,
-      text,
-    })
-  } catch {
-  }
 }

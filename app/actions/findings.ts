@@ -8,6 +8,21 @@ import type { LanguageModel } from "ai"
 import { getSetting } from "./settings"
 import { getModel } from "@/lib/ai"
 
+export type FindingRow = {
+  id: number
+  title: string
+  description: string | null
+  location: string | null
+  responsible_person: string | null
+  severity: string
+  status: string
+  project_name: string | null
+  due_date: string | null
+  resolution_notes: string | null
+  photos: string[] | null
+  created_at: string
+}
+
 function extFromMime(m: string) {
   const map: Record<string, string> = {
     "image/png": "png",
@@ -42,7 +57,7 @@ export async function getFindings(projectId?: number, status?: string) {
   const userId = await getCurrentUserId()
   if (!userId) return []
   if (projectId && status) {
-    return sql`
+    return sql<FindingRow>`
       SELECT f.*, p.name as project_name
       FROM findings f
       LEFT JOIN projects p ON f.project_id = p.id
@@ -54,7 +69,7 @@ export async function getFindings(projectId?: number, status?: string) {
   }
 
   if (projectId) {
-    return sql`
+    return sql<FindingRow>`
       SELECT f.*, p.name as project_name
       FROM findings f
       LEFT JOIN projects p ON f.project_id = p.id
@@ -66,7 +81,7 @@ export async function getFindings(projectId?: number, status?: string) {
   }
 
   if (status) {
-    return sql`
+    return sql<FindingRow>`
       SELECT f.*, p.name as project_name
       FROM findings f
       LEFT JOIN projects p ON f.project_id = p.id
@@ -77,7 +92,7 @@ export async function getFindings(projectId?: number, status?: string) {
     `
   }
 
-  return sql`
+  return sql<FindingRow>`
     SELECT f.*, p.name as project_name
     FROM findings f
     LEFT JOIN projects p ON f.project_id = p.id

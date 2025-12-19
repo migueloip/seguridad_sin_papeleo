@@ -72,12 +72,12 @@ export async function createPlan(data: {
   extracted?: { floors: FloorItem[] }
 }): Promise<Plan> {
   const userId = await getCurrentUserId()
+  if (!userId) throw new Error("Unauthorized")
   const result = await sql<Plan>`
-    INSERT INTO plans (project_id, name, plan_type, file_name, file_url, mime_type, extracted, created_at, updated_at)
-    VALUES (${data.project_id || null}, ${data.name}, ${data.plan_type}, ${data.file_name}, ${data.file_url || null}, ${data.mime_type || null}, ${data.extracted ? JSON.stringify(data.extracted) : null}::jsonb, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    INSERT INTO plans (user_id, project_id, name, plan_type, file_name, file_url, mime_type, extracted, created_at, updated_at)
+    VALUES (${userId}, ${data.project_id || null}, ${data.name}, ${data.plan_type}, ${data.file_name}, ${data.file_url || null}, ${data.mime_type || null}, ${data.extracted ? JSON.stringify(data.extracted) : null}::jsonb, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     RETURNING *
   `
-  await sql`UPDATE plans SET user_id = ${userId} WHERE id = ${result[0].id}`
   revalidatePath("/planos")
   revalidatePath("/")
   return result[0]
@@ -85,6 +85,7 @@ export async function createPlan(data: {
 
 export async function savePlanFloorsAndZones(planId: number, floors: FloorItem[]): Promise<{ floors: PlanFloor[] }> {
   const userId = await getCurrentUserId()
+  if (!userId) throw new Error("Unauthorized")
   // Clean existing
   await sql`DELETE FROM plan_zones WHERE plan_id = ${planId} AND user_id = ${userId}`
   await sql`DELETE FROM plan_floors WHERE plan_id = ${planId} AND user_id = ${userId}`
@@ -92,20 +93,18 @@ export async function savePlanFloorsAndZones(planId: number, floors: FloorItem[]
   const insertedFloors: PlanFloor[] = []
   for (const f of floors) {
     const floorRow = await sql<PlanFloor>`
-      INSERT INTO plan_floors (plan_id, name, level, created_at)
-      VALUES (${planId}, ${f.name || "General"}, NULL, CURRENT_TIMESTAMP)
+      INSERT INTO plan_floors (user_id, plan_id, name, level, created_at)
+      VALUES (${userId}, ${planId}, ${f.name || "General"}, NULL, CURRENT_TIMESTAMP)
       RETURNING *
     `
     const floorId = floorRow[0].id
-    await sql`UPDATE plan_floors SET user_id = ${userId} WHERE id = ${floorId}`
-    insertedFloors.push({ ...(floorRow[0] as any), user_id: userId } as PlanFloor)
+    insertedFloors.push(floorRow[0])
     for (const z of Array.isArray(f.zones) ? f.zones : []) {
       const zoneRow = await sql<PlanZone>`
-        INSERT INTO plan_zones (plan_id, floor_id, name, code, zone_type, created_at)
-        VALUES (${planId}, ${floorId}, ${z.name || "Zona"}, ${z.code || null}, ${null}, CURRENT_TIMESTAMP)
+        INSERT INTO plan_zones (user_id, plan_id, floor_id, name, code, zone_type, created_at)
+        VALUES (${userId}, ${planId}, ${floorId}, ${z.name || "Zona"}, ${z.code || null}, ${null}, CURRENT_TIMESTAMP)
         RETURNING *
       `
-      await sql`UPDATE plan_zones SET user_id = ${userId} WHERE id = ${zoneRow[0].id}`
     }
   }
   revalidatePath("/planos")
@@ -128,11 +127,11 @@ export async function getPlanDetail(planId: number): Promise<{
   const zonesRows = await sql<PlanZone>`SELECT * FROM plan_zones WHERE plan_id = ${planId} AND user_id = ${userId} ORDER BY name`
   const zonesByFloor: Record<number, PlanZone[]> = {}
   for (const z of zonesRows) {
-    const fid = (z as any).floor_id as number | null
+    const fid = z.floor_id
     if (!fid) continue
     zonesByFloor[fid] = zonesByFloor[fid] || []
     zonesByFloor[fid].push(z)
   }
-  const floors = floorRows.map((f) => ({ ...(f as any), zones: zonesByFloor[f.id] || [] }))
+  const floors = floorRows.map((f) => ({ ...f, zones: zonesByFloor[f.id] || [] }))
   return { plan: planRows[0], floors }
 }

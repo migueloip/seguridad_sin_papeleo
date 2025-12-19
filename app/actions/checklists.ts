@@ -8,6 +8,44 @@ import type { LanguageModel } from "ai"
 import { getSetting } from "./settings"
 import { getModel } from "@/lib/ai"
 
+export type ChecklistTemplateAiItem = {
+  id?: string
+  text: string
+  checked?: boolean
+  hasIssue?: boolean
+  note?: string
+}
+
+export type ChecklistTemplateItems = { items?: ChecklistTemplateAiItem[] } | null
+
+export type ChecklistTemplateRow = {
+  id: number
+  user_id?: number
+  category_id: number | null
+  name: string
+  description: string | null
+  items: ChecklistTemplateItems
+  created_at: string
+  updated_at: string
+  category_name: string | null
+}
+
+export type CompletedChecklistRow = {
+  id: number
+  user_id?: number
+  template_id: number
+  project_id: number | null
+  inspector_name: string
+  location: string | null
+  responses: Record<string, boolean | string> | null
+  notes: string | null
+  status: string
+  created_at: string
+  completed_at: string
+  template_name: string | null
+  project_name: string | null
+}
+
 export async function getChecklistCategories(): Promise<
   Array<{ id: number; user_id?: number; name: string; description: string | null; created_at: string }>
 > {
@@ -15,12 +53,10 @@ export async function getChecklistCategories(): Promise<
   return sql<{ id: number; user_id?: number; name: string; description: string | null; created_at: string }>`SELECT * FROM checklist_categories WHERE user_id = ${userId} ORDER BY name`
 }
 
-export async function getChecklistTemplates(categoryId?: number): Promise<
-  Array<{ id: number; user_id?: number; category_id: number | null; name: string; description: string | null; items: unknown; created_at: string; updated_at: string; category_name: string | null }>
-> {
+export async function getChecklistTemplates(categoryId?: number): Promise<ChecklistTemplateRow[]> {
   const userId = await getCurrentUserId()
   if (categoryId) {
-    return sql<{ id: number; user_id?: number; category_id: number | null; name: string; description: string | null; items: unknown; created_at: string; updated_at: string; category_name: string | null }>`
+    return sql<ChecklistTemplateRow>`
       SELECT ct.*, cc.name as category_name
       FROM checklist_templates ct
       LEFT JOIN checklist_categories cc ON ct.category_id = cc.id
@@ -29,7 +65,7 @@ export async function getChecklistTemplates(categoryId?: number): Promise<
     `
   }
 
-  return sql<{ id: number; user_id?: number; category_id: number | null; name: string; description: string | null; items: unknown; created_at: string; updated_at: string; category_name: string | null }>`
+  return sql<ChecklistTemplateRow>`
     SELECT ct.*, cc.name as category_name
     FROM checklist_templates ct
     LEFT JOIN checklist_categories cc ON ct.category_id = cc.id
@@ -38,11 +74,9 @@ export async function getChecklistTemplates(categoryId?: number): Promise<
   `
 }
 
-export async function getChecklistTemplateById(id: number): Promise<
-  { id: number; user_id?: number; category_id: number | null; name: string; description: string | null; items: unknown; created_at: string; updated_at: string; category_name: string | null } | undefined
-> {
+export async function getChecklistTemplateById(id: number): Promise<ChecklistTemplateRow | undefined> {
   const userId = await getCurrentUserId()
-  const result = await sql<{ id: number; user_id?: number; category_id: number | null; name: string; description: string | null; items: unknown; created_at: string; updated_at: string; category_name: string | null }>`
+  const result = await sql<ChecklistTemplateRow>`
     SELECT ct.*, cc.name as category_name
     FROM checklist_templates ct
     LEFT JOIN checklist_categories cc ON ct.category_id = cc.id
@@ -51,13 +85,11 @@ export async function getChecklistTemplateById(id: number): Promise<
   return result[0]
 }
 
-export async function getCompletedChecklists(projectId?: number): Promise<
-  Array<{ id: number; user_id?: number; template_id: number; project_id: number | null; inspector_name: string; location: string | null; responses: Record<string, boolean | string> | null; notes: string | null; status: string; created_at: string; completed_at: string; template_name: string | null; project_name: string | null }>
-> {
+export async function getCompletedChecklists(projectId?: number): Promise<CompletedChecklistRow[]> {
   const userId = await getCurrentUserId()
   if (!userId) return []
   if (projectId) {
-    return sql<{ id: number; user_id?: number; template_id: number; project_id: number | null; inspector_name: string; location: string | null; responses: Record<string, boolean | string> | null; notes: string | null; status: string; created_at: string; completed_at: string; template_name: string | null; project_name: string | null }>`
+    return sql<CompletedChecklistRow>`
       SELECT cc.*, ct.name as template_name, p.name as project_name
       FROM completed_checklists cc
       LEFT JOIN checklist_templates ct ON cc.template_id = ct.id
@@ -67,7 +99,7 @@ export async function getCompletedChecklists(projectId?: number): Promise<
     `
   }
 
-  return sql<{ id: number; user_id?: number; template_id: number; project_id: number | null; inspector_name: string; location: string | null; responses: Record<string, boolean | string> | null; notes: string | null; status: string; created_at: string; completed_at: string; template_name: string | null; project_name: string | null }>`
+  return sql<CompletedChecklistRow>`
     SELECT cc.*, ct.name as template_name, p.name as project_name
     FROM completed_checklists cc
     LEFT JOIN checklist_templates ct ON cc.template_id = ct.id
@@ -150,10 +182,19 @@ export async function extractChecklistFromImage(base64Image: string, mimeType: s
   try {
     const parsed = JSON.parse(cleaned)
     if (Array.isArray(parsed?.items)) {
+      const items = parsed.items.map((it: unknown, idx: number): ChecklistTemplateAiItem => {
+        if (it && typeof it === "object") {
+          const r = it as Record<string, unknown>
+          const id = typeof r["id"] === "string" ? r["id"] : undefined
+          const text = typeof r["text"] === "string" ? r["text"] : undefined
+          return { id: id || `ai-${idx}`, text: text ?? "Item", checked: false, hasIssue: false }
+        }
+        return { id: `ai-${idx}`, text: typeof it === "string" ? it : String(it), checked: false, hasIssue: false }
+      })
       return {
         name: parsed.name || undefined,
         description: parsed.description || undefined,
-        items: { items: parsed.items.map((it: any, idx: number) => ({ id: it.id || `ai-${idx}`, text: String(it.text || it) })) },
+        items: { items },
       }
     }
     return parsed
@@ -162,10 +203,19 @@ export async function extractChecklistFromImage(base64Image: string, mimeType: s
     if (m) {
       const parsed = JSON.parse(m[0])
       if (Array.isArray(parsed?.items)) {
+        const items = parsed.items.map((it: unknown, idx: number): ChecklistTemplateAiItem => {
+          if (it && typeof it === "object") {
+            const r = it as Record<string, unknown>
+            const id = typeof r["id"] === "string" ? r["id"] : undefined
+            const text = typeof r["text"] === "string" ? r["text"] : undefined
+            return { id: id || `ai-${idx}`, text: text ?? "Item", checked: false, hasIssue: false }
+          }
+          return { id: `ai-${idx}`, text: typeof it === "string" ? it : String(it), checked: false, hasIssue: false }
+        })
         return {
           name: parsed.name || undefined,
           description: parsed.description || undefined,
-          items: { items: parsed.items.map((it: any, idx: number) => ({ id: it.id || `ai-${idx}`, text: String(it.text || it) })) },
+          items: { items },
         }
       }
       return parsed

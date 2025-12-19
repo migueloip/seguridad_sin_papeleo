@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useTransition } from "react"
+import { useEffect, useRef, useState, useTransition } from "react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -23,7 +23,7 @@ import {
   ArrowDown,
   Trash2,
 } from "lucide-react"
-import { getReportData, generateAIReport, getReportById, createManualReport, updateReport } from "@/app/actions/reports"
+import { fillPdfDesignerWithAI, getReportData, generateAIReport, getReportById, createManualReport, updateReport } from "@/app/actions/reports"
 import { getFindings } from "@/app/actions/findings"
 import { Input } from "@/components/ui/input"
 import ReactMarkdown from "react-markdown"
@@ -142,6 +142,7 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
   const [recs, setRecs] = useState<string[]>([])
   const [expandedSections, setExpandedSections] = useState<Array<"cover" | "summary" | "matrix" | "docs" | "quotes" | "recs">>([])
   const [aiTemplate, setAiTemplate] = useState<"weekly" | "monthly" | "findings" | "docs">("weekly")
+  const [aiFillRequest, setAiFillRequest] = useState<string>("")
   type EditorSnapshot = {
     pdfFont: "sans-serif" | "serif"
     pdfFontSize: number
@@ -161,12 +162,17 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
   const [docs, setDocs] = useState<DocumentAttachment[]>([])
   const [quotes, setQuotes] = useState<QuoteItem[]>([])
   const [quoteDraft, setQuoteDraft] = useState<QuoteItem>({ name: "", role: "", date: new Date().toISOString().slice(0, 10), content: "", signatureDataUrl: null })
+  const [signaturePenColor, setSignaturePenColor] = useState<string>("#111827")
+  const [signaturePenWidth, setSignaturePenWidth] = useState<number>(2)
+  const signatureCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const [designerEnabled, setDesignerEnabled] = useState<boolean>(false)
   const [pageSize, setPageSize] = useState<PageSize>("A4")
   const [pageMarginMm, setPageMarginMm] = useState<number>(20)
   const [elements, setElements] = useState<DesignerElement[]>([])
   const [expandedElementId, setExpandedElementId] = useState<string | null>(null)
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
+  type EditorVersion = EditorState & { id: string; date: string }
+  const [editorVersions, setEditorVersions] = useState<EditorVersion[]>([])
 
   useEffect(() => {
     let mounted = true
@@ -192,6 +198,76 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
       mounted = false
     }
   }, [])
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("pdfEditorVersions")
+      const parsed = raw ? JSON.parse(raw) : []
+      if (Array.isArray(parsed)) setEditorVersions(parsed as EditorVersion[])
+    } catch {}
+  }, [])
+
+  const saveEditorVersion = () => {
+    try {
+      const snapshot: EditorVersion = {
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        date: new Date().toISOString(),
+        pdfFont,
+        pdfFontSize,
+        pdfColor,
+        editorSections,
+        coverTitle,
+        coverSubtitle,
+        summaryText,
+        matrixRows,
+        recs,
+        brandLogo: brandLogo || null,
+        responsibleName,
+        pdfA,
+        docs,
+        quotes,
+        designerEnabled,
+        pageSize,
+        pageMarginMm,
+        elements,
+      }
+      const versionsRaw = localStorage.getItem("pdfEditorVersions")
+      const versions = versionsRaw ? JSON.parse(versionsRaw) : []
+      const next = [...(Array.isArray(versions) ? versions : []), snapshot].slice(-20)
+      localStorage.setItem("pdfEditorVersions", JSON.stringify(next))
+      setEditorVersions(next as EditorVersion[])
+    } catch {}
+  }
+
+  const loadEditorVersion = (v: EditorVersion) => {
+    pushHistory()
+    setPdfFont(v.pdfFont)
+    setPdfFontSize(v.pdfFontSize)
+    setPdfColor(v.pdfColor)
+    setEditorSections(v.editorSections)
+    setCoverTitle(v.coverTitle)
+    setCoverSubtitle(v.coverSubtitle)
+    setSummaryText(v.summaryText)
+    setMatrixRows(v.matrixRows)
+    setRecs(v.recs)
+    setResponsibleName(String(v.responsibleName || ""))
+    setPdfA(Boolean(v.pdfA))
+    setDocs(Array.isArray(v.docs) ? v.docs : [])
+    setQuotes(Array.isArray(v.quotes) ? v.quotes : [])
+    setDesignerEnabled(Boolean(v.designerEnabled))
+    setPageSize((v.pageSize as PageSize) || "A4")
+    setPageMarginMm(typeof v.pageMarginMm === "number" ? v.pageMarginMm : 20)
+    setElements(Array.isArray(v.elements) ? (v.elements as DesignerElement[]) : [])
+    setExpandedSections([])
+  }
+
+  const deleteEditorVersion = (id: string) => {
+    try {
+      const next = editorVersions.filter((v) => v.id !== id)
+      localStorage.setItem("pdfEditorVersions", JSON.stringify(next))
+      setEditorVersions(next)
+    } catch {}
+  }
 
   const pushHistory = () => {
     const snapshot = {
@@ -558,33 +634,62 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
                     setGenerating("fill")
                     startTransition(async () => {
                       try {
-                        const data = await getReportData(period, projectId)
-                        const result = await generateAIReport(aiTemplate, data, projectId)
-                        const md = String(result?.content || "")
-                        const plain = md
-                          .replace(/^#{1,6}\s+/gm, "")
-                          .replace(/\*\*/g, "")
-                          .replace(/\[(.*?)\]\((.*?)\)/g, "$1")
-                          .replace(/!\[[^\]]*\]\([^)]+\)/g, "")
-                        setCoverTitle(String(result?.title || coverTitle))
-                        setSummaryText(plain)
-                        try {
-                          const items = (await getFindings(projectId)) as unknown as FindingRow[]
-                          const nextRows = (items || []).slice(0, 10).map((f) => ({
-                            description: f.description || f.title,
-                            severity: (["alta", "medio", "bajo"] as Severity[]).includes(f.severity as Severity)
-                              ? (f.severity as Severity)
-                              : "medio",
-                            status: (["pendiente", "en progreso", "resuelto"] as Status[]).includes(f.status as Status)
-                              ? (f.status as Status)
-                              : "pendiente",
-                            date: new Date(f.created_at).toISOString().slice(0, 10),
-                            category: "",
-                            owner: "",
-                          }))
-                          setMatrixRows(nextRows)
-                        } catch {}
-                        setEditorAlerts([])
+                        if (designerEnabled) {
+                          pushHistory()
+                          const state: EditorState = {
+                            pdfFont,
+                            pdfFontSize,
+                            pdfColor,
+                            editorSections,
+                            coverTitle,
+                            coverSubtitle,
+                            summaryText,
+                            matrixRows,
+                            recs,
+                            brandLogo,
+                            responsibleName,
+                            pdfA,
+                            docs,
+                            quotes,
+                            designerEnabled,
+                            pageSize,
+                            pageMarginMm,
+                            elements,
+                          }
+                          const filled = await fillPdfDesignerWithAI({ period, projectId, request: aiFillRequest, state })
+                          if (filled?.coverTitle) setCoverTitle(String(filled.coverTitle))
+                          if (filled?.coverSubtitle !== undefined) setCoverSubtitle(String(filled.coverSubtitle || ""))
+                          if (Array.isArray(filled?.elements)) setElements(filled.elements as DesignerElement[])
+                          setEditorAlerts([])
+                        } else {
+                          const data = await getReportData(period, projectId)
+                          const result = await generateAIReport(aiTemplate, data, projectId)
+                          const md = String(result?.content || "")
+                          const plain = md
+                            .replace(/^#{1,6}\s+/gm, "")
+                            .replace(/\*\*/g, "")
+                            .replace(/\[(.*?)\]\((.*?)\)/g, "$1")
+                            .replace(/!\[[^\]]*\]\([^)]+\)/g, "")
+                          setCoverTitle(String(result?.title || coverTitle))
+                          setSummaryText(plain)
+                          try {
+                            const items = (await getFindings(projectId)) as unknown as FindingRow[]
+                            const nextRows = (items || []).slice(0, 10).map((f) => ({
+                              description: f.description || f.title,
+                              severity: (["alta", "medio", "bajo"] as Severity[]).includes(f.severity as Severity)
+                                ? (f.severity as Severity)
+                                : "medio",
+                              status: (["pendiente", "en progreso", "resuelto"] as Status[]).includes(f.status as Status)
+                                ? (f.status as Status)
+                                : "pendiente",
+                              date: new Date(f.created_at).toISOString().slice(0, 10),
+                              category: "",
+                              owner: "",
+                            }))
+                            setMatrixRows(nextRows)
+                          } catch {}
+                          setEditorAlerts([])
+                        }
                       } catch {
                         setEditorAlerts(["No se pudo rellenar con IA"])
                       } finally {
@@ -687,28 +792,7 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
                 <Button
                   variant="outline"
                   onClick={() => {
-                    try {
-                      const versionsRaw = localStorage.getItem("pdfEditorVersions")
-                      const versions = versionsRaw ? JSON.parse(versionsRaw) : []
-                      const snapshot = {
-                        date: new Date().toISOString(),
-                        pdfFont,
-                        pdfFontSize,
-                        pdfColor,
-                        editorSections,
-                        coverTitle,
-                        coverSubtitle,
-                        summaryText,
-                        matrixRows,
-                        recs,
-                        docs,
-                        quotes,
-                        responsibleName,
-                        pdfA,
-                      }
-                      const next = [...versions, snapshot].slice(-20)
-                      localStorage.setItem("pdfEditorVersions", JSON.stringify(next))
-                    } catch {}
+                    saveEditorVersion()
                   }}
                 >
                   Guardar versión
@@ -746,6 +830,18 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
                   </>
                 )}
               </div>
+              {designerEnabled && (
+                <div className="grid gap-2">
+                  <p className="text-sm font-medium">Pedido para IA</p>
+                  <textarea
+                    className="w-full rounded border bg-background p-2 text-sm"
+                    rows={3}
+                    value={aiFillRequest}
+                    onChange={(e) => setAiFillRequest(e.target.value)}
+                    placeholder="Ej: Completa los textos con el resumen del periodo, KPIs y recomendaciones. Mantén el mismo layout."
+                  />
+                </div>
+              )}
               <div className="grid gap-6 md:grid-cols-2">
                 <div className="space-y-4">
                   {!designerEnabled && (
@@ -1268,24 +1364,53 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
                               />
                               <div>
                                 <p className="text-xs mb-2">Firma digital</p>
+                                <div className="mb-2 flex flex-wrap items-center gap-2">
+                                  <input
+                                    type="color"
+                                    value={signaturePenColor}
+                                    onChange={(e) => setSignaturePenColor(e.target.value)}
+                                  />
+                                  <Input
+                                    type="number"
+                                    value={signaturePenWidth}
+                                    onChange={(e) => setSignaturePenWidth(Math.max(1, Number(e.target.value) || 2))}
+                                    className="w-24"
+                                    placeholder="Grosor"
+                                  />
+                                </div>
                                 <canvas
-                                  id="signature-canvas-editor"
+                                  ref={signatureCanvasRef}
                                   className="h-24 w-full rounded border bg-background"
-                                  onMouseDown={(e) => {
+                                  style={{ touchAction: "none" }}
+                                  onPointerDown={(e) => {
+                                    e.preventDefault()
                                     const c = e.currentTarget
+                                    const rect0 = c.getBoundingClientRect()
+                                    const dpr = window.devicePixelRatio || 1
+                                    const nextW = Math.max(1, Math.floor(rect0.width * dpr))
+                                    const nextH = Math.max(1, Math.floor(rect0.height * dpr))
+                                    if (c.width !== nextW || c.height !== nextH) {
+                                      c.width = nextW
+                                      c.height = nextH
+                                    }
                                     const ctx = c.getContext("2d")
                                     if (!ctx) return
+                                    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+                                    ctx.lineCap = "round"
+                                    ctx.lineJoin = "round"
+
                                     let drawing = true
-                                    const rect = c.getBoundingClientRect()
-                                    let lastX = e.clientX - rect.left
-                                    let lastY = e.clientY - rect.top
-                                    const move = (ev: MouseEvent) => {
+                                    let lastX = e.clientX - rect0.left
+                                    let lastY = e.clientY - rect0.top
+
+                                    const move = (ev: PointerEvent) => {
                                       if (!drawing) return
+                                      ev.preventDefault()
+                                      const rect = c.getBoundingClientRect()
                                       const x = ev.clientX - rect.left
                                       const y = ev.clientY - rect.top
-                                      ctx.strokeStyle = "#111827"
-                                      ctx.lineWidth = 2
-                                      ctx.lineCap = "round"
+                                      ctx.strokeStyle = signaturePenColor
+                                      ctx.lineWidth = signaturePenWidth
                                       ctx.beginPath()
                                       ctx.moveTo(lastX, lastY)
                                       ctx.lineTo(x, y)
@@ -1295,50 +1420,18 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
                                     }
                                     const up = () => {
                                       drawing = false
-                                      window.removeEventListener("mousemove", move)
-                                      window.removeEventListener("mouseup", up)
+                                      window.removeEventListener("pointermove", move)
+                                      window.removeEventListener("pointerup", up)
                                     }
-                                    window.addEventListener("mousemove", move)
-                                    window.addEventListener("mouseup", up)
-                                  }}
-                                  onTouchStart={(e) => {
-                                    const c = e.currentTarget
-                                    const ctx = c.getContext("2d")
-                                    if (!ctx) return
-                                    let drawing = true
-                                    const rect = c.getBoundingClientRect()
-                                    const t = e.touches[0]
-                                    let lastX = t.clientX - rect.left
-                                    let lastY = t.clientY - rect.top
-                                    const move = (ev: TouchEvent) => {
-                                      if (!drawing) return
-                                      const tt = ev.touches[0]
-                                      const x = tt.clientX - rect.left
-                                      const y = tt.clientY - rect.top
-                                      ctx.strokeStyle = "#111827"
-                                      ctx.lineWidth = 2
-                                      ctx.lineCap = "round"
-                                      ctx.beginPath()
-                                      ctx.moveTo(lastX, lastY)
-                                      ctx.lineTo(x, y)
-                                      ctx.stroke()
-                                      lastX = x
-                                      lastY = y
-                                    }
-                                    const up = () => {
-                                      drawing = false
-                                      window.removeEventListener("touchmove", move)
-                                      window.removeEventListener("touchend", up)
-                                    }
-                                    window.addEventListener("touchmove", move, { passive: true })
-                                    window.addEventListener("touchend", up)
+                                    window.addEventListener("pointermove", move, { passive: false })
+                                    window.addEventListener("pointerup", up)
                                   }}
                                 />
                                 <div className="mt-2 flex gap-2">
                                   <Button
                                     variant="outline"
                                     onClick={() => {
-                                      const c = document.getElementById("signature-canvas-editor") as HTMLCanvasElement | null
+                                      const c = signatureCanvasRef.current
                                       if (!c) return
                                       setQuoteDraft((q) => ({ ...q, signatureDataUrl: c.toDataURL("image/png") }))
                                     }}
@@ -1348,11 +1441,14 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
                                   <Button
                                     variant="outline"
                                     onClick={() => {
-                                      const c = document.getElementById("signature-canvas-editor") as HTMLCanvasElement | null
+                                      const c = signatureCanvasRef.current
                                       if (!c) return
                                       const ctx = c.getContext("2d")
                                       if (!ctx) return
+                                      const dpr = window.devicePixelRatio || 1
+                                      ctx.setTransform(1, 0, 0, 1, 0, 0)
                                       ctx.clearRect(0, 0, c.width, c.height)
+                                      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
                                       setQuoteDraft((q) => ({ ...q, signatureDataUrl: null }))
                                     }}
                                   >
@@ -1428,6 +1524,25 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
                           }}
                         >
                           Agregar texto
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setElements((els) => [...els, { id: `plain-text-${Date.now()}`, type: "plain_text", text: "", align: "left" }])
+                          }}
+                        >
+                          Texto simple
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setElements((els) => [
+                              ...els,
+                              { id: `simple-section-${Date.now()}`, type: "simple_section", title: "Sección", subtitle: "", body: "", bullets: [], chips: [], align: "left" },
+                            ])
+                          }}
+                        >
+                          Sección de texto
                         </Button>
                         <input
                           type="file"
@@ -1579,6 +1694,113 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
                                         setElements((arr) =>
                                           arr.map((it, i) =>
                                             i === idx && it.type === "text" ? { ...it, align: e.target.value as "left" | "center" | "right" } : it,
+                                          ),
+                                        )
+                                      }}
+                                      className="rounded border bg-background px-2 py-1 text-sm"
+                                    >
+                                      <option value="left">Izquierda</option>
+                                      <option value="center">Centro</option>
+                                      <option value="right">Derecha</option>
+                                    </select>
+                                  </div>
+                                )}
+                                {el.type === "plain_text" && (
+                                  <div className="grid gap-2">
+                                    <textarea
+                                      className="w-full rounded border bg-background p-2 text-sm"
+                                      rows={6}
+                                      value={el.text}
+                                      onChange={(e) => {
+                                        setElements((arr) =>
+                                          arr.map((it, i) => (i === idx && it.type === "plain_text" ? { ...it, text: e.target.value } : it)),
+                                        )
+                                      }}
+                                    />
+                                    <select
+                                      value={el.align || "left"}
+                                      onChange={(e) => {
+                                        setElements((arr) =>
+                                          arr.map((it, i) =>
+                                            i === idx && it.type === "plain_text" ? { ...it, align: e.target.value as "left" | "center" | "right" } : it,
+                                          ),
+                                        )
+                                      }}
+                                      className="rounded border bg-background px-2 py-1 text-sm"
+                                    >
+                                      <option value="left">Izquierda</option>
+                                      <option value="center">Centro</option>
+                                      <option value="right">Derecha</option>
+                                    </select>
+                                  </div>
+                                )}
+                                {el.type === "simple_section" && (
+                                  <div className="grid gap-2">
+                                    <Input
+                                      placeholder="Título"
+                                      value={el.title}
+                                      onChange={(e) => {
+                                        setElements((arr) =>
+                                          arr.map((it, i) => (i === idx && it.type === "simple_section" ? { ...it, title: e.target.value } : it)),
+                                        )
+                                      }}
+                                    />
+                                    <Input
+                                      placeholder="Subtítulo (opcional)"
+                                      value={el.subtitle || ""}
+                                      onChange={(e) => {
+                                        setElements((arr) =>
+                                          arr.map((it, i) => (i === idx && it.type === "simple_section" ? { ...it, subtitle: e.target.value } : it)),
+                                        )
+                                      }}
+                                    />
+                                    <textarea
+                                      className="w-full rounded border bg-background p-2 text-sm"
+                                      rows={6}
+                                      value={el.body}
+                                      onChange={(e) => {
+                                        setElements((arr) =>
+                                          arr.map((it, i) => (i === idx && it.type === "simple_section" ? { ...it, body: e.target.value } : it)),
+                                        )
+                                      }}
+                                      placeholder="Texto"
+                                    />
+                                    <Input
+                                      placeholder="Chips (separados por coma)"
+                                      value={(el.chips || []).join(", ")}
+                                      onChange={(e) => {
+                                        const next = e.target.value
+                                          .split(",")
+                                          .map((s) => s.trim())
+                                          .filter(Boolean)
+                                        setElements((arr) =>
+                                          arr.map((it, i) => (i === idx && it.type === "simple_section" ? { ...it, chips: next } : it)),
+                                        )
+                                      }}
+                                    />
+                                    <textarea
+                                      className="w-full rounded border bg-background p-2 text-sm"
+                                      rows={4}
+                                      value={(el.bullets || []).join("\n")}
+                                      onChange={(e) => {
+                                        const next = e.target.value
+                                          .split("\n")
+                                          .map((s) => s.trim())
+                                          .filter(Boolean)
+                                        setElements((arr) =>
+                                          arr.map((it, i) => (i === idx && it.type === "simple_section" ? { ...it, bullets: next } : it)),
+                                        )
+                                      }}
+                                      placeholder="Bullets (uno por línea)"
+                                    />
+                                    <select
+                                      value={el.align || "left"}
+                                      onChange={(e) => {
+                                        setElements((arr) =>
+                                          arr.map((it, i) =>
+                                            i === idx && it.type === "simple_section"
+                                              ? { ...it, align: e.target.value as "left" | "center" | "right" }
+                                              : it,
                                           ),
                                         )
                                       }}
@@ -1757,6 +1979,19 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
                               <div className="mt-2">
                                 {el.type === "heading" && <div className="text-sm">{el.text}</div>}
                                 {el.type === "text" && <div className="text-sm" dangerouslySetInnerHTML={{ __html: el.html }} />}
+                                {el.type === "plain_text" && <div className="text-sm whitespace-pre-wrap">{el.text}</div>}
+                                {el.type === "simple_section" && (
+                                  <div className="space-y-1">
+                                    <div className="text-sm font-medium">{el.title}</div>
+                                    {Array.isArray(el.chips) && el.chips.length > 0 ? (
+                                      <div className="flex flex-wrap gap-1">
+                                        {el.chips.slice(0, 6).map((c, i) => (
+                                          <Badge key={i} variant="secondary">{c}</Badge>
+                                        ))}
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                )}
                                 {el.type === "image" && <img src={el.src} alt={el.alt || ""} className="max-h-36" />}
                                 {el.type === "table" && (
                                   <table className="w-full border-collapse">
@@ -1837,111 +2072,155 @@ export function ReportsContent({ initialReports = [], projectId }: ReportsConten
         
 
         <TabsContent value="history">
-          <Card>
-            <CardHeader>
-              <CardTitle>Informes Generados</CardTitle>
-              <CardDescription>Historial de informes generados y manuales</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {generatedReports.length === 0 ? (
-                <p className="text-center text-muted-foreground py-8">
-                  No hay informes aun. Crea o genera tu primer informe.
-                </p>
-              ) : (
-                <div className="space-y-4">
-                  {generatedReports.map((report) => (
-                    <div
-                      key={report.id}
-                      className="flex items-center justify-between rounded-lg border border-border p-4"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted">
-                          <FileText className="h-5 w-5 text-muted-foreground" />
-                        </div>
-                        <div>
-                          <p className="font-medium">{report.title}</p>
-                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                            <Badge variant="outline">{report.report_type}</Badge>
-                            <span>
-                              {formatDate(report.date_from)} - {formatDate(report.date_to)}
-                            </span>
+          <div className="space-y-6">
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between gap-4">
+                <div>
+                  <CardTitle>Versiones del Editor PDF</CardTitle>
+                  <CardDescription>Guardados locales en este navegador</CardDescription>
+                </div>
+                <Button variant="outline" onClick={() => saveEditorVersion()}>
+                  Guardar versión
+                </Button>
+              </CardHeader>
+              <CardContent>
+                {editorVersions.length === 0 ? (
+                  <p className="text-center text-muted-foreground py-6">
+                    No hay versiones guardadas aún.
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    {[...editorVersions].reverse().map((v) => (
+                      <div key={v.id} className="flex items-center justify-between rounded-lg border border-border p-4">
+                        <div className="min-w-0">
+                          <p className="font-medium truncate">{v.coverTitle || "Documento"}</p>
+                          <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                            <span>{new Date(v.date).toLocaleString("es-CL")}</span>
+                            {v.designerEnabled ? <Badge variant="outline">Diseñador</Badge> : <Badge variant="outline">Secciones</Badge>}
                           </div>
                         </div>
+                        <div className="flex items-center gap-2">
+                          <Button variant="outline" size="sm" onClick={() => loadEditorVersion(v)}>
+                            Cargar
+                          </Button>
+                          <Button variant="outline" size="sm" onClick={() => deleteEditorVersion(v.id)}>
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            Eliminar
+                          </Button>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <Badge className="bg-success text-success-foreground">
-                          <CheckCircle className="mr-1 h-3 w-3" />
-                          Generado
-                        </Badge>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => {
-                            startTransition(async () => {
-                              try {
-                                const full = await getReportById(report.id)
-                                let content = ""
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Informes Generados</CardTitle>
+                <CardDescription>Historial de informes generados y manuales</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {generatedReports.length === 0 ? (
+                  <p className="text-center text-muted-foreground py-8">
+                    No hay informes aun. Crea o genera tu primer informe.
+                  </p>
+                ) : (
+                  <div className="space-y-4">
+                    {generatedReports.map((report) => (
+                      <div
+                        key={report.id}
+                        className="flex items-center justify-between rounded-lg border border-border p-4"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted">
+                            <FileText className="h-5 w-5 text-muted-foreground" />
+                          </div>
+                          <div>
+                            <p className="font-medium">{report.title}</p>
+                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                              <Badge variant="outline">{report.report_type}</Badge>
+                              <span>
+                                {formatDate(report.date_from)} - {formatDate(report.date_to)}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Badge className="bg-success text-success-foreground">
+                            <CheckCircle className="mr-1 h-3 w-3" />
+                            Generado
+                          </Badge>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              startTransition(async () => {
                                 try {
-                                  content =
-                                    typeof full?.content === "string"
-                                      ? JSON.parse(full.content).markdown
-                                      : full?.content?.markdown || ""
+                                  const full = await getReportById(report.id)
+                                  let content = ""
+                                  try {
+                                    content =
+                                      typeof full?.content === "string"
+                                        ? JSON.parse(full.content).markdown
+                                        : full?.content?.markdown || ""
+                                  } catch {
+                                    content = ""
+                                  }
+                                  setViewingReport({ title: full?.title || report.title, content })
+                                  setViewingId(report.id)
+                                  setEditTitle(full?.title || report.title)
+                                  setEditContent(content)
+                                  setIsViewOpen(true)
                                 } catch {
-                                  content = ""
+                                  setError("No se pudo cargar el informe")
                                 }
-                                setViewingReport({ title: full?.title || report.title, content })
-                                setViewingId(report.id)
-                                setEditTitle(full?.title || report.title)
-                                setEditContent(content)
-                                setIsViewOpen(true)
-                              } catch {
-                                setError("No se pudo cargar el informe")
-                              }
-                            })
-                          }}
-                        >
-                          <Eye className="mr-2 h-4 w-4" />
-                          Ver
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => {
-                            startTransition(async () => {
-                              try {
-                                const full = await getReportById(report.id)
-                                let content = ""
+                              })
+                            }}
+                          >
+                            <Eye className="mr-2 h-4 w-4" />
+                            Ver
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              startTransition(async () => {
                                 try {
-                                  content =
-                                    typeof full?.content === "string"
-                                      ? JSON.parse(full.content).markdown
-                                      : full?.content?.markdown || ""
+                                  const full = await getReportById(report.id)
+                                  let content = ""
+                                  try {
+                                    content =
+                                      typeof full?.content === "string"
+                                        ? JSON.parse(full.content).markdown
+                                        : full?.content?.markdown || ""
+                                  } catch {
+                                    content = ""
+                                  }
+                                  const blob = new Blob([content || ""], { type: "text/markdown" })
+                                  const url = URL.createObjectURL(blob)
+                                  const a = document.createElement("a")
+                                  a.href = url
+                                  a.download = `${full?.title || report.title || "informe"}.md`
+                                  a.click()
+                                  URL.revokeObjectURL(url)
                                 } catch {
-                                  content = ""
+                                  setError("No se pudo descargar el informe")
                                 }
-                                const blob = new Blob([content || ""], { type: "text/markdown" })
-                                const url = URL.createObjectURL(blob)
-                                const a = document.createElement("a")
-                                a.href = url
-                                a.download = `${full?.title || report.title || "informe"}.md`
-                                a.click()
-                                URL.revokeObjectURL(url)
-                              } catch {
-                                setError("No se pudo descargar el informe")
-                              }
-                            })
-                          }}
-                        >
-                          <Download className="mr-2 h-4 w-4" />
-                          Descargar
-                        </Button>
+                              })
+                            }}
+                          >
+                            <Download className="mr-2 h-4 w-4" />
+                            Descargar
+                          </Button>
+                        </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
         </TabsContent>
       </Tabs>
     </div>

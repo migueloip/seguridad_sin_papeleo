@@ -5,13 +5,28 @@ import { getCurrentUserId } from "@/lib/auth"
 import { revalidatePath } from "next/cache"
 import { toOptionalDate } from "@/lib/utils"
 
-export async function getProjects() {
+export type ProjectRow = {
+  id: number
+  user_id: number
+  name: string
+  location: string | null
+  client: string | null
+  start_date: string | null
+  end_date: string | null
+  status: string
+  created_at: string
+  updated_at: string
+  worker_count: number
+  open_findings: number
+}
+
+export async function getProjects(): Promise<ProjectRow[]> {
   const userId = await getCurrentUserId()
   if (!userId) return []
-  return sql`
+  return sql<ProjectRow>`
     SELECT p.*,
-      (SELECT COUNT(*) FROM workers w WHERE w.project_id = p.id AND w.status = 'active' AND w.user_id = ${userId}) as worker_count,
-      (SELECT COUNT(*) FROM findings f WHERE f.project_id = p.id AND f.status = 'open' AND f.user_id = ${userId}) as open_findings
+      (SELECT COUNT(*)::int FROM workers w WHERE w.project_id = p.id AND w.status = 'active' AND w.user_id = ${userId}) as worker_count,
+      (SELECT COUNT(*)::int FROM findings f WHERE f.project_id = p.id AND f.status = 'open' AND f.user_id = ${userId}) as open_findings
     FROM projects p
     WHERE p.user_id = ${userId}
     ORDER BY p.name

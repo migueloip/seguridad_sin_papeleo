@@ -13,7 +13,7 @@ export default async function PersonnelPage() {
     <DashboardLayout
       user={session ? { email: String(session.email), name: session.name ?? null, role: session.role ?? null } : undefined}
     >
-      <PersonnelContent initialWorkers={workers as any} />
+      <PersonnelContent initialWorkers={workers} />
     </DashboardLayout>
   )
 }

@@ -23,7 +23,7 @@ export default async function Home() {
           </form>
         </header>
         <main className="p-4 md:p-6 lg:p-8">
-          <ProjectsContent initialProjects={projects as any} />
+          <ProjectsContent initialProjects={projects} />
         </main>
       </div>
     </AnimatedPage>

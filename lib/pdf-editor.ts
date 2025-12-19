@@ -26,15 +26,36 @@ export type QuoteItem = {
 
 export type PageSize = "A4" | "Letter" | "Legal"
 
+const escapeHtml = (s: string): string =>
+  s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;")
+
 export type DesignerElement =
   | { id: string; type: "heading"; level: 1 | 2 | 3; text: string; align?: "left" | "center" | "right" }
   | { id: string; type: "text"; html: string; align?: "left" | "center" | "right" }
+  | { id: string; type: "plain_text"; text: string; align?: "left" | "center" | "right" }
+  | {
+      id: string
+      type: "simple_section"
+      title: string
+      subtitle?: string | null
+      body: string
+      bullets?: string[]
+      chips?: string[]
+      align?: "left" | "center" | "right"
+    }
+  | { id: string; type: "list"; ordered?: boolean; items: string[]; align?: "left" | "center" | "right" }
   | { id: string; type: "image"; src: string; alt?: string; widthPct?: number }
   | { id: string; type: "table"; rows: string[][] }
   | { id: string; type: "matrix"; rows: MatrixRow[] }
   | { id: string; type: "quote"; item: QuoteItem }
   | { id: string; type: "docs"; items: DocumentAttachment[] }
   | { id: string; type: "divider" }
+  | { id: string; type: "page_break" }
 
 export type EditorState = {
   pdfFont: "sans-serif" | "serif"
@@ -211,6 +232,33 @@ export function buildDesignerHtmlFromState(s: EditorState): string {
       const align = el.align || "left"
       return `<div style="text-align:${align}">${el.html}</div>`
     }
+    if (el.type === "plain_text") {
+      const align = el.align || "left"
+      return `<div style="text-align:${align};white-space:pre-wrap">${escapeHtml(el.text)}</div>`
+    }
+    if (el.type === "simple_section") {
+      const align = el.align || "left"
+      const title = el.title ? `<h2 style="text-align:${align}">${escapeHtml(el.title)}</h2>` : ""
+      const subtitle = el.subtitle ? `<p style="text-align:${align};color:#374151">${escapeHtml(el.subtitle)}</p>` : ""
+      const body = el.body ? `<div style="text-align:${align};white-space:pre-wrap">${escapeHtml(el.body)}</div>` : ""
+      const bullets =
+        Array.isArray(el.bullets) && el.bullets.length > 0
+          ? `<ul>${el.bullets.map((b) => `<li>${escapeHtml(b)}</li>`).join("")}</ul>`
+          : ""
+      const chips =
+        Array.isArray(el.chips) && el.chips.length > 0
+          ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin:10px 0">${el.chips
+              .map((c) => `<span style="border:1px solid #e5e7eb;border-radius:9999px;padding:3px 10px;font-size:12px">${escapeHtml(c)}</span>`)
+              .join("")}</div>`
+          : ""
+      return `<section>${title}${subtitle}${chips}${body}${bullets}</section>`
+    }
+    if (el.type === "list") {
+      const align = el.align || "left"
+      const tag = el.ordered ? "ol" : "ul"
+      const items = (el.items || []).map((i) => `<li>${escapeHtml(i)}</li>`).join("")
+      return `<div style="text-align:${align}"><${tag}>${items}</${tag}></div>`
+    }
     if (el.type === "image") {
       const w = el.widthPct && el.widthPct > 0 ? `${Math.min(100, Math.max(10, el.widthPct))}%` : "100%"
       return `<div><img src="${el.src}" alt="${el.alt || ""}" style="width:${w};height:auto"/></div>`
@@ -248,6 +296,9 @@ export function buildDesignerHtmlFromState(s: EditorState): string {
     }
     if (el.type === "divider") {
       return `<hr/>`
+    }
+    if (el.type === "page_break") {
+      return `<div style="page-break-after:always"></div>`
     }
     return ""
   })

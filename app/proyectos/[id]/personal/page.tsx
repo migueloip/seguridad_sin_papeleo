@@ -21,7 +21,7 @@ export default async function ProjectPersonnelPage({ params }: { params: Promise
     <DashboardLayout
       user={session ? { email: String(session.email), name: session.name ?? null, role: session.role ?? null } : undefined}
     >
-      <PersonnelContent initialWorkers={workers as any} projectId={id} />
+      <PersonnelContent initialWorkers={workers} projectId={id} />
     </DashboardLayout>
   )
 }

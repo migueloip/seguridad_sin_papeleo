@@ -24,7 +24,7 @@ import Link from "next/link"
 interface Document {
   id: number
   worker_id: number
-  document_type_id: number
+  document_type_id: number | null
   file_name: string
   file_url: string | null
   issue_date: string | null
@@ -32,7 +32,7 @@ interface Document {
   status: string
   first_name: string
   last_name: string
-  rut: string
+  rut: string | null
   document_type: string
   extracted_data?: Record<string, unknown> | null
 }
@@ -83,7 +83,7 @@ export function DocumentsContent({
     const matchesSearch =
       fullName.includes(search.toLowerCase()) ||
       (doc.document_type?.toLowerCase() || "").includes(search.toLowerCase()) ||
-      doc.rut.includes(search)
+      (doc.rut || "").includes(search)
 
     const matchesFilter = filter === "todos" || doc.status === filter
 
@@ -214,7 +214,7 @@ export function DocumentsContent({
     startTransition(async () => {
       const updated = await updateDocument(editDoc.id, {
         worker_id: editDoc.worker_id,
-        document_type_id: editDoc.document_type_id,
+        document_type_id: editDoc.document_type_id ?? undefined,
         issue_date: editDoc.issue_date || undefined,
         expiry_date: editDoc.expiry_date || undefined,
       })
@@ -452,7 +452,7 @@ export function DocumentsContent({
                       <TableCell>
                         {doc.first_name} {doc.last_name}
                       </TableCell>
-                      <TableCell>{doc.rut}</TableCell>
+                      <TableCell>{doc.rut || "-"}</TableCell>
                       <TableCell>{formatDate(doc.issue_date)}</TableCell>
                       <TableCell>{formatDate(doc.expiry_date)}</TableCell>
                       <TableCell>{getStatusBadge(doc.status)}</TableCell>
@@ -495,7 +495,7 @@ export function DocumentsContent({
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground">RUT</p>
-                  <p className="font-medium">{viewDoc.rut}</p>
+                  <p className="font-medium">{viewDoc.rut || "-"}</p>
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground">Tipo</p>
@@ -569,11 +569,11 @@ export function DocumentsContent({
               <div>
                 <Label>Tipo de Documento</Label>
                 <Select
-                  value={String(editDoc.document_type_id)}
+                  value={editDoc.document_type_id ? String(editDoc.document_type_id) : ""}
                   onValueChange={(value) => setEditDoc({ ...editDoc, document_type_id: Number.parseInt(value) })}
                 >
                   <SelectTrigger>
-                    <SelectValue />
+                    <SelectValue placeholder="Selecciona el tipo" />
                   </SelectTrigger>
                   <SelectContent>
                     {documentTypes.map((dt) => (

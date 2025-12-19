@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
-import { Key, Sparkles, Building, Save, Loader2, CheckCircle, Eye, EyeOff, ScanText, Mail } from "lucide-react"
+import { Key, Sparkles, Building, Save, Loader2, CheckCircle, Eye, EyeOff, ScanText } from "lucide-react"
 import { updateSettings, type Setting } from "@/app/actions/settings"
 
 interface SettingsContentProps {
@@ -65,10 +65,6 @@ export function SettingsContent({ initialSettings }: SettingsContentProps) {
           <TabsTrigger value="company" className="flex items-center gap-2">
             <Building className="h-4 w-4" />
             Empresa
-          </TabsTrigger>
-          <TabsTrigger value="mail" className="flex items-center gap-2">
-            <Mail className="h-4 w-4" />
-            Correo
           </TabsTrigger>
         </TabsList>
 
@@ -201,77 +197,6 @@ export function SettingsContent({ initialSettings }: SettingsContentProps) {
                     </p>
                   </CardContent>
                 </Card>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="mail" className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Mail className="h-5 w-5" />
-                Configuracion de Correo SMTP
-              </CardTitle>
-              <CardDescription>Configura el servidor SMTP para notificaciones por email</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="smtp_host">Servidor SMTP (host)</Label>
-                  <Input
-                    id="smtp_host"
-                    value={settings.smtp_host || ""}
-                    onChange={(e) => updateSetting("smtp_host", e.target.value)}
-                    placeholder="smtp.example.com"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="smtp_port">Puerto</Label>
-                  <Input
-                    id="smtp_port"
-                    value={settings.smtp_port || ""}
-                    onChange={(e) => updateSetting("smtp_port", e.target.value)}
-                    placeholder="465 o 587"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="smtp_user">Usuario</Label>
-                  <Input
-                    id="smtp_user"
-                    value={settings.smtp_user || ""}
-                    onChange={(e) => updateSetting("smtp_user", e.target.value)}
-                    placeholder="usuario@example.com"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="smtp_pass">Password</Label>
-                  <Input
-                    id="smtp_pass"
-                    type="password"
-                    value={settings.smtp_pass || ""}
-                    onChange={(e) => updateSetting("smtp_pass", e.target.value)}
-                    placeholder="••••••••"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="smtp_from">Remitente (from)</Label>
-                  <Input
-                    id="smtp_from"
-                    value={settings.smtp_from || ""}
-                    onChange={(e) => updateSetting("smtp_from", e.target.value)}
-                    placeholder="noreply@empresa.cl"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="hr_email">Email RRHH</Label>
-                  <Input
-                    id="hr_email"
-                    value={settings.hr_email || ""}
-                    onChange={(e) => updateSetting("hr_email", e.target.value)}
-                    placeholder="rrhh@empresa.cl"
-                  />
-                </div>
               </div>
             </CardContent>
           </Card>
