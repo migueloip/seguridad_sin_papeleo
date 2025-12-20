@@ -46,7 +46,7 @@ export function createViewer3D(
   const grid = new THREE.GridHelper(50, 50)
   scene.add(grid)
 
-  const elementMeshes = new Map<UUID, THREE.Object3D>()
+  const elementMeshes = new Map<UUID, THREE.Mesh>()
 
   const extrudeWall = (wall: Wall) => {
     const dx = wall.end.x - wall.start.x
@@ -113,6 +113,7 @@ export function createViewer3D(
   const highlightElement = (elementId: UUID | null) => {
     elementMeshes.forEach((mesh, id) => {
       const isHighlighted = elementId && id === elementId
+      if (!(mesh instanceof THREE.Mesh)) return
       const material = mesh.material as THREE.MeshStandardMaterial
       if (Array.isArray(material)) return
       if (isHighlighted) {
@@ -174,4 +175,3 @@ function riskLevelToColor(level: NonNullable<Zone["riskSummary"]>["level"]): num
       return 0x3b82f6
   }
 }
-
