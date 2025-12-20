@@ -527,16 +527,19 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
                 <div>
                   <Label htmlFor="plan_zone">Sector del plano</Label>
                   <Select
-                    value={newFinding.plan_zone_id ? String(newFinding.plan_zone_id) : ""}
+                    value={newFinding.plan_zone_id ? String(newFinding.plan_zone_id) : "none"}
                     onValueChange={(value) =>
-                      setNewFinding({ ...newFinding, plan_zone_id: value ? Number(value) : null })
+                      setNewFinding({
+                        ...newFinding,
+                        plan_zone_id: value === "none" ? null : Number(value),
+                      })
                     }
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Selecciona sector (opcional)" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="">Sin sector</SelectItem>
+                      <SelectItem value="none">Sin sector</SelectItem>
                       {planZones.map((z) => (
                         <SelectItem key={z.id} value={String(z.id)}>
                           {z.plan_name ? `${z.plan_name} · ` : ""}
