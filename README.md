@@ -12,7 +12,7 @@ Base de datos Supabase (proyecto creado y activo)
 
 🚀 Instalación
 Paso 1: Clonar el repositorio
-git clone https://github.com/usuario/ssp.git
+git clone https://github.com/migueloip/seguridad_sin_papeleo
 
 Paso 2: Instalar dependencias
 cd ssp
