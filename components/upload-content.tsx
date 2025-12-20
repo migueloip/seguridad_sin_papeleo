@@ -66,8 +66,8 @@ interface UploadedFile {
       due_date?: string
     }
     checklist?: {
-      name?: string
-      description?: string
+      name?: string | null
+      description?: string | null
       items?: { items: Array<{ id?: string; text: string; checked?: boolean; hasIssue?: boolean; note?: string }> }
     }
   }
