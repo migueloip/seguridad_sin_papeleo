@@ -1,28 +1,45 @@
-App Web Easy secure
+App Web Easy Secure
 
-Instalacion
+Aplicación web enfocada en la gestión y seguridad de información, desarrollada con Node.js y base de datos Supabase.
 
+🧩 Requisitos previos
+
+Asegúrate de tener instalado lo siguiente antes de comenzar:
+
+Node.js (versión recomendada: LTS)
+
+Base de datos Supabase (proyecto creado y activo)
+
+🚀 Instalación
 Paso 1: Clonar el repositorio
-```bash
 git clone https://github.com/usuario/ssp.git
-```
 
 Paso 2: Instalar dependencias
-```bash
 cd ssp
 npm install
-```
-Paso 3: Configurar variables de entorno
-Crea un archivo `.env` en la raiz del proyecto y agrega las siguientes variables:
-```
-DATABASE_URL=postgresql://postgres.rreqlmbvdltudgsurlur:Migiip132%40@aws-0-us-west-2.pooler.supabase.com:6543/postgres?pgbouncer=true
-DIRECT_URL=postgresql://postgres.rreqlmbvdltudgsurlur:Migiip132%40@db.rreqlmbvdltudgsurlur.supabase.co:5432/postgres
-ADMIN_PASSWORD=Migiip132@
-CONFIG_ENCRYPTION_SECRET=Migiip132@
-SUPABASE_URL=https://rreqlmbvdltudgsurlur.supabase.co
-SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJyZXFsbWJ2ZGx0dWRnc3VybHVyIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2NjEwNTQ1NywiZXhwIjoyMDgxNjgxNDU3fQ.i6tf1ebnOGlBAAhUtPCD5Kra8m87c4FQLLGWq6qvH1s
 
-Paso 4: Iniciar la aplicacion
-```bash
+Paso 3: Configurar variables de entorno
+
+Crea un archivo .env en la raíz del proyecto.
+
+⚠️ Por seguridad, las variables de entorno no se incluyen en el repositorio ni en este README.
+Debes definirlas manualmente según tu entorno y tu proyecto de Supabase.
+
+Ejemplo de estructura del archivo .env (valores no incluidos):
+
+DATABASE_URL=
+DIRECT_URL=
+ADMIN_PASSWORD=
+CONFIG_ENCRYPTION_SECRET=
+SUPABASE_URL=
+SUPABASE_SERVICE_KEY=
+
+
+ℹ️ Estas variables son necesarias para la conexión a la base de datos, autenticación administrativa y cifrado de configuración.
+Cada equipo o entorno (desarrollo, staging, producción) debe usar sus propias credenciales.
+
+Paso 4: Iniciar la aplicación
 npm run dev
-```
+
+
+La aplicación quedará disponible en el entorno de desarrollo configurado.
