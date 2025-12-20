@@ -274,6 +274,12 @@ export function PersonnelContent({ initialWorkers, projectId }: { initialWorkers
       return
     }
 
+    const existsWithSameRut = workers.some((w) => normalizeRut(w.rut) === normalized)
+    if (existsWithSameRut) {
+      toast.error("Ya existe un trabajador con este RUT en este proyecto")
+      return
+    }
+
     startTransition(async () => {
       try {
         const created = await createWorker({

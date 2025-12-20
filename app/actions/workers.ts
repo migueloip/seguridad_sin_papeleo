@@ -297,22 +297,28 @@ export async function createWorker(data: {
     LIMIT 1
   `
   if (existingForUser[0]) {
+    throw new Error(`El RUT ${formatRut(norm)} ya existe en este proyecto`)
+  }
+  try {
+    const result = await sql`
+      INSERT INTO workers (rut, first_name, last_name, role, company, phone, email, project_id, user_id)
+      VALUES (${formatRut(norm)}, ${data.first_name}, ${data.last_name}, ${data.role || null}, 
+              ${data.company || null}, ${data.phone || null}, ${data.email || null}, ${data.project_id || null}, ${userId})
+      RETURNING *
+    `
     revalidatePath("/personal")
+    if (data.project_id) {
+      revalidatePath(`/proyectos/${data.project_id}/personal`)
+    }
     revalidatePath("/")
-    return existingForUser[0]
+    return result[0]
+  } catch (error) {
+    const message = error instanceof Error ? error.message : ""
+    if (message.includes("Key (rut)=") && message.includes("already exists")) {
+      throw new Error(`El RUT ${formatRut(norm)} ya existe en este proyecto`)
+    }
+    throw error
   }
-  const result = await sql`
-    INSERT INTO workers (rut, first_name, last_name, role, company, phone, email, project_id, user_id)
-    VALUES (${formatRut(norm)}, ${data.first_name}, ${data.last_name}, ${data.role || null}, 
-            ${data.company || null}, ${data.phone || null}, ${data.email || null}, ${data.project_id || null}, ${userId})
-    RETURNING *
-  `
-  revalidatePath("/personal")
-  if (data.project_id) {
-    revalidatePath(`/proyectos/${data.project_id}/personal`)
-  }
-  revalidatePath("/")
-  return result[0]
 }
 
 export async function updateWorker(

@@ -6,6 +6,7 @@ import { getCurrentUserId } from "@/lib/auth"
 import { revalidatePath } from "next/cache"
 import { formatRut, normalizeRut, isValidRut } from "@/lib/utils"
 import { extractDocumentData } from "./document-processing"
+import { documentTypes as defaultDocumentTypes } from "@/app/data/document-types"
 
 export type DocumentAnalytics = {
   total: number
@@ -127,7 +128,25 @@ export async function getDocuments(workerId?: number): Promise<
 }
 
 export async function getDocumentTypes(): Promise<DocumentType[]> {
-  return sql<DocumentType>`SELECT * FROM document_types ORDER BY name`
+  const existing = await sql<DocumentType>`SELECT * FROM document_types ORDER BY name`
+  const existingNames = new Set(existing.map((dt) => dt.name.toLowerCase()))
+
+  const inserted: DocumentType[] = []
+  for (const dt of defaultDocumentTypes) {
+    if (existingNames.has(dt.name.toLowerCase())) continue
+    const rows = await sql<DocumentType>`
+      INSERT INTO document_types (name, description, validity_days, is_mandatory)
+      VALUES (${dt.name}, NULL, ${dt.validity_days}, false)
+      RETURNING *
+    `
+    if (rows[0]) {
+      inserted.push(rows[0])
+      existingNames.add(rows[0].name.toLowerCase())
+    }
+  }
+
+  const all = [...existing, ...inserted]
+  return all.sort((a, b) => a.name.localeCompare(b.name))
 }
 
 export async function createDocument(data: {
@@ -170,10 +189,12 @@ export async function createDocument(data: {
       if (uploaded) toStoreUrl = uploaded
     }
   }
+  const issueDateParam = data.issue_date ? new Date(data.issue_date) : null
+  const expiryDateParam = data.expiry_date ? new Date(data.expiry_date) : null
   const result = await sql<Document>`
     INSERT INTO documents (worker_id, document_type_id, file_name, file_url, issue_date, expiry_date, status, extracted_data, user_id)
     VALUES (${data.worker_id}, ${data.document_type_id}, ${data.file_name}, ${toStoreUrl},
-            ${data.issue_date || null}, ${data.expiry_date || null}, ${status}, ${data.extracted_data ? JSON.stringify(data.extracted_data) : null}::jsonb, ${userId})
+            ${issueDateParam}, ${expiryDateParam}, ${status}, ${data.extracted_data ? JSON.stringify(data.extracted_data) : null}::jsonb, ${userId})
     RETURNING *
   `
   const [wp] = await sql<{ project_id: number | null }>`SELECT project_id FROM workers WHERE id = ${data.worker_id} LIMIT 1`

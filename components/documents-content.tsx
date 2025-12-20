@@ -555,6 +555,21 @@ export function DocumentsContent({
     setIsViewOpen(true)
   }
 
+  const handleDownloadFile = (doc: Document) => {
+    if (!doc.file_url) {
+      alert("Este documento no tiene archivo asociado")
+      return
+    }
+    const a = document.createElement("a")
+    a.href = doc.file_url
+    a.target = "_blank"
+    a.rel = "noopener noreferrer"
+    a.download = doc.file_name || "documento"
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+  }
+
   const handleDownloadData = (doc: Document) => {
     const payload = {
       rut: doc.rut,
@@ -1021,11 +1036,14 @@ export function DocumentsContent({
                               <Button variant="ghost" size="icon" onClick={() => handleView(doc)}>
                                 <Eye className="h-4 w-4" />
                               </Button>
-                              <Button variant="ghost" size="icon" onClick={() => handleDownloadData(doc)}>
+                              <Button variant="ghost" size="icon" onClick={() => handleDownloadFile(doc)}>
                                 <Download className="h-4 w-4" />
                               </Button>
+                              <Button variant="ghost" size="icon" onClick={() => handleDownloadData(doc)}>
+                                <FileText className="h-4 w-4" />
+                              </Button>
                               <Button variant="ghost" size="icon" onClick={() => handleDelete(doc.id)}>
-                                <Trash2 className="h-4 w-4 text-destructive" />
+                                <Trash2 className="h-4 w-4" />
                               </Button>
                             </div>
                           </TableCell>

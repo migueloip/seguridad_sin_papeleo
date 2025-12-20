@@ -9,10 +9,14 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { AlertTriangle, GripVertical, Trash2, History, Loader2, Sparkles } from "lucide-react"
+import { AlertTriangle, GripVertical, Trash2, History, Loader2, Sparkles, FileText } from "lucide-react"
 import type { DesignerElement, EditorState, MatrixRow, PageSize, Severity, Status } from "@/lib/pdf-editor"
 import { buildDesignerHtmlFromState, buildEditorHtmlFromState, validateEditorState } from "@/lib/pdf-editor"
 import { fillPdfDesignerWithAI, fillMatrixWithAI } from "@/app/actions/reports"
+import { getWorkers } from "@/app/actions/workers"
+import { createDocument, getDocumentTypes } from "@/app/actions/documents"
+import { toast } from "sonner"
+import { useRouter } from "next/navigation"
 
 interface ReportsContentProps {
   initialReports?: unknown[]
@@ -33,6 +37,7 @@ const defaultRow = (): MatrixRow => ({
 export function ReportsContent({ initialReports, projectId }: ReportsContentProps) {
   void initialReports
 
+  const router = useRouter()
   const [mode, setMode] = useState<"form" | "designer">("designer")
   const [brandLogo, setBrandLogo] = useState<string>("")
   const [responsibleName, setResponsibleName] = useState<string>("")
@@ -58,6 +63,18 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
   const [isMatrixElementDialogOpen, setIsMatrixElementDialogOpen] = useState(false)
   const [matrixElementDraftRows, setMatrixElementDraftRows] = useState<MatrixRow[]>([])
   const [editingMatrixElementId, setEditingMatrixElementId] = useState<string | null>(null)
+
+  const [isSaveDialogOpen, setIsSaveDialogOpen] = useState(false)
+  const [saveWorkers, setSaveWorkers] = useState<
+    { id: number; first_name: string; last_name: string; rut: string | null }[]
+  >([])
+  const [saveDocumentTypes, setSaveDocumentTypes] = useState<{ id: number; name: string }[]>([])
+  const [saveWorkerId, setSaveWorkerId] = useState<string>("")
+  const [saveDocumentTypeId, setSaveDocumentTypeId] = useState<string>("")
+  const [saveFileName, setSaveFileName] = useState<string>("")
+  const [saveIssueDate, setSaveIssueDate] = useState<string>(todayIso())
+  const [saveExpiryDate, setSaveExpiryDate] = useState<string>("")
+  const [isSavePending, startSaveTransition] = useTransition()
 
   const [pageSize, setPageSize] = useState<PageSize>("A4")
   const [pageMarginMm, setPageMarginMm] = useState<number>(20)
@@ -111,6 +128,39 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
     }
     requestAnimationFrame(setup)
   }, [isSignatureOpen])
+
+  useEffect(() => {
+    let active = true
+    ;(async () => {
+      try {
+        const workers = await getWorkers(projectId)
+        if (active && Array.isArray(workers)) {
+          setSaveWorkers(
+            workers.map((w) => ({
+              id: Number((w as { id: number }).id),
+              first_name: String((w as { first_name: string }).first_name),
+              last_name: String((w as { last_name: string }).last_name),
+              rut: (w as { rut: string | null }).rut === null || (w as { rut: string | null }).rut === undefined ? null : String((w as { rut: string | null }).rut),
+            })),
+          )
+        }
+      } catch {}
+      try {
+        const types = await getDocumentTypes()
+        if (active && Array.isArray(types)) {
+          setSaveDocumentTypes(
+            types.map((t) => ({
+              id: Number((t as { id: number }).id),
+              name: String((t as { name: string }).name),
+            })),
+          )
+        }
+      } catch {}
+    })()
+    return () => {
+      active = false
+    }
+  }, [projectId])
 
   const editorState = useMemo((): EditorState => {
     const recs = recsText
@@ -183,6 +233,131 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
       } catch (error) {
         console.error(error)
         setEditorAlerts((prev) => [...prev, "Error al rellenar el informe con IA. Revisa la configuración de IA."])
+      }
+    })
+  }
+
+  const handleOpenSaveDialog = () => {
+    if (!saveFileName) {
+      const baseName = coverTitle && coverTitle.trim().length > 0 ? coverTitle.trim() : "informe"
+      setSaveFileName(`${baseName}.pdf`)
+    }
+    setIsSaveDialogOpen(true)
+  }
+
+  const handleSaveToDocuments = () => {
+    validateEditor()
+    if (!saveWorkerId || !saveDocumentTypeId) {
+      toast.error("Selecciona trabajador y tipo de documento")
+      return
+    }
+
+    startSaveTransition(async () => {
+      try {
+        let finalFileName = saveFileName.trim() || coverTitle.trim() || "informe"
+        if (!/\.[a-zA-Z0-9]{2,10}$/.test(finalFileName)) {
+          finalFileName = `${finalFileName}.pdf`
+        } else {
+          finalFileName = finalFileName.replace(/\.[^.]+$/, ".pdf")
+        }
+
+        const fileUrl = await new Promise<string>((resolve, reject) => {
+          const iframe = document.createElement("iframe")
+          iframe.style.position = "fixed"
+          iframe.style.left = "-9999px"
+          iframe.style.top = "0"
+          iframe.style.width = "0"
+          iframe.style.height = "0"
+          iframe.style.border = "0"
+          document.body.appendChild(iframe)
+
+          const cleanup = () => {
+            window.removeEventListener("message", onMessage)
+            if (iframe.parentNode) {
+              iframe.parentNode.removeChild(iframe)
+            }
+          }
+
+          const onMessage = (ev: MessageEvent) => {
+            const data = ev.data as { type?: string; uri?: string; error?: string }
+            if (!data || (data.type !== "REPORT_PDF_READY" && data.type !== "REPORT_PDF_ERROR")) return
+            cleanup()
+            if (data.type === "REPORT_PDF_READY" && data.uri) {
+              resolve(data.uri)
+            } else {
+              reject(new Error(data.error || "Error al generar PDF del informe"))
+            }
+          }
+
+          window.addEventListener("message", onMessage)
+
+          const doc = iframe.contentDocument
+          if (!doc) {
+            cleanup()
+            reject(new Error("No se pudo inicializar el visor de PDF"))
+            return
+          }
+
+          doc.open()
+          doc.write(previewHtml)
+          doc.close()
+
+          const script = doc.createElement("script")
+          script.src = "https://unpkg.com/html2pdf.js@0.10.1/dist/html2pdf.bundle.min.js"
+          script.onload = () => {
+            const inner = doc.createElement("script")
+            inner.text = `
+              (function () {
+                var target = document.body;
+                var opt = {
+                  margin: [10, 10, 10, 10],
+                  filename: 'informe.pdf',
+                  image: { type: 'jpeg', quality: 0.95 },
+                  html2canvas: { scale: 2 },
+                  jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+                };
+                window.html2pdf().from(target).set(opt).outputPdf('datauristring').then(function (uri) {
+                  parent.postMessage({ type: 'REPORT_PDF_READY', uri: uri }, '*');
+                }).catch(function (e) {
+                  parent.postMessage({ type: 'REPORT_PDF_ERROR', error: e && e.message ? e.message : String(e) }, '*');
+                });
+              })();
+            `
+            doc.body.appendChild(inner)
+          }
+          script.onerror = () => {
+            cleanup()
+            reject(new Error("No se pudo cargar el generador de PDF"))
+          }
+          const head = doc.head || doc.getElementsByTagName("head")[0] || doc.body
+          head.appendChild(script)
+        })
+
+        await createDocument({
+          worker_id: Number.parseInt(saveWorkerId, 10),
+          document_type_id: Number.parseInt(saveDocumentTypeId, 10),
+          file_name: finalFileName,
+          file_url: fileUrl,
+          issue_date: saveIssueDate || undefined,
+          expiry_date: saveExpiryDate || undefined,
+          extracted_data: {
+            source: "report",
+            report_title: coverTitle,
+            report_subtitle: coverSubtitle,
+            project_id: projectId ?? null,
+          },
+        })
+
+        toast.success("Informe guardado en Documentos")
+        setIsSaveDialogOpen(false)
+        if (projectId) {
+          router.push(`/proyectos/${projectId}/documentos`)
+        } else {
+          router.push("/documentos")
+        }
+      } catch (error) {
+        console.error(error)
+        toast.error("Error al guardar el informe en Documentos")
       }
     })
   }
@@ -898,6 +1073,10 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
                   <Button variant="secondary" onClick={exportWord}>
                     Exportar Word
                   </Button>
+                  <Button variant="outline" onClick={handleOpenSaveDialog} className="flex items-center gap-2">
+                    <FileText className="h-4 w-4" />
+                    Guardar en Documentos
+                  </Button>
                 </div>
               </CardContent>
               </Card>
@@ -1093,11 +1272,90 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
                 <Button variant="secondary" onClick={exportWord}>
                   Exportar Word
                 </Button>
+                <Button variant="outline" onClick={handleOpenSaveDialog} className="flex items-center gap-2">
+                  <FileText className="h-4 w-4" />
+                  Guardar en Documentos
+                </Button>
               </div>
             </CardContent>
           </Card>
         </TabsContent>
       </Tabs>
+
+      <Dialog open={isSaveDialogOpen} onOpenChange={setIsSaveDialogOpen}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>Guardar informe en Documentos</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div>
+              <div className="text-sm font-medium">Trabajador *</div>
+              <Select value={saveWorkerId} onValueChange={setSaveWorkerId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecciona el trabajador" />
+                </SelectTrigger>
+                <SelectContent>
+                  {saveWorkers.map((w) => (
+                    <SelectItem key={w.id} value={w.id.toString()}>
+                      {w.first_name} {w.last_name}
+                      {w.rut ? ` - ${w.rut}` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <div className="text-sm font-medium">Tipo de documento *</div>
+              <Select value={saveDocumentTypeId} onValueChange={setSaveDocumentTypeId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecciona el tipo" />
+                </SelectTrigger>
+                <SelectContent>
+                  {saveDocumentTypes.map((dt) => (
+                    <SelectItem key={dt.id} value={dt.id.toString()}>
+                      {dt.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <div className="text-sm font-medium">Nombre de archivo</div>
+              <Input
+                value={saveFileName}
+                onChange={(e) => setSaveFileName(e.target.value)}
+                placeholder="informe.pdf"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <div className="text-sm font-medium">Fecha de emisión</div>
+                <Input
+                  type="date"
+                  value={saveIssueDate}
+                  onChange={(e) => setSaveIssueDate(e.target.value)}
+                />
+              </div>
+              <div>
+                <div className="text-sm font-medium">Fecha de vencimiento</div>
+                <Input
+                  type="date"
+                  value={saveExpiryDate}
+                  onChange={(e) => setSaveExpiryDate(e.target.value)}
+                />
+              </div>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setIsSaveDialogOpen(false)}>
+              Cancelar
+            </Button>
+            <Button onClick={handleSaveToDocuments} disabled={isSavePending}>
+              {isSavePending ? "Guardando..." : "Guardar en Documentos"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={isMatrixDialogOpen} onOpenChange={setIsMatrixDialogOpen}>
         <DialogContent

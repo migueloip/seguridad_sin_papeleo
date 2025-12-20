@@ -14,6 +14,7 @@ export const documentTypes = [
   { id: 13, name: "Certificado de Competencias", validity_days: 730 },
   { id: 14, name: "Carnet de Operador", validity_days: 730 },
   { id: 15, name: "Habilitacion Vehicular", validity_days: 365 },
+  { id: 16, name: "Informe", validity_days: null },
 ]
 
 export type DocumentType = (typeof documentTypes)[number]
