@@ -80,6 +80,32 @@ async function ensureAdmonitionsSchema() {
   await schemaEnsured
 }
 
+async function getProjectIdForWorker(workerId: number): Promise<number | null> {
+  try {
+    const rows = await sql<{ project_id: number | null }>`
+      SELECT project_id FROM workers WHERE id = ${workerId} LIMIT 1
+    `
+    return rows[0]?.project_id ?? null
+  } catch {
+    return null
+  }
+}
+
+async function getProjectIdForAdmonition(id: number, userId: number): Promise<number | null> {
+  try {
+    const rows = await sql<{ project_id: number | null }>`
+      SELECT w.project_id
+      FROM admonitions a
+      JOIN workers w ON a.worker_id = w.id
+      WHERE a.id = ${id} AND a.user_id = ${userId}
+      LIMIT 1
+    `
+    return rows[0]?.project_id ?? null
+  } catch {
+    return null
+  }
+}
+
 type CreateAdmonitionInput = {
   worker_id: number
   admonition_date: string
@@ -177,6 +203,10 @@ export async function createAdmonition(data: CreateAdmonitionInput): Promise<Adm
   } catch {}
 
   revalidatePath("/personal")
+  const projectId = await getProjectIdForWorker(data.worker_id)
+  if (projectId) {
+    revalidatePath(`/proyectos/${projectId}/personal`)
+  }
   return inserted
 }
 
@@ -221,6 +251,10 @@ export async function updateAdmonition(id: number, data: UpdateAdmonitionInput):
   }
 
   revalidatePath("/personal")
+  const projectId = await getProjectIdForAdmonition(id, userId)
+  if (projectId) {
+    revalidatePath(`/proyectos/${projectId}/personal`)
+  }
   return updated
 }
 
@@ -234,14 +268,22 @@ export async function archiveAdmonition(id: number): Promise<void> {
     WHERE id = ${id} AND user_id = ${userId}
   `
   revalidatePath("/personal")
+  const projectId = await getProjectIdForAdmonition(id, userId)
+  if (projectId) {
+    revalidatePath(`/proyectos/${projectId}/personal`)
+  }
 }
 
 export async function deleteAdmonition(id: number): Promise<void> {
   const userId = await getCurrentUserId()
   if (!userId) throw new Error("Debes iniciar sesión")
   await ensureAdmonitionsSchema()
+  const projectId = await getProjectIdForAdmonition(id, userId)
   await sql`DELETE FROM admonitions WHERE id = ${id} AND user_id = ${userId}`
   revalidatePath("/personal")
+  if (projectId) {
+    revalidatePath(`/proyectos/${projectId}/personal`)
+  }
 }
 
 export async function getAdmonitionStats(params?: { from?: string; to?: string }) {

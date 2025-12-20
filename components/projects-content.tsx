@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
-import { Plus, LayoutDashboard } from "lucide-react"
+import { Plus, FileText } from "lucide-react"
 import { createProject } from "@/app/actions/projects"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
@@ -74,7 +74,7 @@ export function ProjectsContent({ initialProjects }: { initialProjects: ProjectR
   const openProject = (id: number) => {
     setOpeningProjectId(id)
     setTimeout(() => {
-      router.push(`/proyectos/${id}`)
+      router.push(`/proyectos/${id}/planos`)
     }, 350)
   }
  
@@ -154,8 +154,8 @@ export function ProjectsContent({ initialProjects }: { initialProjects: ProjectR
               <CardContent>
                 <div className="flex gap-2">
                   <Button variant="outline" className="w-full bg-transparent" onClick={() => openProject(p.id)}>
-                    <LayoutDashboard className="mr-2 h-4 w-4" />
-                    Administrar Proyecto
+                    <FileText className="mr-2 h-4 w-4" />
+                    Documentos del proyecto
                   </Button>
                 </div>
               </CardContent>

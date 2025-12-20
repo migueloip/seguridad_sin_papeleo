@@ -44,11 +44,13 @@ describe("buildEditorHtmlFromState", () => {
       recs: ["Acción 1"],
       brandLogo: null,
       responsibleName: "Responsable",
+      responsibleSignatureDataUrl: "data:image/png;base64,AAAA",
       pdfA: false,
       quotes: [{ name: "Persona", role: "Cargo", date: "2024-01-02", content: "Contenido", signatureDataUrl: null }],
     }
     const html = buildEditorHtmlFromState(s)
     expect(html).toMatch(/Citas de Personal/)
+    expect(html).toMatch(/Firma del Prevencionista de Riesgo/)
     expect(html).toMatch(/page-number/)
     expect(html).toMatch(/Responsable: Responsable/)
   })

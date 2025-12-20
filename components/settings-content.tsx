@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
+import { Textarea } from "@/components/ui/textarea"
 import { Key, Sparkles, Building, Save, Loader2, CheckCircle, Eye, EyeOff, ScanText } from "lucide-react"
 import { updateSettings, type Setting } from "@/app/actions/settings"
 
@@ -125,6 +126,20 @@ export function SettingsContent({ initialSettings }: SettingsContentProps) {
                 </div>
                 <p className="text-xs text-muted-foreground">
                   Tu API Key se almacena de forma segura y se usa para generar informes con IA
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="ai_report_style_examples">Formato preferido de informe</Label>
+                <Textarea
+                  id="ai_report_style_examples"
+                  value={settings.ai_report_style_examples || ""}
+                  onChange={(e) => updateSetting("ai_report_style_examples", e.target.value)}
+                  rows={6}
+                  placeholder="Pega ejemplos de informes o describe la estructura estandarizada que usa tu empresa."
+                />
+                <p className="text-xs text-muted-foreground">
+                  La IA usará estos ejemplos como referencia para la forma de datos y el estilo de los informes.
                 </p>
               </div>
 

@@ -210,6 +210,7 @@ export async function generateAIReport(
   const apiKey = await getSetting("ai_api_key")
   const aiModel = (await getSetting("ai_model")) || "gemini-2.5-flash"
   const aiProvider = "google"
+  const styleExamples = (await getSetting("ai_report_style_examples")) || ""
 
   if (!apiKey) {
     const reportTypeMap: Record<string, string> = {
@@ -266,10 +267,16 @@ export async function generateAIReport(
 
   const title = reportTypeMap[reportType] || "Informe de Seguridad"
 
+  const styleBlock = styleExamples
+    ? `\n\nREFERENCIAS_DE_FORMATO_DE_LA_EMPRESA:\n${styleExamples}\n\nRespeta este formato, estructura y terminologia en la medida de lo posible.\n`
+    : ""
+
   const prompt = `Genera un informe profesional de seguridad laboral en espanol con el siguiente formato:
 
 TIPO DE INFORME: ${title}
 PERIODO: ${data.dateFrom} al ${data.dateTo}
+
+${styleBlock}
 
 DATOS DEL SISTEMA:
 - Documentos totales: ${data.documents.total}
@@ -329,6 +336,7 @@ type FillPdfDesignerArgs = {
   projectId?: number
   request?: string
   state: EditorState
+  reportType?: string
 }
 
 const parseJsonFromAiText = (text: string): unknown => {
@@ -492,6 +500,7 @@ export async function fillPdfDesignerWithAI(args: FillPdfDesignerArgs): Promise<
   const state = args.state
   const templateElements = Array.isArray(state.elements) ? (state.elements as DesignerElement[]) : []
   const request = String(args.request || "").trim()
+  const reportType = args.reportType || ""
 
   const fallbackSummary = [
     `Periodo: ${data.dateFrom} al ${data.dateTo}`,
@@ -511,13 +520,163 @@ export async function fillPdfDesignerWithAI(args: FillPdfDesignerArgs): Promise<
     return { coverTitle: state.coverTitle, coverSubtitle: state.coverSubtitle, elements: filled }
   }
 
+  const styleExamples = (await getSetting("ai_report_style_examples")) || ""
+
   const templateJson = {
     coverTitle: state.coverTitle,
     coverSubtitle: state.coverSubtitle,
     elements: templateElements,
   }
 
+  const styleSection = styleExamples
+    ? `\n\nREFERENCIAS_DE_FORMATO_Y_ESTILO_DE_LA_EMPRESA:\n${styleExamples}\n\n`
+    : ""
+
+  const basePrompt = `PROMPT BASE (úsalo en todos)
+(Este va "por debajo" de todos los prompts específicos):
+Actúa como un Prevencionista de Riesgos profesional en Chile, con conocimiento actualizado de:
+- Ley 16.744
+- DS N°40
+- DS N°594
+- DS N°54
+- DS N°67
+- Normativa de la Dirección del Trabajo
+- Requisitos de mutualidades (ACHS, IST, Mutual de Seguridad)
+
+Redacta documentos con:
+- Lenguaje técnico-formal chileno
+- Redacción clara, objetiva y verificable
+- Enfoque preventivo y legal
+- Sin exageraciones ni supuestos no solicitados
+
+Formato del documento:
+- Tamaño carta
+- Márgenes: 2,5 cm en todos los lados
+- Fuente sugerida: Arial 11
+- Interlineado 1,15
+- Títulos en mayúsculas y negrita
+- Numeración clara de secciones`
+
+  const typePrompts: Record<string, string> = {
+    iper: `PROMPT – MATRIZ DE RIESGOS / IPER:
+Elabora una MATRIZ DE IDENTIFICACIÓN DE PELIGROS Y EVALUACIÓN DE RIESGOS (IPER)
+conforme al DS N°40 y DS N°594.
+
+Datos esperados:
+- Empresa: {{empresa}}
+- Área o proceso: {{area}}
+- Tarea evaluada: {{tarea}}
+- Cantidad de trabajadores expuestos: {{cantidad}}
+
+Para cada peligro debes describir:
+- Actividad
+- Peligro identificado
+- Tipo de riesgo (físico, químico, mecánico, ergonómico, psicosocial, biológico)
+- Consecuencia
+- Probabilidad (baja, media, alta)
+- Severidad (leve, grave, fatal)
+- Nivel de riesgo
+- Medidas de control existentes
+- Medidas adicionales recomendadas
+- EPP obligatorio
+
+Presenta la información en formato de tabla y lenguaje técnico, coherente con fiscalizaciones en Chile.`,
+    pts: `PROMPT – PROCEDIMIENTO DE TRABAJO SEGURO (PTS):
+Redacta un PROCEDIMIENTO DE TRABAJO SEGURO (PTS) conforme al DS N°40 y DS N°594.
+
+Datos esperados:
+- Empresa: {{empresa}}
+- Tarea crítica: {{tarea}}
+- Lugar de ejecución: {{lugar}}
+- Equipos y herramientas: {{equipos}}
+- Sustancias involucradas: {{sustancias}}
+
+El documento debe contener:
+1. Objetivo
+2. Alcance
+3. Responsabilidades
+4. Descripción del trabajo paso a paso
+5. Riesgos asociados por etapa
+6. Medidas preventivas y de control
+7. Elementos de protección personal obligatorios
+8. Procedimiento ante emergencias
+9. Aprobación y difusión
+
+Usa redacción clara, aplicable en terreno y válida ante inspección.`,
+    ast: `PROMPT – AST / ATS (Análisis Seguro del Trabajo):
+Genera un ANÁLISIS SEGURO DEL TRABAJO (AST / ATS) conforme a normativa chilena.
+
+Datos esperados:
+- Empresa: {{empresa}}
+- Trabajo a ejecutar: {{trabajo}}
+- Fecha: {{fecha}}
+- Trabajadores participantes: {{trabajadores}}
+
+Para cada etapa del trabajo indica:
+- Paso del trabajo
+- Riesgo asociado
+- Consecuencia posible
+- Medida preventiva
+- EPP requerido
+
+El documento debe ser claro, breve y apto para ser firmado por trabajadores antes de iniciar labores.`,
+    inspection: `PROMPT – INFORME DE INSPECCIÓN DE SEGURIDAD:
+Elabora un INFORME DE INSPECCIÓN DE SEGURIDAD conforme a DS N°594.
+
+Datos esperados:
+- Empresa: {{empresa}}
+- Área inspeccionada: {{area}}
+- Fecha: {{fecha}}
+- Inspector: {{inspector}}
+
+Hallazgos:
+{{hallazgos}}
+
+Para cada hallazgo clasifica como:
+- Conforme
+- No conforme
+- Observación
+
+El informe debe incluir:
+1. Objetivo de la inspección
+2. Metodología
+3. Resultados
+4. No conformidades
+5. Medidas correctivas
+6. Responsable y fecha compromiso
+7. Conclusión
+
+Redacción profesional, objetiva y sin juicios personales.`,
+    accident: `PROMPT – INVESTIGACIÓN DE ACCIDENTE DEL TRABAJO:
+Redacta un INFORME DE INVESTIGACIÓN DE ACCIDENTE DEL TRABAJO conforme a Ley 16.744 y DS N°40.
+
+Datos esperados:
+- Empresa: {{empresa}}
+- Trabajador: {{trabajador}}
+- Cargo: {{cargo}}
+- Fecha y hora del accidente: {{fecha}}
+- Lugar: {{lugar}}
+- Tipo de accidente: {{tipo}}
+- Lesión: {{lesion}}
+
+Desarrolla al menos:
+1. Descripción del accidente
+2. Lesión y consecuencias
+3. Análisis de causas inmediatas y básicas
+4. Medidas correctivas
+5. Conclusión
+6. Firma del prevencionista
+
+Lenguaje técnico, claro y coherente con mutualidades chilenas.`,
+  }
+
+  const selectedTypePrompt = typePrompts[reportType] || ""
+
   const prompt = `Devuelve SOLO JSON válido (sin Markdown, sin explicaciones).
+
+${basePrompt}
+
+${selectedTypePrompt}
 
 OBJETIVO:
 Rellenar el contenido de un documento PDF basado en el diseño del usuario. Debes mantener EXACTAMENTE el mismo formato/estructura del JSON entregado en TEMPLATE_JSON:
@@ -528,7 +687,7 @@ Rellenar el contenido de un documento PDF basado en el diseño del usuario. Debe
 PEDIDO_DEL_USUARIO:
 ${request || "Rellena el documento con información relevante del periodo y recomendaciones."}
 
-DATOS_DEL_SISTEMA (JSON):
+${styleSection}DATOS_DEL_SISTEMA (JSON):
 ${JSON.stringify(data)}
 
 TEMPLATE_JSON (JSON):
@@ -547,6 +706,77 @@ ${JSON.stringify(templateJson)}
   const elements = mergeDesignerElements(templateElements, rec.elements)
 
   return { coverTitle, coverSubtitle, elements }
+}
+
+export async function fillMatrixWithAI(args: { projectId?: number; request?: string }): Promise<MatrixRow[]> {
+  const userId = await getCurrentUserId()
+  if (!userId) {
+    throw new Error("Debes iniciar sesión")
+  }
+  const apiKey = await getSetting("ai_api_key")
+  if (!apiKey) {
+    return []
+  }
+  const aiModel = (await getSetting("ai_model")) || "gemini-2.5-flash"
+  const aiProvider = "google"
+
+  const data = await getReportData("monthly", args.projectId)
+  const request = String(args.request || "").trim()
+
+  const prompt = `Devuelve SOLO JSON válido (sin Markdown, sin texto extra).
+
+Actúa como un Prevencionista de Riesgos en Chile.
+
+Genera una matriz de hallazgos de seguridad a partir de los datos del sistema
+y de las siguientes instrucciones del usuario (puede estar vacío):
+
+INSTRUCCIONES_DEL_USUARIO:
+${request || "Genera hallazgos relevantes para la realidad del proyecto."}
+
+DATOS_DEL_SISTEMA (JSON):
+${JSON.stringify(data)}
+
+El resultado debe ser un arreglo JSON de objetos con estructura:
+[
+  {
+    "description": "texto",
+    "category": "texto o null",
+    "owner": "texto o null",
+    "severity": "alta|medio|bajo",
+    "status": "pendiente|en progreso|resuelto",
+    "date": "AAAA-MM-DD"
+  },
+  ...
+]
+`
+
+  const model = getModel(aiProvider, aiModel, apiKey) as unknown as LanguageModel
+  try {
+    const { text } = await generateText({ model, prompt })
+    const parsed = parseJsonFromAiText(text)
+    const rows = normalizeMatrixRows(parsed)
+    return rows
+  } catch {
+    return []
+  }
+}
+
+export async function rewriteTextWithAI(input: string): Promise<string> {
+  const trimmed = String(input || "").trim()
+  if (!trimmed) return input
+  const apiKey = await getSetting("ai_api_key")
+  if (!apiKey) return input
+  const aiModel = (await getSetting("ai_model")) || "gemini-2.5-flash"
+  const aiProvider = "google"
+  const model = getModel(aiProvider, aiModel, apiKey) as unknown as LanguageModel
+  const prompt = `Reescribe el siguiente texto en español con lenguaje técnico-formal chileno, claro y profesional, manteniendo el significado pero mejorando redacción y coherencia preventiva:\n\n${trimmed}`
+  try {
+    const { text } = await generateText({ model, prompt })
+    const out = String(text || "").trim()
+    return out || input
+  } catch {
+    return input
+  }
 }
 
 export async function getGeneratedReports(projectId?: number) {

@@ -6,6 +6,8 @@ import { redirect } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { AnimatedPage } from "@/components/animated-page"
 
+export const dynamic = "force-dynamic"
+
 export default async function Home() {
   const [projects, session] = await Promise.all([getProjects(), getSession()])
   if (!session) redirect("/auth/login")

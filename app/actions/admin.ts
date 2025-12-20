@@ -1,64 +1,27 @@
 "use server"
 
-import { cookies } from "next/headers"
 import { redirect } from "next/navigation"
-import bcrypt from "bcryptjs"
 import { sql } from "@/lib/db"
 import type { User } from "@/lib/db"
 import { revalidatePath } from "next/cache"
+import { getSession } from "@/lib/auth"
+import bcrypt from "bcryptjs"
 
-function getAdminSecret() {
-  const rawHash = process.env.ADMIN_PASSWORD_HASH || ""
-  const rawPlain = process.env.ADMIN_PASSWORD || ""
-  const sanitize = (v: string) => v.trim().replace(/^['"]|['"]$/g, "")
-  const hash = sanitize(rawHash)
-  const plain = sanitize(rawPlain)
-  return { hash, plain }
-}
-
-export async function isAdminAuthenticated() {
-  const cookieStore = await cookies()
-  const token = cookieStore.get("admin_auth")?.value
-  return Boolean(token)
-}
-
-export async function adminLogin(formData: FormData) {
-  const password = String(formData.get("password") || "").trim()
-  const { hash, plain } = getAdminSecret()
-  if (!hash && !plain) {
-    return redirect("/admin?error=not_configured")
-  }
-  let ok = false
-  if (hash) {
-    ok = await bcrypt.compare(password, hash)
-  } else if (plain) {
-    ok = password === plain
-  }
-  if (!ok) {
-    return redirect("/admin?error=invalid")
-  }
-  const cookieStore = await cookies()
-  cookieStore.set("admin_auth", crypto.randomUUID(), {
-    httpOnly: true,
-    path: "/",
-    sameSite: "lax",
-    maxAge: 60 * 60,
-  })
-  redirect("/admin/usuarios")
-}
-
-export async function adminLogout() {
-  const cookieStore = await cookies()
-  cookieStore.set("admin_auth", "", { path: "/", maxAge: 0 })
-  redirect("/admin")
+export async function requireAdmin() {
+  const session = await getSession()
+  if (!session) redirect("/auth/login")
+  if ((session.role || "user") !== "admin") redirect("/")
+  return session
 }
 
 export async function getAllUsers(): Promise<Array<Pick<User, "id" | "email" | "name" | "role">>> {
+  await requireAdmin()
   const rows = await sql<Pick<User, "id" | "email" | "name" | "role">>`SELECT id, email, name, role FROM users ORDER BY created_at DESC`
   return rows
 }
 
 export async function createUser(formData: FormData) {
+  await requireAdmin()
   const email = String(formData.get("email") || "").trim().toLowerCase()
   const name = String(formData.get("name") || "").trim()
   const password = String(formData.get("password") || "")
@@ -82,6 +45,7 @@ export async function createUser(formData: FormData) {
 }
 
 export async function deleteUser(userId: number) {
+  await requireAdmin()
   await sql`DELETE FROM users WHERE id = ${userId}`
   revalidatePath("/admin/usuarios")
 }

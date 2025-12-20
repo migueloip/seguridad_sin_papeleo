@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server"
 import { sql } from "@/lib/db"
 import { revalidatePath } from "next/cache"
+import { getSession } from "@/lib/auth"
 
 export async function POST(req: Request) {
+  const session = await getSession()
+  if (!session) return NextResponse.redirect(new URL("/auth/login", req.url))
+  if ((session.role || "user") !== "admin") return NextResponse.redirect(new URL("/", req.url))
   const data = await req.formData()
   const idStr = String(data.get("id") || "")
   const id = Number.parseInt(idStr, 10)

@@ -1,28 +1,16 @@
 import { DashboardLayout } from "@/components/dashboard-layout"
-import { getAllUsers, isAdminAuthenticated } from "@/app/actions/admin"
+import { getAllUsers, requireAdmin } from "@/app/actions/admin"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 
 export default async function AdminUsersPage() {
-  const authed = await isAdminAuthenticated()
-  if (!authed) {
-    return (
-      <DashboardLayout>
-        <div className="mx-auto w-full max-w-sm rounded-lg border border-border bg-card p-6">
-          <p className="text-muted-foreground">No autorizado</p>
-        </div>
-      </DashboardLayout>
-    )
-  }
+  await requireAdmin()
   const users = await getAllUsers()
   return (
     <DashboardLayout>
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Usuarios</h1>
-        <form action="/api/admin/logout" method="POST">
-          <Button variant="outline">Salir</Button>
-        </form>
       </div>
       <div className="grid gap-6 md:grid-cols-2">
         <div className="rounded-lg border border-border bg-card p-4">

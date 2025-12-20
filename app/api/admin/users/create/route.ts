@@ -3,8 +3,12 @@ import { sql } from "@/lib/db"
 import type { User } from "@/lib/db"
 import bcrypt from "bcryptjs"
 import { revalidatePath } from "next/cache"
+import { getSession } from "@/lib/auth"
 
 export async function POST(req: Request) {
+  const session = await getSession()
+  if (!session) return NextResponse.redirect(new URL("/auth/login", req.url))
+  if ((session.role || "user") !== "admin") return NextResponse.redirect(new URL("/", req.url))
   const data = await req.formData()
   const email = String(data.get("email") || "").trim().toLowerCase()
   const name = String(data.get("name") || "").trim()

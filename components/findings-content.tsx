@@ -303,13 +303,13 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
           <DialogTrigger asChild>
             <Button>
               <Plus className="mr-2 h-4 w-4" />
-              Nuevo Hallazgo
+              Insertar Hallazgo
             </Button>
           </DialogTrigger>
           <DialogContent className="sm:max-w-[500px] max-h-[85vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>Nuevo Hallazgo</DialogTitle>
-              <DialogDescription>Registra un nuevo hallazgo de seguridad</DialogDescription>
+              <DialogTitle>Insertar Hallazgo</DialogTitle>
+              <DialogDescription>Ingresa los datos completos del nuevo hallazgo</DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
               <div>

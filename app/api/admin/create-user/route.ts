@@ -1,9 +1,13 @@
 import { NextResponse } from "next/server"
 import bcrypt from "bcryptjs"
 import { sql } from "@/lib/db"
+import { getSession } from "@/lib/auth"
 
 export async function POST(req: Request) {
   try {
+    const session = await getSession()
+    if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401 })
+    if ((session.role || "user") !== "admin") return NextResponse.json({ error: "forbidden" }, { status: 403 })
     const body = await req.json()
     const email = String(body.email || "").trim().toLowerCase()
     const password = String(body.password || "")

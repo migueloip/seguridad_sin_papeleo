@@ -69,6 +69,7 @@ export type EditorState = {
   recs: string[]
   brandLogo?: string | null
   responsibleName?: string | null
+  responsibleSignatureDataUrl?: string | null
   pdfA?: boolean
   docs?: DocumentAttachment[]
   quotes?: QuoteItem[]
@@ -81,13 +82,16 @@ export type EditorState = {
 export function validateEditorState(s: EditorState): string[] {
   const alerts: string[] = []
   if (!s.coverTitle.trim()) alerts.push("La portada requiere un título")
+  if (!s.responsibleName || !s.responsibleName.trim()) alerts.push("Falta el nombre del responsable en el pie de página")
+  if (s.designerEnabled) {
+    if (!Array.isArray(s.elements) || s.elements.length === 0) alerts.push("El documento no tiene elementos")
+    return alerts
+  }
   if (!s.summaryText.trim()) alerts.push("El resumen ejecutivo está vacío")
   if (!Array.isArray(s.matrixRows) || s.matrixRows.length === 0) alerts.push("La matriz de hallazgos no tiene filas")
   if (!Array.isArray(s.recs) || s.recs.length === 0) alerts.push("La sección de recomendaciones está vacía")
   if (s.editorSections.includes("docs") && (!Array.isArray(s.docs) || s.docs.length === 0)) alerts.push("La sección de documentos está vacía")
   if (s.editorSections.includes("quotes") && (!Array.isArray(s.quotes) || s.quotes.length === 0)) alerts.push("La sección de citas está vacía")
-  if (!s.responsibleName || !s.responsibleName.trim()) alerts.push("Falta el nombre del responsable en el pie de página")
-  if (s.designerEnabled && (!Array.isArray(s.elements) || s.elements.length === 0)) alerts.push("El documento no tiene elementos")
   return alerts
 }
 
@@ -104,6 +108,9 @@ export function buildEditorHtmlFromState(s: EditorState): string {
     .matrix{width:100%;border-collapse:collapse}
     .matrix th,.matrix td{border:1px solid #e5e7eb;padding:8px;text-align:left}
     .doc-page{page-break-before:always}
+    .signature-block{margin-top:24px;margin-bottom:28mm}
+    .signature-row{display:flex;justify-content:space-between;align-items:flex-end;gap:16px}
+    .signature-img{max-height:80px;max-width:260px}
     .footer{position:fixed;bottom:10mm;left:0;right:0;display:flex;justify-content:space-between;font-size:${s.pdfFontSize - 2}px;color:#374151}
     .page-number:after{content:"Página " counter(page) " de " counter(pages)}
     @page{size:A4;margin:20mm}
@@ -189,6 +196,18 @@ export function buildEditorHtmlFromState(s: EditorState): string {
       <ol>${s.recs.map((i) => `<li>${i}</li>`).join("")}</ol>
     </section>
   `
+  const signature =
+    s.responsibleSignatureDataUrl && String(s.responsibleSignatureDataUrl).startsWith("data:")
+      ? `
+    <section class="signature-block">
+      <h2>Firma del Prevencionista de Riesgo</h2>
+      <div class="signature-row">
+        <div>${s.responsibleName ? escapeHtml(s.responsibleName) : ""}</div>
+        <div><img class="signature-img" src="${s.responsibleSignatureDataUrl}" alt="Firma prevencionista"/></div>
+      </div>
+    </section>
+  `
+      : ""
   const footer = `
     <div class="footer">
       <div>${new Date().toLocaleDateString("es-CL")}</div>
@@ -197,7 +216,7 @@ export function buildEditorHtmlFromState(s: EditorState): string {
     </div>
   `
   const secMap: Record<string, string> = { cover, summary, matrix, recs: recsHtml, docs, quotes }
-  const body = s.editorSections.map((k) => secMap[k]).join("") + footer
+  const body = s.editorSections.map((k) => secMap[k]).join("") + signature + footer
   const meta = s.pdfA ? `<meta name="pdfa" content="true">` : ""
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${s.coverTitle}</title>${meta}${styles}</head><body>${body}</body></html>`
   return html
@@ -217,6 +236,9 @@ export function buildDesignerHtmlFromState(s: EditorState): string {
     img{max-width:100%;height:auto}
     table{border-collapse:collapse;width:100%}
     th,td{border:1px solid #e5e7eb;padding:8px;text-align:left}
+    .signature-block{margin-top:24px;margin-bottom:28mm}
+    .signature-row{display:flex;justify-content:space-between;align-items:flex-end;gap:16px}
+    .signature-img{max-height:80px;max-width:260px}
     .footer{position:fixed;bottom:10mm;left:0;right:0;display:flex;justify-content:space-between;font-size:${s.pdfFontSize - 2}px;color:#374151}
     .page-number:after{content:"Página " counter(page) " de " counter(pages)}
     @page{size:${size};margin:${margin}mm}
@@ -302,6 +324,18 @@ export function buildDesignerHtmlFromState(s: EditorState): string {
     }
     return ""
   })
+  const signature =
+    s.responsibleSignatureDataUrl && String(s.responsibleSignatureDataUrl).startsWith("data:")
+      ? `
+    <section class="signature-block">
+      <h2>Firma del Prevencionista de Riesgo</h2>
+      <div class="signature-row">
+        <div>${s.responsibleName ? escapeHtml(s.responsibleName) : ""}</div>
+        <div><img class="signature-img" src="${s.responsibleSignatureDataUrl}" alt="Firma prevencionista"/></div>
+      </div>
+    </section>
+  `
+      : ""
   const footer = `
     <div class="footer">
       <div>${new Date().toLocaleDateString("es-CL")}</div>
@@ -309,7 +343,7 @@ export function buildDesignerHtmlFromState(s: EditorState): string {
       <div class="page-number"></div>
     </div>
   `
-  const body = `<div class="workspace">${els.join("")}</div>${footer}`
+  const body = `<div class="workspace">${els.join("")}${signature}</div>${footer}`
   const meta = s.pdfA ? `<meta name="pdfa" content="true">` : ""
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${s.coverTitle || "Documento"}</title>${meta}${styles}</head><body>${body}</body></html>`
   return html

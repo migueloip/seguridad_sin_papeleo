@@ -12,6 +12,10 @@ import { revalidatePath } from "next/cache"
 export interface ZoneItem {
   name: string
   code?: string
+  x?: number
+  y?: number
+  width?: number
+  height?: number
 }
 
 export interface FloorItem {
@@ -26,14 +30,34 @@ export async function extractZonesFromPlan(base64Image: string, mimeType: string
   const model = (await getSetting("ai_model")) || "gemini-2.5-flash"
   const prompt =
     `Analiza este plano de obra y devuelve un JSON con las zonas agrupadas por piso.\n` +
-    `Formato:\n` +
+    `Piensa en el plano como un mapa de bloques tipo LEGO.\n` +
+    `Para cada piso, define pocas zonas grandes y funcionales (Sector A, Sector B, Pasillo, Oficinas, Patio, etc.).\n` +
+    `Cuando sea posible, incluye en el nombre una referencia a sus medidas aproximadas\n` +
+    `(por ejemplo: "Sector A (aprox 10x5 m)").\n` +
+    `Cada zona debe incluir una posicion aproximada dentro del plano, usando coordenadas normalizadas\n` +
+    `x, y, width, height en el rango 0 a 1 (0 = borde izquierdo/superior, 1 = borde derecho/inferior).\n` +
+    `Formato EXACTO de respuesta (solo JSON):\n` +
     `{\n` +
     `  "floors": [\n` +
-    `    { "name": "Piso 1", "zones": [ { "name": "Zona A", "code": "A1" }, { "name": "Zona B" } ] },\n` +
-    `    { "name": "Piso 2", "zones": [ { "name": "Sector Norte" } ] }\n` +
+    `    {\n` +
+    `      "name": "Piso 1",\n` +
+    `      "zones": [\n` +
+    `        { "name": "Zona A (aprox 10x5 m)", "code": "A1", "x": 0.1, "y": 0.2, "width": 0.3, "height": 0.15 },\n` +
+    `        { "name": "Zona B", "code": "B1", "x": 0.45, "y": 0.25, "width": 0.25, "height": 0.2 }\n` +
+    `      ]\n` +
+    `    },\n` +
+    `    {\n` +
+    `      "name": "Piso 2",\n` +
+    `      "zones": [ { "name": "Sector Norte", "x": 0.1, "y": 0.05, "width": 0.6, "height": 0.3 } ]\n` +
+    `    }\n` +
     `  ]\n` +
     `}\n` +
-    `Si no puedes inferir el piso, usa "General". Usa nombres cortos y funcionales. Responde solo el JSON.`
+    `Reglas:\n` +
+    `- Si no puedes inferir el piso, usa "General".\n` +
+    `- Usa nombres cortos y funcionales que representen sectores.\n` +
+    `- x, y representan la esquina superior izquierda de la zona dentro del plano.\n` +
+    `- width, height representan el ancho y alto relativos de la zona.\n` +
+    `- Responde SOLO el JSON, sin explicaciones ni markdown.`
   const { text } = await generateText({
     model: getModel(provider, model, apiKey) as unknown as LanguageModel,
     messages: [

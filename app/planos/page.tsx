@@ -2,6 +2,7 @@ import { DashboardLayout } from "@/components/dashboard-layout"
 import { PlansContent } from "@/components/plans-content"
 import { getSession } from "@/lib/auth"
 import { getProjects } from "@/app/actions/projects"
+import { getPlans } from "@/app/actions/plans"
 import { redirect } from "next/navigation"
 
 export default async function PlanosPage() {
@@ -18,9 +19,10 @@ export default async function PlanosPage() {
       return { id, name }
     })
     .filter((p): p is { id: number; name: string } => p !== null)
+  const plans = await getPlans()
   return (
     <DashboardLayout user={{ email: String(session.email), name: session.name ?? null, role: session.role ?? null }}>
-      <PlansContent projects={projects} />
+      <PlansContent projects={projects} plans={plans} />
     </DashboardLayout>
   )
 }

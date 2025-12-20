@@ -22,7 +22,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Progress } from "@/components/ui/progress"
 import { createDocument, findOrCreateWorkerByRut, findDocumentTypeByName } from "@/app/actions/documents"
 import { getWorkers, getWorkerById } from "@/app/actions/workers"
-import { getOcrMethod } from "@/app/actions/ocr"
+import { extractPdfText, getOcrMethod } from "@/app/actions/ocr"
 import { extractDocumentData, classifyUpload } from "@/app/actions/document-processing"
 import { scanFindingImage } from "@/app/actions/findings"
 import { extractChecklistFromImage } from "@/app/actions/checklists"
@@ -196,65 +196,94 @@ export function UploadContent({ projectId }: { projectId?: number }) {
         reader.readAsDataURL(file)
       })
 
-      // For PDFs, show error - Tesseract only works with images
-      if (file.type === "application/pdf") {
-        setFiles((prev) =>
-          prev.map((f) =>
-            f.id === id
-              ? {
-                  ...f,
-                  status: "error",
-                  error: "Tesseract solo soporta imágenes. Use el método IA para PDFs.",
-                }
-              : f,
-          ),
-        )
-        return
+      const recognizeBlobText = async (blob: Blob) => {
+        const Tesseract = await import("tesseract.js")
+        setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, progress: 10 } : f)))
+        const result = await Tesseract.recognize(blob, "spa", {
+          logger: (m) => {
+            if (m.status === "recognizing text") {
+              setFiles((prev) =>
+                prev.map((f) => (f.id === id ? { ...f, progress: Math.round(10 + (m.progress || 0) * 90) } : f)),
+              )
+            }
+          },
+        })
+        return String(result?.data?.text || "")
       }
 
-      // Create an image element and wait for it to load to ensure valid image data
-      const img = new Image()
-      img.crossOrigin = "anonymous"
+      let extractedText = ""
+      let previewDataUrl: string | undefined = file.type === "application/pdf" ? undefined : base64DataUrl
 
-      await new Promise<void>((resolve, reject) => {
-        img.onload = () => resolve()
-        img.onerror = () => reject(new Error("Error loading image"))
-        img.src = base64DataUrl
-      })
+      if (file.type === "application/pdf") {
+        let pdfPreviewBlob: Blob | null = null
+        try {
+          setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, progress: 15 } : f)))
+          extractedText = await extractPdfText(base64DataUrl)
+        } catch {}
 
-      // Create a canvas to get clean image data
-      const canvas = document.createElement("canvas")
-      canvas.width = img.width
-      canvas.height = img.height
-      const ctx = canvas.getContext("2d")
-      if (!ctx) throw new Error("Could not get canvas context")
-      ctx.drawImage(img, 0, 0)
+        try {
+          setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, progress: 20 } : f)))
+          const pdfjs = (await import("pdfjs-dist")) as typeof import("pdfjs-dist")
+          try {
+            pdfjs.GlobalWorkerOptions.workerSrc = "https://unpkg.com/pdfjs-dist@4/build/pdf.worker.min.mjs"
+          } catch {}
+          const buf = await file.arrayBuffer()
+          const loadingTask = pdfjs.getDocument({ data: new Uint8Array(buf) })
+          const pdf = await loadingTask.promise
+          const page = await pdf.getPage(1)
+          const viewport = page.getViewport({ scale: 1.5 })
+          const canvas = document.createElement("canvas")
+          const ctx = canvas.getContext("2d")
+          if (!ctx) throw new Error("Could not get canvas context")
+          canvas.width = viewport.width
+          canvas.height = viewport.height
+          await page.render({ canvasContext: ctx, viewport }).promise
+          previewDataUrl = canvas.toDataURL("image/png")
+          pdfPreviewBlob = await new Promise<Blob>((resolve, reject) => {
+            canvas.toBlob((b) => {
+              if (b) resolve(b)
+              else reject(new Error("Could not create blob"))
+            }, "image/png")
+          })
+        } catch {}
 
-      // Get blob from canvas
-      const blob = await new Promise<Blob>((resolve, reject) => {
-        canvas.toBlob((b) => {
-          if (b) resolve(b)
-          else reject(new Error("Could not create blob"))
-        }, "image/png")
-      })
-
-      // Dynamic import Tesseract to avoid SSR issues
-      const Tesseract = await import("tesseract.js")
-
-      setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, progress: 10 } : f)))
-
-      // Use recognize directly with the blob
-      const result = await Tesseract.recognize(blob, "spa", {
-        logger: (m) => {
-          if (m.status === "recognizing text") {
-            setFiles((prev) =>
-              prev.map((f) => (f.id === id ? { ...f, progress: Math.round(10 + (m.progress || 0) * 90) } : f)),
-            )
+        if (!extractedText || extractedText.trim().length < 40) {
+          if (!pdfPreviewBlob) {
+            throw new Error("No se pudo procesar el PDF localmente")
           }
-        },
-      })
+          extractedText = await recognizeBlobText(pdfPreviewBlob)
+        }
+      } else {
+        // Create an image element and wait for it to load to ensure valid image data
+        const img = new Image()
+        img.crossOrigin = "anonymous"
 
-      const extractedData = extractDataFromText(result.data.text)
+        await new Promise<void>((resolve, reject) => {
+          img.onload = () => resolve()
+          img.onerror = () => reject(new Error("Error loading image"))
+          img.src = base64DataUrl
+        })
+
+        // Create a canvas to get clean image data
+        const canvas = document.createElement("canvas")
+        canvas.width = img.width
+        canvas.height = img.height
+        const ctx = canvas.getContext("2d")
+        if (!ctx) throw new Error("Could not get canvas context")
+        ctx.drawImage(img, 0, 0)
+
+        // Get blob from canvas
+        const blob = await new Promise<Blob>((resolve, reject) => {
+          canvas.toBlob((b) => {
+            if (b) resolve(b)
+            else reject(new Error("Could not create blob"))
+          }, "image/png")
+        })
+
+        extractedText = await recognizeBlobText(blob)
+      }
+
+      const extractedData = extractDataFromText(extractedText)
       const nRut = extractedData.rut ? normalizeRut(extractedData.rut) : null
       const found = nRut ? workers.find((w) => (w.rut ? normalizeRut(w.rut) : "") === nRut) : undefined
 
@@ -269,7 +298,7 @@ export function UploadContent({ projectId }: { projectId?: number }) {
                 editedData: { ...extractedData },
                 selectedWorkerId: found?.id ?? f.selectedWorkerId,
                 target: "document",
-                dataUrl: base64DataUrl,
+                dataUrl: previewDataUrl,
               }
             : f,
         ),
@@ -282,7 +311,7 @@ export function UploadContent({ projectId }: { projectId?: number }) {
             ? {
                 ...f,
                 status: "error",
-                error: "Error al procesar el documento con OCR. Intente con el método IA.",
+                error: "Error al procesar el documento con OCR local. Intente con otra imagen/PDF o use el método IA.",
               }
             : f,
         ),

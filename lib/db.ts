@@ -5,10 +5,12 @@ const globalForPrisma = globalThis as unknown as {
   prisma?: PrismaClient | ReturnType<PrismaClient["$extends"]>
 }
 
-const rawUrl = process.env.DATABASE_URL || ""
-const l = rawUrl.toLowerCase()
-const isAccelerate = !!rawUrl && (l.startsWith("prisma+postgres://") || l.startsWith("prisma://") || l.includes("accelerate.prisma-data.net") || l.includes("db.prisma.io"))
-let dbUrl = rawUrl || "postgresql://postgres:postgres@localhost:5432/ssp?schema=public"
+const databaseUrlRaw = process.env.DATABASE_URL || ""
+const directUrlRaw = process.env.DIRECT_URL || ""
+let dbUrl = databaseUrlRaw || directUrlRaw || "postgresql://postgres:postgres@localhost:5432/ssp?schema=public"
+
+const l = dbUrl.toLowerCase()
+const isAccelerate = !!dbUrl && (l.startsWith("prisma+postgres://") || l.startsWith("prisma://") || l.includes("accelerate.prisma-data.net") || l.includes("db.prisma.io"))
 
 try {
   const u = new URL(dbUrl)
@@ -16,22 +18,31 @@ try {
   const isSupabaseDbHost = h.startsWith("db.") && h.endsWith(".supabase.co")
   const isSupabasePoolerHost = h.endsWith(".pooler.supabase.com")
   const port = u.port || ""
-  const hasPgBouncer = u.searchParams.get("pgbouncer") === "true"
-  if (isSupabaseDbHost && (port === "6543" || hasPgBouncer)) {
-    u.hostname = "aws-0-us-west-2.pooler.supabase.com"
-    u.port = "6543"
-    u.searchParams.set("pgbouncer", "true")
-    dbUrl = u.toString()
-  } else if (isSupabasePoolerHost && port !== "6543") {
-    u.port = "6543"
-    u.searchParams.set("pgbouncer", "true")
-    dbUrl = u.toString()
+  if ((isSupabaseDbHost || isSupabasePoolerHost) && !u.searchParams.get("sslmode")) {
+    u.searchParams.set("sslmode", "require")
   }
+  if (isSupabasePoolerHost && port !== "6543") {
+    u.port = "6543"
+  }
+  if (isSupabasePoolerHost && u.searchParams.get("pgbouncer") !== "true") {
+    u.searchParams.set("pgbouncer", "true")
+  }
+  if (isSupabasePoolerHost && !u.searchParams.get("connection_limit")) {
+    u.searchParams.set("connection_limit", "1")
+  }
+  if (isSupabasePoolerHost && !u.searchParams.get("pool_timeout")) {
+    u.searchParams.set("pool_timeout", "0")
+  }
+  dbUrl = u.toString()
 } catch {}
 
 process.env.DATABASE_URL = dbUrl
-process.env.PRISMA_CLIENT_DATA_PROXY = isAccelerate ? "true" : "false"
-if (!isAccelerate) process.env.PRISMA_ACCELERATE_URL = ""
+if (isAccelerate) {
+  process.env.PRISMA_CLIENT_DATA_PROXY = "true"
+} else {
+  delete process.env.PRISMA_CLIENT_DATA_PROXY
+  delete process.env.PRISMA_ACCELERATE_URL
+}
 
 const base = (globalForPrisma.prisma as PrismaClient | undefined) ?? new PrismaClient({ log: ["error", "warn"] })
 export const prisma = isAccelerate ? base.$extends(withAccelerate()) : base

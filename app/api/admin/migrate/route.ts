@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server"
 import { sql } from "@/lib/db"
+import { getSession } from "@/lib/auth"
 
 export async function POST(req: Request) {
   try {
+    const session = await getSession()
+    if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401 })
+    if ((session.role || "user") !== "admin") return NextResponse.json({ error: "forbidden" }, { status: 403 })
     const url = new URL(req.url)
     const scope = url.searchParams.get("scope")
     if (scope === "admonitions") {
@@ -71,6 +75,12 @@ export async function POST(req: Request) {
     await sql`CREATE INDEX IF NOT EXISTS idx_plans_user ON plans(user_id)`
     await sql`CREATE INDEX IF NOT EXISTS idx_plan_floors_user ON plan_floors(user_id)`
     await sql`CREATE INDEX IF NOT EXISTS idx_plan_zones_user ON plan_zones(user_id)`
+    await sql`ALTER TABLE IF EXISTS plan_zones ADD COLUMN IF NOT EXISTS bounds JSONB`
+    await sql`ALTER TABLE IF EXISTS findings ADD COLUMN IF NOT EXISTS responsible_worker_id INTEGER REFERENCES workers(id) ON DELETE SET NULL`
+    await sql`ALTER TABLE IF EXISTS findings ADD COLUMN IF NOT EXISTS plan_zone_id INTEGER REFERENCES plan_zones(id) ON DELETE SET NULL`
+    await sql`ALTER TABLE IF EXISTS findings ADD COLUMN IF NOT EXISTS related_document_type_ids JSONB`
+    await sql`CREATE INDEX IF NOT EXISTS idx_findings_responsible_worker ON findings(responsible_worker_id)`
+    await sql`CREATE INDEX IF NOT EXISTS idx_findings_plan_zone ON findings(plan_zone_id)`
     await sql`CREATE TABLE IF NOT EXISTS admonitions (id SERIAL PRIMARY KEY, user_id INTEGER REFERENCES users(id) ON DELETE CASCADE, worker_id INTEGER REFERENCES workers(id) ON DELETE CASCADE, admonition_date DATE NOT NULL, admonition_type VARCHAR(50) NOT NULL, reason TEXT NOT NULL, supervisor_signature TEXT, attachments JSONB, status VARCHAR(50) DEFAULT 'active', approval_status VARCHAR(50) DEFAULT 'pending', approved_at TIMESTAMP, rejected_at TIMESTAMP, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`
     await sql`CREATE INDEX IF NOT EXISTS idx_admonitions_user ON admonitions(user_id)`
     await sql`CREATE INDEX IF NOT EXISTS idx_admonitions_worker ON admonitions(worker_id)`

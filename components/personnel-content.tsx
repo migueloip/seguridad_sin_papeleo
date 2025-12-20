@@ -942,6 +942,7 @@ export function PersonnelContent({ initialWorkers, projectId }: { initialWorkers
                       }
                       startTransition(async () => {
                         try {
+                          const workerId = Number(admonitionForm.worker_id)
                           await createAdmonition({
                             worker_id: Number(admonitionForm.worker_id),
                             admonition_date: admonitionForm.admonition_date,
@@ -950,7 +951,14 @@ export function PersonnelContent({ initialWorkers, projectId }: { initialWorkers
                             supervisor_signature: admonitionForm.supervisor_signature,
                             attachments: admonitionForm.attachments,
                           })
-                          setActiveWorkerId(Number(admonitionForm.worker_id))
+                          setWorkers((prev) =>
+                            prev.map((w) =>
+                              w.id === workerId
+                                ? { ...w, admonitions_count: Number(w.admonitions_count || 0) + 1 }
+                                : w,
+                            ),
+                          )
+                          setActiveWorkerId(workerId)
                           toast.success("Amonestación registrada y enviada para aprobación")
                           setAdmonitionForm({
                             worker_id: admonitionForm.worker_id,
@@ -960,6 +968,19 @@ export function PersonnelContent({ initialWorkers, projectId }: { initialWorkers
                             supervisor_signature: "",
                             attachments: [],
                           })
+                          setAdmonitionFilters({
+                            from: "",
+                            to: "",
+                            type: "todos",
+                            status: "todos",
+                            approval_status: "todos",
+                          })
+                          try {
+                            const rows = await getAdmonitions({ worker_id: workerId, type: "todos", status: "todos", approval_status: "todos" })
+                            setAdmonitions(normalizeAdmonitionRows(rows))
+                          } catch {
+                            toast.error("No se pudo actualizar el historial de amonestaciones")
+                          }
                           setAdmonitionTab("history")
                         } catch {
                           toast.error("No se pudo registrar la amonestación")
