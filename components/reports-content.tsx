@@ -12,7 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { AlertTriangle, GripVertical, Trash2, History, Loader2, Sparkles } from "lucide-react"
 import type { DesignerElement, EditorState, MatrixRow, PageSize, Severity, Status } from "@/lib/pdf-editor"
 import { buildDesignerHtmlFromState, buildEditorHtmlFromState, validateEditorState } from "@/lib/pdf-editor"
-import { fillPdfDesignerWithAI, rewriteTextWithAI, fillMatrixWithAI } from "@/app/actions/reports"
+import { fillPdfDesignerWithAI, fillMatrixWithAI } from "@/app/actions/reports"
 
 interface ReportsContentProps {
   initialReports?: unknown[]
@@ -53,8 +53,6 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
   const [isAiPending, startAiTransition] = useTransition()
   const [aiReportType, setAiReportType] = useState<string>("")
   const [isMatrixDialogOpen, setIsMatrixDialogOpen] = useState(false)
-  const [matrixAiRowIndex, setMatrixAiRowIndex] = useState<number | null>(null)
-  const [isMatrixAiPending, startMatrixAiTransition] = useTransition()
   const [isMatrixFillPending, startMatrixFillTransition] = useTransition()
   const [isMatrixElementFillPending, startMatrixElementFillTransition] = useTransition()
   const [isMatrixElementDialogOpen, setIsMatrixElementDialogOpen] = useState(false)
@@ -73,15 +71,19 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
     let mounted = true
     ;(async () => {
       try {
-        const [logoResp, responsibleResp] = await Promise.all([
+        const [logoResp, responsibleResp, signatureResp] = await Promise.all([
           fetch("/api/settings/company-logo"),
           fetch("/api/settings/responsible-name"),
+          fetch("/api/settings/responsible-signature"),
         ])
         const logoJson = await logoResp.json()
         const responsibleJson = await responsibleResp.json()
+        const signatureJson = await signatureResp.json()
         if (!mounted) return
         setBrandLogo(String(logoJson.company_logo || ""))
         setResponsibleName(String(responsibleJson.responsible_name || ""))
+        const sig = signatureJson.responsible_signature
+        setResponsibleSignatureDataUrl(sig ? String(sig) : null)
       } catch {}
     })()
     return () => {
@@ -96,12 +98,11 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
 
     const setup = () => {
       const rect = c.getBoundingClientRect()
-      const dpr = window.devicePixelRatio || 1
-      c.width = Math.max(1, Math.floor(rect.width * dpr))
-      c.height = Math.max(1, Math.floor(rect.height * dpr))
+      c.width = Math.max(1, Math.floor(rect.width))
+      c.height = Math.max(1, Math.floor(rect.height))
       const ctx = c.getContext("2d")
       if (!ctx) return
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      ctx.setTransform(1, 0, 0, 1, 0, 0)
       ctx.lineCap = "round"
       ctx.lineJoin = "round"
       ctx.strokeStyle = "#111827"
@@ -284,6 +285,7 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
                 ref={signatureCanvasRef}
                 className="h-48 w-full touch-none rounded bg-white"
                 onPointerDown={(e) => {
+                  e.preventDefault()
                   const c = signatureCanvasRef.current
                   if (!c) return
                   const ctx = c.getContext("2d")
@@ -293,6 +295,9 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
                   let lastX = e.clientX - rect0.left
                   let lastY = e.clientY - rect0.top
 
+                  ctx.beginPath()
+                  ctx.moveTo(lastX, lastY)
+
                   c.setPointerCapture(e.pointerId)
 
                   const move = (ev: PointerEvent) => {
@@ -301,8 +306,6 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
                     const rect = c.getBoundingClientRect()
                     const x = ev.clientX - rect.left
                     const y = ev.clientY - rect.top
-                    ctx.beginPath()
-                    ctx.moveTo(lastX, lastY)
                     ctx.lineTo(x, y)
                     ctx.stroke()
                     lastX = x
@@ -319,29 +322,35 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
               />
             </div>
             <div className="flex flex-wrap justify-end gap-2">
-              <Button
-                variant="outline"
-                onClick={() => {
-                  const c = signatureCanvasRef.current
-                  if (!c) return
-                  const ctx = c.getContext("2d")
-                  if (!ctx) return
-                  const rect = c.getBoundingClientRect()
-                  ctx.clearRect(0, 0, rect.width, rect.height)
-                }}
-              >
-                Limpiar
-              </Button>
-              <Button
-                onClick={() => {
-                  const c = signatureCanvasRef.current
-                  if (!c) return
-                  setResponsibleSignatureDataUrl(c.toDataURL("image/png"))
-                  setIsSignatureOpen(false)
-                }}
-              >
-                Guardar firma
-              </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    const c = signatureCanvasRef.current
+                    if (!c) return
+                    const ctx = c.getContext("2d")
+                    if (!ctx) return
+                    const rect = c.getBoundingClientRect()
+                    ctx.clearRect(0, 0, rect.width, rect.height)
+                  }}
+                >
+                  Limpiar
+                </Button>
+                <Button
+                  onClick={() => {
+                    const c = signatureCanvasRef.current
+                    if (!c) return
+                    const dataUrl = c.toDataURL("image/png")
+                    setResponsibleSignatureDataUrl(dataUrl)
+                    void fetch("/api/settings/responsible-signature", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ responsible_signature: dataUrl }),
+                    })
+                    setIsSignatureOpen(false)
+                  }}
+                >
+                  Guardar firma
+                </Button>
             </div>
           </div>
         </DialogContent>
@@ -751,7 +760,14 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
                     </Button>
                     <Button
                       variant="outline"
-                      onClick={() => setResponsibleSignatureDataUrl(null)}
+                      onClick={() => {
+                        setResponsibleSignatureDataUrl(null)
+                        void fetch("/api/settings/responsible-signature", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ responsible_signature: "" }),
+                        })
+                      }}
                       disabled={!responsibleSignatureDataUrl}
                     >
                       Quitar
@@ -1049,7 +1065,14 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
                     </Button>
                     <Button
                       variant="outline"
-                      onClick={() => setResponsibleSignatureDataUrl(null)}
+                      onClick={() => {
+                        setResponsibleSignatureDataUrl(null)
+                        void fetch("/api/settings/responsible-signature", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ responsible_signature: "" }),
+                        })
+                      }}
                       disabled={!responsibleSignatureDataUrl}
                     >
                       Quitar
@@ -1142,44 +1165,12 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
                     {matrixRows.map((row, idx) => (
                       <tr key={idx} className="border-t align-top">
                         <td className="px-2 py-1">
-                          <div className="space-y-1">
-                            <Textarea
-                              value={row.description}
-                              onChange={(e) => updateRow(idx, { description: e.target.value })}
-                              rows={3}
-                              className="min-h-[60px] text-xs"
-                            />
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              className="h-7 px-2 text-[11px]"
-                              disabled={isMatrixAiPending && matrixAiRowIndex === idx}
-                              onClick={() => {
-                                const current = row.description || ""
-                                if (!current.trim()) return
-                                startMatrixAiTransition(async () => {
-                                  setMatrixAiRowIndex(idx)
-                                  try {
-                                    const rewritten = await rewriteTextWithAI(current)
-                                    setMatrixRows((rows) =>
-                                      rows.map((r, i) => (i === idx ? { ...r, description: rewritten } : r)),
-                                    )
-                                  } catch {
-                                  } finally {
-                                    setMatrixAiRowIndex((prev) => (prev === idx ? null : prev))
-                                  }
-                                })
-                              }}
-                            >
-                              {isMatrixAiPending && matrixAiRowIndex === idx ? (
-                                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                              ) : (
-                                <Sparkles className="mr-1 h-3 w-3" />
-                              )}
-                              IA
-                            </Button>
-                          </div>
+                          <Textarea
+                            value={row.description}
+                            onChange={(e) => updateRow(idx, { description: e.target.value })}
+                            rows={3}
+                            className="min-h-[60px] text-xs"
+                          />
                         </td>
                         <td className="px-2 py-1">
                           <Input
@@ -1329,52 +1320,18 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
                     {matrixElementDraftRows.map((row, idx) => (
                       <tr key={idx} className="border-t align-top">
                         <td className="px-2 py-1">
-                          <div className="space-y-1">
-                            <Textarea
-                              value={row.description}
-                              onChange={(e) =>
-                                setMatrixElementDraftRows((rows) =>
-                                  rows.map((r, i) =>
-                                    i === idx ? { ...r, description: e.target.value } : r,
-                                  ),
-                                )
-                              }
-                              rows={3}
-                              className="min-h-[60px] text-xs"
-                            />
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              className="h-7 px-2 text-[11px]"
-                              disabled={isMatrixAiPending && matrixAiRowIndex === idx}
-                              onClick={() => {
-                                const current = row.description || ""
-                                if (!current.trim()) return
-                                startMatrixAiTransition(async () => {
-                                  setMatrixAiRowIndex(idx)
-                                  try {
-                                    const rewritten = await rewriteTextWithAI(current)
-                                    setMatrixElementDraftRows((rows) =>
-                                      rows.map((r, i) =>
-                                        i === idx ? { ...r, description: rewritten } : r,
-                                      ),
-                                    )
-                                  } catch {
-                                  } finally {
-                                    setMatrixAiRowIndex((prev) => (prev === idx ? null : prev))
-                                  }
-                                })
-                              }}
-                            >
-                              {isMatrixAiPending && matrixAiRowIndex === idx ? (
-                                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                              ) : (
-                                <Sparkles className="mr-1 h-3 w-3" />
-                              )}
-                              IA
-                            </Button>
-                          </div>
+                          <Textarea
+                            value={row.description}
+                            onChange={(e) =>
+                              setMatrixElementDraftRows((rows) =>
+                                rows.map((r, i) =>
+                                  i === idx ? { ...r, description: e.target.value } : r,
+                                ),
+                              )
+                            }
+                            rows={3}
+                            className="min-h-[60px] text-xs"
+                          />
                         </td>
                         <td className="px-2 py-1">
                           <Input
