@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "prebuild": "node -e \"const fs=require('fs');const path=require('path');const {spawnSync}=require('child_process');const dir=path.join(__dirname,'node_modules','.prisma','client');let hasEngine=false;try{hasEngine=fs.readdirSync(dir).some((n)=>/^query_engine-.*\\\\.node$/.test(n));}catch{}if(!hasEngine){const r=spawnSync('npx prisma generate',{stdio:'inherit',shell:true});process.exit(r.status||1)}\"",
+    "prebuild": "node -e \"const fs=require('fs');const path=require('path');const {spawnSync}=require('child_process');const dir=path.join(__dirname,'node_modules','.prisma','client');let hasEngine=false;try{hasEngine=fs.readdirSync(dir).some((n)=>/^query_engine-.*\\\\.node$/.test(n));}catch{}if(!hasEngine){const r=spawnSync('npx prisma generate',{stdio:'inherit',shell:true});if(r.status&&r.status!==0){process.exit(r.status)}}\"",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
