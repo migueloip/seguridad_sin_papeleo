@@ -52,6 +52,17 @@ CREATE TABLE documents (
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Tabla de documentos subidos desde teléfono (fotos sin procesar)
+CREATE TABLE mobile_documents (
+  id SERIAL PRIMARY KEY,
+  project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+  title VARCHAR(255) NOT NULL,
+  description TEXT,
+  photos JSONB,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Tabla de categorías de checklists
 CREATE TABLE checklist_categories (
   id SERIAL PRIMARY KEY,
@@ -136,6 +147,7 @@ CREATE INDEX idx_workers_rut ON workers(rut);
 CREATE INDEX idx_documents_worker ON documents(worker_id);
 CREATE INDEX idx_documents_expiry ON documents(expiry_date);
 CREATE INDEX idx_documents_status ON documents(status);
+CREATE INDEX idx_mobile_documents_project ON mobile_documents(project_id);
 CREATE INDEX idx_findings_project ON findings(project_id);
 CREATE INDEX idx_findings_status ON findings(status);
 CREATE INDEX idx_findings_severity ON findings(severity);

@@ -176,6 +176,67 @@ export async function getAdmonitions(filters?: {
   return rows
 }
 
+type TimelineMode = "day" | "week" | "month"
+
+function normalizeBucket(raw: string | Date): string {
+  if (typeof raw === "string") {
+    if (raw.length >= 10) return raw.slice(0, 10)
+    const d = new Date(raw)
+    if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10)
+    return raw
+  }
+  return new Date(raw).toISOString().slice(0, 10)
+}
+
+export async function getAdmonitionsTimeline(mode: TimelineMode): Promise<{ bucket: string; count: number }[]> {
+  const userId = await getCurrentUserId()
+  if (!userId) return []
+  await ensureAdmonitionsSchema()
+
+  if (mode === "day") {
+    const rows = await sql<{ bucket: string | Date; count: number }>`
+      SELECT date_trunc('day', admonition_date)::date as bucket, COUNT(*)::int as count
+      FROM admonitions
+      WHERE user_id = ${userId}
+        AND admonition_date >= CURRENT_DATE - INTERVAL '30 days'
+      GROUP BY date_trunc('day', admonition_date)
+      ORDER BY bucket
+    `
+    return rows.map((r) => ({
+      bucket: normalizeBucket(r.bucket),
+      count: Number(r.count || 0),
+    }))
+  }
+
+  if (mode === "week") {
+    const rows = await sql<{ bucket: string | Date; count: number }>`
+      SELECT date_trunc('week', admonition_date)::date as bucket, COUNT(*)::int as count
+      FROM admonitions
+      WHERE user_id = ${userId}
+        AND admonition_date >= CURRENT_DATE - INTERVAL '12 weeks'
+      GROUP BY date_trunc('week', admonition_date)
+      ORDER BY bucket
+    `
+    return rows.map((r) => ({
+      bucket: normalizeBucket(r.bucket),
+      count: Number(r.count || 0),
+    }))
+  }
+
+  const rows = await sql<{ bucket: string | Date; count: number }>`
+    SELECT date_trunc('month', admonition_date)::date as bucket, COUNT(*)::int as count
+    FROM admonitions
+    WHERE user_id = ${userId}
+      AND admonition_date >= CURRENT_DATE - INTERVAL '12 months'
+    GROUP BY date_trunc('month', admonition_date)
+    ORDER BY bucket
+  `
+  return rows.map((r) => ({
+    bucket: normalizeBucket(r.bucket),
+    count: Number(r.count || 0),
+  }))
+}
+
 export async function createAdmonition(data: CreateAdmonitionInput): Promise<Admonition> {
   const userId = await getCurrentUserId()
   if (!userId) throw new Error("Debes iniciar sesión")

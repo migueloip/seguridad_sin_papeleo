@@ -19,6 +19,7 @@ model User {
   projects      Project[]
   workers       Worker[]
   documents     Document[]
+  mobile_documents MobileDocument[]
   findings      Finding[]
   completed     CompletedChecklist[]
   reports       Report[]
@@ -57,6 +58,7 @@ model Project {
   findings   Finding[]
   reports    Report[]
   completed  CompletedChecklist[]
+  mobile_documents MobileDocument[]
 
   @@map("projects")
 }
@@ -140,6 +142,21 @@ model Document {
   document_type    DocumentType? @relation(fields: [document_type_id], references: [id], onDelete: SetNull)
 
   @@map("documents")
+}
+
+model MobileDocument {
+  id          Int      @id @default(autoincrement())
+  user_id     Int?
+  project_id  Int?
+  title       String
+  description String?
+  photos      Json?
+  created_at  DateTime @default(now())
+  updated_at  DateTime @default(now())
+  user        User?    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  project     Project? @relation(fields: [project_id], references: [id], onDelete: SetNull)
+
+  @@map("mobile_documents")
 }
 
 model ChecklistCategory {

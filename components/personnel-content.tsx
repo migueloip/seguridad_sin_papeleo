@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useTransition, useEffect } from "react"
-import { Card, CardContent } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -20,7 +20,8 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Search, Plus, Users, CheckCircle, AlertCircle, FileText, Edit2, Trash2 } from "lucide-react"
-import { createWorker, updateWorker, deleteWorker } from "@/app/actions/workers"
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts"
+import { createWorker, updateWorker, deleteWorker, getWorkerStatsTimeline } from "@/app/actions/workers"
 import { getDocuments, createDocument, findDocumentTypeByName, getDocumentTypes } from "@/app/actions/documents"
 import { createAdmonition, getAdmonitions, deleteAdmonition } from "@/app/actions/admonitions"
 import { useRouter } from "next/navigation"
@@ -106,6 +107,21 @@ export function PersonnelContent({ initialWorkers, projectId }: { initialWorkers
   })
   const [candidateDocs, setCandidateDocs] = useState<CandidateDoc[]>([])
   const [newAttachment, setNewAttachment] = useState<{ file: File | null; file_name: string }>({ file: null, file_name: "" })
+  const [timelineMode, setTimelineMode] = useState<"day" | "week" | "month">("day")
+  const [timelineMetric, setTimelineMetric] = useState<
+    "total" | "complete" | "incomplete" | "critical" | "admonitions"
+  >("admonitions")
+  const [timelineData, setTimelineData] = useState<
+    Array<{
+      label: string
+      total_workers: number
+      complete_workers: number
+      incomplete_workers: number
+      critical_workers: number
+      total_admonitions: number
+    }>
+  >([])
+  const [isTimelineLoading, setIsTimelineLoading] = useState(false)
 
   useEffect(() => {
     if (!isAdmonitionOpen) return
@@ -156,6 +172,37 @@ export function PersonnelContent({ initialWorkers, projectId }: { initialWorkers
     phone: "",
     email: "",
   })
+
+  useEffect(() => {
+    setIsTimelineLoading(true)
+    startTransition(async () => {
+      try {
+        const rows = await getWorkerStatsTimeline(timelineMode)
+        const formatLabel = (bucket: string) => {
+          const d = new Date(bucket)
+          if (!Number.isFinite(d.getTime())) return bucket
+          const day = d.getDate().toString().padStart(2, "0")
+          const month = (d.getMonth() + 1).toString().padStart(2, "0")
+          const year = d.getFullYear()
+          if (timelineMode === "day") return `${day}/${month}`
+          if (timelineMode === "week") return `${day}/${month}`
+          return `${month}/${year}`
+        }
+        setTimelineData(
+          (rows || []).map((r) => ({
+            label: formatLabel(r.bucket as string),
+            total_workers: r.total_workers,
+            complete_workers: r.complete_workers,
+            incomplete_workers: r.incomplete_workers,
+            critical_workers: r.critical_workers,
+            total_admonitions: r.total_admonitions,
+          })),
+        )
+      } catch {
+      }
+      setIsTimelineLoading(false)
+    })
+  }, [timelineMode, startTransition])
 
   const filteredPersonnel = workers.filter((p) => {
     const matchesSearch =
@@ -345,6 +392,7 @@ export function PersonnelContent({ initialWorkers, projectId }: { initialWorkers
     completos: workers.filter((p) => getDocStatus(p) === "completo").length,
     incompletos: workers.filter((p) => getDocStatus(p) === "incompleto").length,
     criticos: workers.filter((p) => getDocStatus(p) === "critico").length,
+    admonitions: workers.reduce((acc, w) => acc + Number(w.admonitions_count || 0), 0),
   }
 
   if (!mounted) return null
@@ -540,9 +588,11 @@ export function PersonnelContent({ initialWorkers, projectId }: { initialWorkers
         </DialogContent>
       </Dialog>
 
-      {/* Stats */}
-      <div className="grid gap-4 sm:grid-cols-4">
-        <Card>
+      <div className="grid gap-4 sm:grid-cols-5">
+        <Card
+          onClick={() => setTimelineMetric("total")}
+          className={timelineMetric === "total" ? "border-primary" : ""}
+        >
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
@@ -553,7 +603,10 @@ export function PersonnelContent({ initialWorkers, projectId }: { initialWorkers
             </div>
           </CardContent>
         </Card>
-        <Card>
+        <Card
+          onClick={() => setTimelineMetric("complete")}
+          className={timelineMetric === "complete" ? "border-primary" : ""}
+        >
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
@@ -564,7 +617,10 @@ export function PersonnelContent({ initialWorkers, projectId }: { initialWorkers
             </div>
           </CardContent>
         </Card>
-        <Card>
+        <Card
+          onClick={() => setTimelineMetric("incomplete")}
+          className={timelineMetric === "incomplete" ? "border-primary" : ""}
+        >
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
@@ -575,7 +631,10 @@ export function PersonnelContent({ initialWorkers, projectId }: { initialWorkers
             </div>
           </CardContent>
         </Card>
-        <Card>
+        <Card
+          onClick={() => setTimelineMetric("critical")}
+          className={timelineMetric === "critical" ? "border-primary" : ""}
+        >
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
@@ -586,7 +645,116 @@ export function PersonnelContent({ initialWorkers, projectId }: { initialWorkers
             </div>
           </CardContent>
         </Card>
+        <Card
+          onClick={() => setTimelineMetric("admonitions")}
+          className={timelineMetric === "admonitions" ? "border-primary" : ""}
+        >
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-muted-foreground">Cartas de amonestación</p>
+                <p className="text-2xl font-bold">{stats.admonitions}</p>
+              </div>
+              <FileText className="h-8 w-8 text-muted-foreground" />
+            </div>
+          </CardContent>
+        </Card>
       </div>
+
+      <Card>
+        <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <CardTitle>
+            {timelineMetric === "total" && "Evolución de trabajadores totales"}
+            {timelineMetric === "complete" && "Evolución de trabajadores con documentación completa"}
+            {timelineMetric === "incomplete" && "Evolución de trabajadores incompletos"}
+            {timelineMetric === "critical" && "Evolución de trabajadores críticos"}
+            {timelineMetric === "admonitions" && "Evolución de cartas de amonestación"}
+          </CardTitle>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant={timelineMode === "day" ? "default" : "outline"}
+              onClick={() => setTimelineMode("day")}
+            >
+              Día a día (1 mes)
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={timelineMode === "week" ? "default" : "outline"}
+              onClick={() => setTimelineMode("week")}
+            >
+              Semana a semana (3 meses)
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={timelineMode === "month" ? "default" : "outline"}
+              onClick={() => setTimelineMode("month")}
+            >
+              Mes a mes
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="h-[260px]">
+            {isTimelineLoading ? (
+              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                Cargando gráfico...
+              </div>
+            ) : timelineData.length === 0 ? (
+              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                Sin cartas de amonestación en el periodo seleccionado
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={timelineData}>
+                  <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+                  <XAxis
+                    dataKey="label"
+                    tick={{ fill: "var(--color-muted-foreground)", fontSize: 11 }}
+                  />
+                  <YAxis tick={{ fill: "var(--color-muted-foreground)", fontSize: 11 }} allowDecimals={false} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "var(--color-card)",
+                      border: "1px solid var(--color-border)",
+                      borderRadius: 8,
+                    }}
+                  />
+                  <Bar
+                    dataKey={
+                      timelineMetric === "total"
+                        ? "total_workers"
+                        : timelineMetric === "complete"
+                          ? "complete_workers"
+                          : timelineMetric === "incomplete"
+                            ? "incomplete_workers"
+                            : timelineMetric === "critical"
+                              ? "critical_workers"
+                              : "total_admonitions"
+                    }
+                    name={
+                      timelineMetric === "total"
+                        ? "Trabajadores"
+                        : timelineMetric === "complete"
+                          ? "Completos"
+                          : timelineMetric === "incomplete"
+                            ? "Incompletos"
+                            : timelineMetric === "critical"
+                              ? "Críticos"
+                              : "Cartas"
+                    }
+                    fill="var(--color-chart-1)"
+                    radius={[4, 4, 0, 0]}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="relative w-full max-w-md">

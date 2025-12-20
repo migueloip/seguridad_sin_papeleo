@@ -29,6 +29,40 @@ export type FindingRow = {
   created_at: string
 }
 
+type FindingTimelineMode = "day" | "week" | "month"
+
+type FindingTimelineRow = {
+  bucket: string
+  created_count: number
+  resolved_count: number
+}
+
+export type FindingAnalytics = {
+  total: number
+  open: number
+  in_progress: number
+  resolved: number
+  overdue: number
+  avg_resolution_days: number | null
+  avg_open_days: number | null
+  top_zones: Array<{
+    label: string
+    floor: string | null
+    total: number
+    open: number
+  }>
+  oldest_open: {
+    id: number
+    title: string
+    severity: string
+    location: string | null
+    project_name: string | null
+    plan_zone_name: string | null
+    created_at: string
+    days_open: number
+  } | null
+}
+
 type FindingsSchemaSupport = {
   responsible_worker_id: boolean
   plan_zone_id: boolean
@@ -99,6 +133,16 @@ async function getFindingsSchemaSupport(): Promise<FindingsSchemaSupport> {
     }
   })()
   return findingsSchemaSupportPromise
+}
+
+function normalizeBucket(raw: string | Date): string {
+  if (typeof raw === "string") {
+    if (raw.length >= 10) return raw.slice(0, 10)
+    const d = new Date(raw)
+    if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10)
+    return raw
+  }
+  return new Date(raw).toISOString().slice(0, 10)
 }
 
 function serializeFindingRow(row: Record<string, unknown>): FindingRow {
@@ -999,6 +1043,484 @@ export async function createFinding(data: {
   const row = await getFindingByIdForUser(findingId, userId)
   if (!row) throw new Error("No se pudo cargar el hallazgo creado")
   return row
+}
+
+export async function getFindingsTimeline(
+  mode: FindingTimelineMode,
+  projectId?: number,
+): Promise<FindingTimelineRow[]> {
+  const userId = await getCurrentUserId()
+  if (!userId) return []
+  const projectParam = projectId ?? null
+
+  if (mode === "day") {
+    const createdRows = await sql<{ bucket: string | Date; count: number }>`
+      SELECT date_trunc('day', f.created_at)::date as bucket, COUNT(*)::int as count
+      FROM findings f
+      LEFT JOIN projects p ON f.project_id = p.id
+      WHERE
+        (${projectParam}::int IS NULL OR f.project_id = ${projectParam}::int)
+        AND (
+          f.user_id = ${userId}
+          OR (f.user_id IS NULL AND p.user_id = ${userId})
+        )
+        AND f.created_at >= CURRENT_DATE - INTERVAL '30 days'
+      GROUP BY date_trunc('day', f.created_at)
+      ORDER BY bucket
+    `
+    const resolvedRows = await sql<{ bucket: string | Date; count: number }>`
+      SELECT date_trunc('day', f.resolved_at)::date as bucket, COUNT(*)::int as count
+      FROM findings f
+      LEFT JOIN projects p ON f.project_id = p.id
+      WHERE
+        (${projectParam}::int IS NULL OR f.project_id = ${projectParam}::int)
+        AND (
+          f.user_id = ${userId}
+          OR (f.user_id IS NULL AND p.user_id = ${userId})
+        )
+        AND f.resolved_at IS NOT NULL
+        AND f.resolved_at >= CURRENT_DATE - INTERVAL '30 days'
+      GROUP BY date_trunc('day', f.resolved_at)
+      ORDER BY bucket
+    `
+    const map = new Map<
+      string,
+      {
+        created_count: number
+        resolved_count: number
+      }
+    >()
+    for (const r of createdRows || []) {
+      const key = normalizeBucket(r.bucket)
+      const prev = map.get(key) || { created_count: 0, resolved_count: 0 }
+      prev.created_count += Number(r.count || 0)
+      map.set(key, prev)
+    }
+    for (const r of resolvedRows || []) {
+      const key = normalizeBucket(r.bucket)
+      const prev = map.get(key) || { created_count: 0, resolved_count: 0 }
+      prev.resolved_count += Number(r.count || 0)
+      map.set(key, prev)
+    }
+    const entries = Array.from(map.entries())
+    entries.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+    return entries.map(([bucket, v]) => ({
+      bucket,
+      created_count: v.created_count,
+      resolved_count: v.resolved_count,
+    }))
+  }
+
+  if (mode === "week") {
+    const createdRows = await sql<{ bucket: string | Date; count: number }>`
+      SELECT date_trunc('week', f.created_at)::date as bucket, COUNT(*)::int as count
+      FROM findings f
+      LEFT JOIN projects p ON f.project_id = p.id
+      WHERE
+        (${projectParam}::int IS NULL OR f.project_id = ${projectParam}::int)
+        AND (
+          f.user_id = ${userId}
+          OR (f.user_id IS NULL AND p.user_id = ${userId})
+        )
+        AND f.created_at >= CURRENT_DATE - INTERVAL '12 weeks'
+      GROUP BY date_trunc('week', f.created_at)
+      ORDER BY bucket
+    `
+    const resolvedRows = await sql<{ bucket: string | Date; count: number }>`
+      SELECT date_trunc('week', f.resolved_at)::date as bucket, COUNT(*)::int as count
+      FROM findings f
+      LEFT JOIN projects p ON f.project_id = p.id
+      WHERE
+        (${projectParam}::int IS NULL OR f.project_id = ${projectParam}::int)
+        AND (
+          f.user_id = ${userId}
+          OR (f.user_id IS NULL AND p.user_id = ${userId})
+        )
+        AND f.resolved_at IS NOT NULL
+        AND f.resolved_at >= CURRENT_DATE - INTERVAL '12 weeks'
+      GROUP BY date_trunc('week', f.resolved_at)
+      ORDER BY bucket
+    `
+    const map = new Map<
+      string,
+      {
+        created_count: number
+        resolved_count: number
+      }
+    >()
+    for (const r of createdRows || []) {
+      const key = normalizeBucket(r.bucket)
+      const prev = map.get(key) || { created_count: 0, resolved_count: 0 }
+      prev.created_count += Number(r.count || 0)
+      map.set(key, prev)
+    }
+    for (const r of resolvedRows || []) {
+      const key = normalizeBucket(r.bucket)
+      const prev = map.get(key) || { created_count: 0, resolved_count: 0 }
+      prev.resolved_count += Number(r.count || 0)
+      map.set(key, prev)
+    }
+    const entries = Array.from(map.entries())
+    entries.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+    return entries.map(([bucket, v]) => ({
+      bucket,
+      created_count: v.created_count,
+      resolved_count: v.resolved_count,
+    }))
+  }
+
+  const createdRows = await sql<{ bucket: string | Date; count: number }>`
+    SELECT date_trunc('month', f.created_at)::date as bucket, COUNT(*)::int as count
+    FROM findings f
+    LEFT JOIN projects p ON f.project_id = p.id
+    WHERE
+      (${projectParam}::int IS NULL OR f.project_id = ${projectParam}::int)
+      AND (
+        f.user_id = ${userId}
+        OR (f.user_id IS NULL AND p.user_id = ${userId})
+      )
+      AND f.created_at >= CURRENT_DATE - INTERVAL '12 months'
+    GROUP BY date_trunc('month', f.created_at)
+    ORDER BY bucket
+  `
+  const resolvedRows = await sql<{ bucket: string | Date; count: number }>`
+    SELECT date_trunc('month', f.resolved_at)::date as bucket, COUNT(*)::int as count
+    FROM findings f
+    LEFT JOIN projects p ON f.project_id = p.id
+    WHERE
+      (${projectParam}::int IS NULL OR f.project_id = ${projectParam}::int)
+      AND (
+        f.user_id = ${userId}
+        OR (f.user_id IS NULL AND p.user_id = ${userId})
+      )
+      AND f.resolved_at IS NOT NULL
+      AND f.resolved_at >= CURRENT_DATE - INTERVAL '12 months'
+    GROUP BY date_trunc('month', f.resolved_at)
+    ORDER BY bucket
+  `
+  const map = new Map<
+    string,
+    {
+      created_count: number
+      resolved_count: number
+    }
+  >()
+  for (const r of createdRows || []) {
+    const key = normalizeBucket(r.bucket)
+    const prev = map.get(key) || { created_count: 0, resolved_count: 0 }
+    prev.created_count += Number(r.count || 0)
+    map.set(key, prev)
+  }
+  for (const r of resolvedRows || []) {
+    const key = normalizeBucket(r.bucket)
+    const prev = map.get(key) || { created_count: 0, resolved_count: 0 }
+    prev.resolved_count += Number(r.count || 0)
+    map.set(key, prev)
+  }
+  const entries = Array.from(map.entries())
+  entries.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+  return entries.map(([bucket, v]) => ({
+    bucket,
+    created_count: v.created_count,
+    resolved_count: v.resolved_count,
+  }))
+}
+
+export async function getFindingAnalytics(projectId?: number): Promise<FindingAnalytics> {
+  const userId = await getCurrentUserId()
+  if (!userId) {
+    return {
+      total: 0,
+      open: 0,
+      in_progress: 0,
+      resolved: 0,
+      overdue: 0,
+      avg_resolution_days: null,
+      avg_open_days: null,
+      top_zones: [],
+      oldest_open: null,
+    }
+  }
+  const projectParam = projectId ?? null
+  const support = await getFindingsSchemaSupport()
+  const hasZone = support.plan_zone_id && support.plan_zones_table
+  const hasFloor = hasZone && support.plan_floors_table
+
+  const countRows = await sql<{
+    total: number
+    open: number
+    in_progress: number
+    resolved: number
+    overdue: number
+  }>`
+    SELECT
+      COUNT(*)::int as total,
+      COUNT(*) FILTER (WHERE f.status = 'open')::int as open,
+      COUNT(*) FILTER (WHERE f.status = 'in_progress')::int as in_progress,
+      COUNT(*) FILTER (WHERE f.status = 'resolved' OR f.status = 'closed')::int as resolved,
+      COUNT(*) FILTER (
+        WHERE
+          (f.status = 'open' OR f.status = 'in_progress')
+          AND f.due_date IS NOT NULL
+          AND f.due_date < CURRENT_DATE
+      )::int as overdue
+    FROM findings f
+    LEFT JOIN projects p ON f.project_id = p.id
+    WHERE
+      (${projectParam}::int IS NULL OR f.project_id = ${projectParam}::int)
+      AND (
+        f.user_id = ${userId}
+        OR (f.user_id IS NULL AND p.user_id = ${userId})
+      )
+  `
+  const counts = countRows[0] || {
+    total: 0,
+    open: 0,
+    in_progress: 0,
+    resolved: 0,
+    overdue: 0,
+  }
+
+  const avgResolutionRows = await sql<{ avg_days: number | null }>`
+    SELECT AVG(EXTRACT(EPOCH FROM (f.resolved_at - f.created_at)) / 86400.0) as avg_days
+    FROM findings f
+    LEFT JOIN projects p ON f.project_id = p.id
+    WHERE
+      f.resolved_at IS NOT NULL
+      AND (${projectParam}::int IS NULL OR f.project_id = ${projectParam}::int)
+      AND (
+        f.user_id = ${userId}
+        OR (f.user_id IS NULL AND p.user_id = ${userId})
+      )
+  `
+  const avgOpenRows = await sql<{ avg_days: number | null }>`
+    SELECT AVG(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - f.created_at)) / 86400.0) as avg_days
+    FROM findings f
+    LEFT JOIN projects p ON f.project_id = p.id
+    WHERE
+      (f.status = 'open' OR f.status = 'in_progress')
+      AND (${projectParam}::int IS NULL OR f.project_id = ${projectParam}::int)
+      AND (
+        f.user_id = ${userId}
+        OR (f.user_id IS NULL AND p.user_id = ${userId})
+      )
+  `
+  const avg_resolution_days =
+    avgResolutionRows[0] && avgResolutionRows[0].avg_days !== null && avgResolutionRows[0].avg_days !== undefined
+      ? Number(avgResolutionRows[0].avg_days)
+      : null
+  const avg_open_days =
+    avgOpenRows[0] && avgOpenRows[0].avg_days !== null && avgOpenRows[0].avg_days !== undefined
+      ? Number(avgOpenRows[0].avg_days)
+      : null
+
+  let topZones: FindingAnalytics["top_zones"] = []
+  if (hasZone) {
+    if (hasFloor) {
+      const rows = await sql<{
+        plan_zone_id: number | null
+        plan_zone_name: string | null
+        plan_floor_name: string | null
+        total: number
+        open: number
+      }>`
+        SELECT
+          z.id as plan_zone_id,
+          z.name as plan_zone_name,
+          pf.name as plan_floor_name,
+          COUNT(*)::int as total,
+          COUNT(*) FILTER (WHERE f.status = 'open' OR f.status = 'in_progress')::int as open
+        FROM findings f
+        JOIN plan_zones z ON f.plan_zone_id = z.id
+        LEFT JOIN plan_floors pf ON z.floor_id = pf.id
+        LEFT JOIN projects p ON f.project_id = p.id
+        WHERE
+          (${projectParam}::int IS NULL OR f.project_id = ${projectParam}::int)
+          AND (
+            f.user_id = ${userId}
+            OR (f.user_id IS NULL AND p.user_id = ${userId})
+          )
+        GROUP BY z.id, z.name, pf.name
+        ORDER BY total DESC
+        LIMIT 5
+      `
+      topZones = (rows || []).map((r) => ({
+        label: r.plan_zone_name || "Zona sin nombre",
+        floor: r.plan_floor_name || null,
+        total: Number(r.total || 0),
+        open: Number(r.open || 0),
+      }))
+    } else {
+      const rows = await sql<{
+        plan_zone_id: number | null
+        plan_zone_name: string | null
+        total: number
+        open: number
+      }>`
+        SELECT
+          z.id as plan_zone_id,
+          z.name as plan_zone_name,
+          COUNT(*)::int as total,
+          COUNT(*) FILTER (WHERE f.status = 'open' OR f.status = 'in_progress')::int as open
+        FROM findings f
+        JOIN plan_zones z ON f.plan_zone_id = z.id
+        LEFT JOIN projects p ON f.project_id = p.id
+        WHERE
+          (${projectParam}::int IS NULL OR f.project_id = ${projectParam}::int)
+          AND (
+            f.user_id = ${userId}
+            OR (f.user_id IS NULL AND p.user_id = ${userId})
+          )
+        GROUP BY z.id, z.name
+        ORDER BY total DESC
+        LIMIT 5
+      `
+      topZones = (rows || []).map((r) => ({
+        label: r.plan_zone_name || "Zona sin nombre",
+        floor: null,
+        total: Number(r.total || 0),
+        open: Number(r.open || 0),
+      }))
+    }
+  } else {
+    const rows = await sql<{
+      label: string | null
+      total: number
+      open: number
+    }>`
+      SELECT
+        COALESCE(f.location, 'Sin ubicación') as label,
+        COUNT(*)::int as total,
+        COUNT(*) FILTER (WHERE f.status = 'open' OR f.status = 'in_progress')::int as open
+      FROM findings f
+      LEFT JOIN projects p ON f.project_id = p.id
+      WHERE
+        (${projectParam}::int IS NULL OR f.project_id = ${projectParam}::int)
+        AND (
+          f.user_id = ${userId}
+          OR (f.user_id IS NULL AND p.user_id = ${userId})
+        )
+      GROUP BY COALESCE(f.location, 'Sin ubicación')
+      ORDER BY total DESC
+      LIMIT 5
+    `
+    topZones = (rows || []).map((r) => ({
+      label: r.label || "Sin ubicación",
+      floor: null,
+      total: Number(r.total || 0),
+      open: Number(r.open || 0),
+    }))
+  }
+
+  let oldestOpen: FindingAnalytics["oldest_open"] = null
+  if (counts.open + counts.in_progress > 0) {
+    if (hasZone) {
+      const rows = await sql<{
+        id: number
+        title: string
+        severity: string
+        location: string | null
+        project_name: string | null
+        plan_zone_name: string | null
+        created_at: Date
+      }>`
+        SELECT
+          f.id,
+          f.title,
+          f.severity,
+          f.location,
+          p.name as project_name,
+          z.name as plan_zone_name,
+          f.created_at
+        FROM findings f
+        LEFT JOIN projects p ON f.project_id = p.id
+        LEFT JOIN plan_zones z ON f.plan_zone_id = z.id
+        WHERE
+          (f.status = 'open' OR f.status = 'in_progress')
+          AND (${projectParam}::int IS NULL OR f.project_id = ${projectParam}::int)
+          AND (
+            f.user_id = ${userId}
+            OR (f.user_id IS NULL AND p.user_id = ${userId})
+          )
+        ORDER BY f.created_at ASC
+        LIMIT 1
+      `
+      const row = rows[0]
+      if (row) {
+        const created =
+          row.created_at instanceof Date ? row.created_at : new Date(String(row.created_at))
+        const now = new Date()
+        const days = Math.floor((now.getTime() - created.getTime()) / (1000 * 60 * 60 * 24))
+        oldestOpen = {
+          id: Number(row.id),
+          title: String(row.title),
+          severity: String(row.severity),
+          location: row.location ?? null,
+          project_name: row.project_name ?? null,
+          plan_zone_name: row.plan_zone_name ?? null,
+          created_at: created.toISOString(),
+          days_open: days,
+        }
+      }
+    } else {
+      const rows = await sql<{
+        id: number
+        title: string
+        severity: string
+        location: string | null
+        project_name: string | null
+        created_at: Date
+      }>`
+        SELECT
+          f.id,
+          f.title,
+          f.severity,
+          f.location,
+          p.name as project_name,
+          f.created_at
+        FROM findings f
+        LEFT JOIN projects p ON f.project_id = p.id
+        WHERE
+          (f.status = 'open' OR f.status = 'in_progress')
+          AND (${projectParam}::int IS NULL OR f.project_id = ${projectParam}::int)
+          AND (
+            f.user_id = ${userId}
+            OR (f.user_id IS NULL AND p.user_id = ${userId})
+          )
+        ORDER BY f.created_at ASC
+        LIMIT 1
+      `
+      const row = rows[0]
+      if (row) {
+        const created =
+          row.created_at instanceof Date ? row.created_at : new Date(String(row.created_at))
+        const now = new Date()
+        const days = Math.floor((now.getTime() - created.getTime()) / (1000 * 60 * 60 * 24))
+        oldestOpen = {
+          id: Number(row.id),
+          title: String(row.title),
+          severity: String(row.severity),
+          location: row.location ?? null,
+          project_name: row.project_name ?? null,
+          plan_zone_name: null,
+          created_at: created.toISOString(),
+          days_open: days,
+        }
+      }
+    }
+  }
+
+  return {
+    total: Number(counts.total || 0),
+    open: Number(counts.open || 0),
+    in_progress: Number(counts.in_progress || 0),
+    resolved: Number(counts.resolved || 0),
+    overdue: Number(counts.overdue || 0),
+    avg_resolution_days,
+    avg_open_days,
+    top_zones: topZones,
+    oldest_open: oldestOpen,
+  }
 }
 
 export async function updateFinding(

@@ -34,6 +34,7 @@ export async function POST(req: Request) {
     await sql`CREATE TABLE IF NOT EXISTS workers (id SERIAL PRIMARY KEY, rut VARCHAR(20) UNIQUE NOT NULL, first_name VARCHAR(100) NOT NULL, last_name VARCHAR(100) NOT NULL, role VARCHAR(100), company VARCHAR(255), phone VARCHAR(20), email VARCHAR(255), project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL, status VARCHAR(50) DEFAULT 'active', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`
     await sql`CREATE TABLE IF NOT EXISTS document_types (id SERIAL PRIMARY KEY, name VARCHAR(100) NOT NULL, description TEXT, validity_days INTEGER, is_mandatory BOOLEAN DEFAULT false, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`
     await sql`CREATE TABLE IF NOT EXISTS documents (id SERIAL PRIMARY KEY, worker_id INTEGER REFERENCES workers(id) ON DELETE CASCADE, document_type_id INTEGER REFERENCES document_types(id) ON DELETE SET NULL, file_name VARCHAR(255) NOT NULL, file_url TEXT, issue_date DATE, expiry_date DATE, status VARCHAR(50) DEFAULT 'valid', extracted_data JSONB, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`
+    await sql`CREATE TABLE IF NOT EXISTS mobile_documents (id SERIAL PRIMARY KEY, project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL, title VARCHAR(255) NOT NULL, description TEXT, photos JSONB, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`
     await sql`CREATE TABLE IF NOT EXISTS checklist_categories (id SERIAL PRIMARY KEY, name VARCHAR(100) NOT NULL, description TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`
     await sql`CREATE TABLE IF NOT EXISTS checklist_templates (id SERIAL PRIMARY KEY, category_id INTEGER REFERENCES checklist_categories(id) ON DELETE SET NULL, name VARCHAR(255) NOT NULL, description TEXT, items JSONB NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`
     await sql`CREATE TABLE IF NOT EXISTS completed_checklists (id SERIAL PRIMARY KEY, template_id INTEGER REFERENCES checklist_templates(id) ON DELETE SET NULL, project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL, inspector_name VARCHAR(255), location VARCHAR(255), completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, responses JSONB NOT NULL, notes TEXT, status VARCHAR(50) DEFAULT 'completed', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`
@@ -48,6 +49,7 @@ export async function POST(req: Request) {
     await sql`CREATE INDEX IF NOT EXISTS idx_documents_worker ON documents(worker_id)`
     await sql`CREATE INDEX IF NOT EXISTS idx_documents_expiry ON documents(expiry_date)`
     await sql`CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status)`
+    await sql`CREATE INDEX IF NOT EXISTS idx_mobile_documents_project ON mobile_documents(project_id)`
     await sql`CREATE INDEX IF NOT EXISTS idx_findings_project ON findings(project_id)`
     await sql`CREATE INDEX IF NOT EXISTS idx_findings_status ON findings(status)`
     await sql`CREATE INDEX IF NOT EXISTS idx_findings_severity ON findings(severity)`
@@ -60,6 +62,7 @@ export async function POST(req: Request) {
     await sql`ALTER TABLE IF EXISTS projects ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`
     await sql`ALTER TABLE IF EXISTS workers ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`
     await sql`ALTER TABLE IF EXISTS documents ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`
+    await sql`ALTER TABLE IF EXISTS mobile_documents ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`
     await sql`ALTER TABLE IF EXISTS findings ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`
     await sql`ALTER TABLE IF EXISTS completed_checklists ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`
     await sql`ALTER TABLE IF EXISTS reports ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`
@@ -69,6 +72,7 @@ export async function POST(req: Request) {
     await sql`CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id)`
     await sql`CREATE INDEX IF NOT EXISTS idx_workers_user ON workers(user_id)`
     await sql`CREATE INDEX IF NOT EXISTS idx_documents_user ON documents(user_id)`
+    await sql`CREATE INDEX IF NOT EXISTS idx_mobile_documents_user ON mobile_documents(user_id)`
     await sql`CREATE INDEX IF NOT EXISTS idx_findings_user ON findings(user_id)`
     await sql`CREATE INDEX IF NOT EXISTS idx_completed_checklists_user ON completed_checklists(user_id)`
     await sql`CREATE INDEX IF NOT EXISTS idx_reports_user ON reports(user_id)`
@@ -125,6 +129,7 @@ export async function POST(req: Request) {
     await sql`ALTER TABLE projects ENABLE ROW LEVEL SECURITY`
     await sql`ALTER TABLE workers ENABLE ROW LEVEL SECURITY`
     await sql`ALTER TABLE documents ENABLE ROW LEVEL SECURITY`
+    await sql`ALTER TABLE mobile_documents ENABLE ROW LEVEL SECURITY`
     await sql`ALTER TABLE findings ENABLE ROW LEVEL SECURITY`
     await sql`ALTER TABLE completed_checklists ENABLE ROW LEVEL SECURITY`
     await sql`ALTER TABLE reports ENABLE ROW LEVEL SECURITY`
@@ -165,6 +170,15 @@ export async function POST(req: Request) {
     await sql`CREATE POLICY insert_documents_own ON documents FOR INSERT TO authenticated WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
     await sql`CREATE POLICY update_documents_own ON documents FOR UPDATE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id) WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
     await sql`CREATE POLICY delete_documents_own ON documents FOR DELETE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
+
+    await sql`DROP POLICY IF EXISTS select_mobile_documents_own ON mobile_documents`
+    await sql`DROP POLICY IF EXISTS insert_mobile_documents_own ON mobile_documents`
+    await sql`DROP POLICY IF EXISTS update_mobile_documents_own ON mobile_documents`
+    await sql`DROP POLICY IF EXISTS delete_mobile_documents_own ON mobile_documents`
+    await sql`CREATE POLICY select_mobile_documents_own ON mobile_documents FOR SELECT TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
+    await sql`CREATE POLICY insert_mobile_documents_own ON mobile_documents FOR INSERT TO authenticated WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
+    await sql`CREATE POLICY update_mobile_documents_own ON mobile_documents FOR UPDATE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id) WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
+    await sql`CREATE POLICY delete_mobile_documents_own ON mobile_documents FOR DELETE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
 
     await sql`DROP POLICY IF EXISTS select_findings_own ON findings`
     await sql`DROP POLICY IF EXISTS insert_findings_own ON findings`

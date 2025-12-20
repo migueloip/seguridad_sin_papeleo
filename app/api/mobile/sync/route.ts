@@ -2,7 +2,7 @@ import { NextResponse } from "next/server"
 import { sql } from "@/lib/db"
 import { getMobileSessionFromRequest } from "@/lib/mobile-auth"
 
-type EntityName = "projects" | "workers" | "findings"
+type EntityName = "projects" | "workers" | "findings" | "mobile_documents"
 type OutboxOp = "create" | "update" | "delete"
 
 type SyncOutboxItem = {
@@ -265,9 +265,17 @@ export async function POST(req: Request) {
           const responsiblePerson = asNullableString(data.responsible_person)
           const dueDate = toDateOrNull(data.due_date)
           const resolutionNotes = asNullableString(data.resolution_notes)
+          const photosRaw = (data as Record<string, unknown>).photos
+          let photosJson: string | null = null
+          if (Array.isArray(photosRaw)) {
+            const arr = photosRaw.filter((p): p is string => typeof p === "string")
+            if (arr.length > 0) photosJson = JSON.stringify(arr)
+          } else if (typeof photosRaw === "string" && photosRaw) {
+            photosJson = JSON.stringify([photosRaw])
+          }
           const rows = await sql<{ id: number }>`
             INSERT INTO findings (
-              user_id, project_id, title, description, severity, location, responsible_person, due_date, resolution_notes, status
+              user_id, project_id, title, description, severity, location, responsible_person, due_date, resolution_notes, status, photos
             )
             VALUES (
               ${userId},
@@ -279,7 +287,8 @@ export async function POST(req: Request) {
               ${responsiblePerson},
               ${dueDate},
               ${resolutionNotes},
-              ${status}
+              ${status},
+              ${photosJson}::jsonb
             )
             RETURNING id
           `
@@ -311,6 +320,14 @@ export async function POST(req: Request) {
           const responsiblePerson = asNullableString(data.responsible_person)
           const dueDate = toDateOrNull(data.due_date)
           const resolutionNotes = asNullableString(data.resolution_notes)
+          const photosRaw = (data as Record<string, unknown>).photos
+          let photosJson: string | null = null
+          if (Array.isArray(photosRaw)) {
+            const arr = photosRaw.filter((p): p is string => typeof p === "string")
+            if (arr.length > 0) photosJson = JSON.stringify(arr)
+          } else if (typeof photosRaw === "string" && photosRaw) {
+            photosJson = JSON.stringify([photosRaw])
+          }
           await sql`
             UPDATE findings
             SET
@@ -323,6 +340,7 @@ export async function POST(req: Request) {
               due_date = ${dueDate},
               resolution_notes = ${resolutionNotes},
               status = ${status},
+              photos = COALESCE(${photosJson}::jsonb, photos),
               updated_at = CURRENT_TIMESTAMP
             WHERE id = ${remoteId} AND user_id = ${userId}
           `
@@ -337,6 +355,88 @@ export async function POST(req: Request) {
           }
           await sql`DELETE FROM findings WHERE id = ${remoteId} AND user_id = ${userId}`
           await insertTombstone(userId, "findings", remoteId)
+          appliedOutboxIds.push(item.id)
+          continue
+        }
+      }
+
+      if (item.entity === "mobile_documents") {
+        if (item.op === "create") {
+          const projectId = asNullableNumber(data.project_remote_id)
+          const title = asString(data.title, "")
+          const description = asNullableString(data.description)
+          const photosRaw = (data as Record<string, unknown>).photos
+          let photosJson: string | null = null
+          if (Array.isArray(photosRaw)) {
+            const arr = photosRaw.filter((p): p is string => typeof p === "string")
+            if (arr.length > 0) photosJson = JSON.stringify(arr)
+          } else if (typeof photosRaw === "string" && photosRaw) {
+            photosJson = JSON.stringify([photosRaw])
+          }
+          const rows = await sql<{ id: number }>`
+            INSERT INTO mobile_documents (
+              user_id, project_id, title, description, photos
+            )
+            VALUES (
+              ${userId},
+              ${projectId},
+              ${title},
+              ${description},
+              ${photosJson}::jsonb
+            )
+            RETURNING id
+          `
+          const remoteId = Number(rows[0]?.id)
+          if (!Number.isFinite(remoteId)) throw new Error("no id")
+          idMap.push({ entity: "mobile_documents", local_id: item.local_id, remote_id: remoteId })
+          appliedOutboxIds.push(item.id)
+          continue
+        }
+        if (item.op === "update") {
+          const remoteId = item.remote_id
+          if (!remoteId) throw new Error("remote_id requerido")
+          const server = await sql<{ updated_at: Date }>`
+            SELECT updated_at FROM mobile_documents WHERE id = ${remoteId} AND user_id = ${userId} LIMIT 1
+          `
+          const serverUpdated = server[0]?.updated_at ? new Date(server[0].updated_at) : null
+          const clientUpdated = toDateOrNull(data.updated_at)
+          if (serverUpdated && clientUpdated && serverUpdated.getTime() > clientUpdated.getTime()) {
+            const serverRow = await sql`SELECT * FROM mobile_documents WHERE id = ${remoteId} AND user_id = ${userId} LIMIT 1`
+            conflicts.push({ outbox_id: item.id, entity: "mobile_documents", remote_id: remoteId, reason: "conflicto: servidor más reciente", server_row: serverRow[0] || null })
+            continue
+          }
+          const projectId = asNullableNumber(data.project_remote_id)
+          const title = asString(data.title, "")
+          const description = asNullableString(data.description)
+          const photosRaw = (data as Record<string, unknown>).photos
+          let photosJson: string | null = null
+          if (Array.isArray(photosRaw)) {
+            const arr = photosRaw.filter((p): p is string => typeof p === "string")
+            if (arr.length > 0) photosJson = JSON.stringify(arr)
+          } else if (typeof photosRaw === "string" && photosRaw) {
+            photosJson = JSON.stringify([photosRaw])
+          }
+          await sql`
+            UPDATE mobile_documents
+            SET
+              project_id = ${projectId},
+              title = ${title},
+              description = ${description},
+              photos = COALESCE(${photosJson}::jsonb, photos),
+              updated_at = CURRENT_TIMESTAMP
+            WHERE id = ${remoteId} AND user_id = ${userId}
+          `
+          appliedOutboxIds.push(item.id)
+          continue
+        }
+        if (item.op === "delete") {
+          const remoteId = item.remote_id
+          if (!remoteId) {
+            appliedOutboxIds.push(item.id)
+            continue
+          }
+          await sql`DELETE FROM mobile_documents WHERE id = ${remoteId} AND user_id = ${userId}`
+          await insertTombstone(userId, "mobile_documents", remoteId)
           appliedOutboxIds.push(item.id)
           continue
         }
@@ -420,6 +520,7 @@ export async function POST(req: Request) {
     responsible_person: string | null
     due_date: string | null
     resolution_notes: string | null
+    photos: string[] | null
     created_at: string
     updated_at: string
   }>`
@@ -434,11 +535,59 @@ export async function POST(req: Request) {
       responsible_person,
       due_date::text as due_date,
       resolution_notes,
+      photos,
       created_at::text as created_at,
       updated_at::text as updated_at
     FROM findings
     WHERE user_id = ${userId}
       AND updated_at > ${lastSyncDate}
+  `
+
+  const mobileDocuments = await sql<{
+    id: number
+    project_id: number | null
+    title: string
+    description: string | null
+    photos: string[] | null
+    created_at: string
+    updated_at: string
+  }>`
+    SELECT
+      id,
+      project_id,
+      title,
+      description,
+      photos,
+      created_at::text as created_at,
+      updated_at::text as updated_at
+    FROM mobile_documents
+    WHERE user_id = ${userId}
+      AND updated_at > ${lastSyncDate}
+  `
+
+  const admonitions = await sql<{
+    id: number
+    worker_id: number | null
+    admonition_date: string
+    admonition_type: string
+    reason: string
+    status: string
+    approval_status: string
+    created_at: string
+    updated_at: string
+  }>`
+    SELECT
+      id,
+      worker_id,
+      admonition_date::text as admonition_date,
+      admonition_type,
+      reason,
+      status,
+      approval_status,
+      created_at::text as created_at,
+      updated_at::text as updated_at
+    FROM admonitions
+    WHERE user_id = ${userId}
   `
 
   await ensureTombstonesTable()
@@ -453,7 +602,7 @@ export async function POST(req: Request) {
     now,
     appliedOutboxIds,
     idMap,
-    changes: { projects, workers, findings },
+    changes: { projects, workers, findings, mobile_documents: mobileDocuments, admonitions },
     tombstones,
     conflicts,
   })

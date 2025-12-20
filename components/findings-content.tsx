@@ -17,7 +17,17 @@ import {
 } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { AlertTriangle, Plus, Clock, CheckCircle, MapPin, User, Calendar, Edit2, Trash2 } from "lucide-react"
-import { updateFinding, createFinding, scanFindingImage, generateCorrectiveAction, deleteFinding } from "@/app/actions/findings"
+import {
+  updateFinding,
+  createFinding,
+  scanFindingImage,
+  generateCorrectiveAction,
+  deleteFinding,
+  getFindingsTimeline,
+  getFindingAnalytics,
+} from "@/app/actions/findings"
+import { getPlanZonesByProject } from "@/app/actions/plans"
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts"
 import { useRouter } from "next/navigation"
 
 interface Finding {
@@ -29,10 +39,54 @@ interface Finding {
   severity: string
   status: string
   project_name: string | null
+  plan_zone_id?: number | null
+  plan_zone_name?: string | null
+  plan_floor_name?: string | null
   due_date: string | null
   resolution_notes?: string | null
   photos?: string[] | null
   created_at: string
+}
+
+type FindingsTimelinePoint = {
+  label: string
+  created: number
+  resolved: number
+}
+
+type FindingsAnalyticsState = {
+  total: number
+  open: number
+  in_progress: number
+  resolved: number
+  overdue: number
+  avg_resolution_days: number | null
+  avg_open_days: number | null
+  top_zones: Array<{
+    label: string
+    floor: string | null
+    total: number
+    open: number
+  }>
+  oldest_open: {
+    id: number
+    title: string
+    severity: string
+    location: string | null
+    project_name: string | null
+    plan_zone_name: string | null
+    created_at: string
+    days_open: number
+  } | null
+}
+
+type PlanZoneOption = {
+  id: number
+  name: string
+  code: string | null
+  floor_name: string | null
+  plan_name: string | null
+  project_id: number | null
 }
 
 async function prepareImageForVision(dataUrl: string): Promise<{ dataUrl: string; mime: string; base64: string }> {
@@ -85,6 +139,7 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
     location: "",
     responsible_person: "",
     due_date: "",
+    plan_zone_id: null as number | null,
   })
   const [imageDataUrl, setImageDataUrl] = useState<string>("")
   const [imageMimeType, setImageMimeType] = useState<string>("")
@@ -110,6 +165,11 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
     due_date: "",
     resolution_notes: "",
   })
+  const [timelineMode, setTimelineMode] = useState<"day" | "week" | "month">("week")
+  const [timelineData, setTimelineData] = useState<FindingsTimelinePoint[]>([])
+  const [isTimelineLoading, setIsTimelineLoading] = useState(false)
+  const [analytics, setAnalytics] = useState<FindingsAnalyticsState | null>(null)
+  const [planZones, setPlanZones] = useState<PlanZoneOption[]>([])
 
   const filteredFindings = findings.filter((f) => {
     if (filter === "todos") return true
@@ -136,6 +196,52 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
     }
     setCorrectiveById(map)
   }, [initialFindings])
+
+  useEffect(() => {
+    startTransition(async () => {
+      try {
+        const result = await getFindingAnalytics(projectId)
+        setAnalytics(result as FindingsAnalyticsState)
+      } catch {}
+    })
+  }, [projectId, startTransition])
+
+  useEffect(() => {
+    startTransition(async () => {
+      try {
+        const zones = await getPlanZonesByProject(projectId)
+        setPlanZones(zones as PlanZoneOption[])
+      } catch {}
+    })
+  }, [projectId, startTransition])
+
+  useEffect(() => {
+    setIsTimelineLoading(true)
+    startTransition(async () => {
+      try {
+        const rows = await getFindingsTimeline(timelineMode, projectId)
+        const formatLabel = (bucket: string) => {
+          const d = new Date(bucket)
+          if (!Number.isFinite(d.getTime())) return bucket
+          const day = d.getDate().toString().padStart(2, "0")
+          const month = (d.getMonth() + 1).toString().padStart(2, "0")
+          const year = d.getFullYear()
+          if (timelineMode === "day") return `${day}/${month}`
+          if (timelineMode === "week") return `${day}/${month}`
+          return `${month}/${year}`
+        }
+        setTimelineData(
+          (rows || []).map((r) => ({
+            label: formatLabel(r.bucket),
+            created: r.created_count,
+            resolved: r.resolved_count,
+          })),
+        )
+      } catch {
+      }
+      setIsTimelineLoading(false)
+    })
+  }, [timelineMode, projectId, startTransition])
   if (!mounted) return null
 
   const getPriorityBadge = (severity: string) => {
@@ -265,6 +371,7 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
         location: newFinding.location || undefined,
         responsible_person: newFinding.responsible_person || undefined,
         due_date: newFinding.due_date || undefined,
+        plan_zone_id: newFinding.plan_zone_id ?? undefined,
         photos: imageDataUrl ? [imageDataUrl] : undefined,
       })
 
@@ -277,6 +384,7 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
         location: "",
         responsible_person: "",
         due_date: "",
+        plan_zone_id: null,
       })
       setImageDataUrl("")
       setImageMimeType("")
@@ -397,6 +505,7 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
                             description: prev.description || result.description || "",
                             severity: (result.severity || prev.severity) as "low" | "medium" | "high" | "critical",
                             location: prev.location || result.location || "",
+                            plan_zone_id: prev.plan_zone_id,
                             responsible_person: prev.responsible_person || result.responsible_person || "",
                             due_date: prev.due_date || result.due_date || "",
                           }))
@@ -414,6 +523,32 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
                   </div>
                 )}
               </div>
+              {planZones.length > 0 && (
+                <div>
+                  <Label htmlFor="plan_zone">Sector del plano</Label>
+                  <Select
+                    value={newFinding.plan_zone_id ? String(newFinding.plan_zone_id) : ""}
+                    onValueChange={(value) =>
+                      setNewFinding({ ...newFinding, plan_zone_id: value ? Number(value) : null })
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Selecciona sector (opcional)" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">Sin sector</SelectItem>
+                      {planZones.map((z) => (
+                        <SelectItem key={z.id} value={String(z.id)}>
+                          {z.plan_name ? `${z.plan_name} · ` : ""}
+                          {z.floor_name ? `${z.floor_name} · ` : ""}
+                          {z.name}
+                          {z.code ? ` (${z.code})` : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
               <div>
                 <Label htmlFor="location">Ubicacion</Label>
                 <Input
@@ -445,7 +580,6 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
         </Dialog>
       </div>
 
-      {/* Stats */}
       <div className="grid gap-4 sm:grid-cols-4">
         <Card>
           <CardContent className="p-4">
@@ -493,6 +627,189 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
         </Card>
       </div>
 
+      <Card>
+        <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <CardTitle>Evolución de hallazgos</CardTitle>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant={timelineMode === "day" ? "default" : "outline"}
+              onClick={() => setTimelineMode("day")}
+            >
+              Día a día (1 mes)
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={timelineMode === "week" ? "default" : "outline"}
+              onClick={() => setTimelineMode("week")}
+            >
+              Semana a semana (3 meses)
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={timelineMode === "month" ? "default" : "outline"}
+              onClick={() => setTimelineMode("month")}
+            >
+              Mes a mes
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="h-[260px]">
+            {isTimelineLoading ? (
+              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                Cargando gráfico...
+              </div>
+            ) : timelineData.length === 0 ? (
+              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                Sin hallazgos en el periodo seleccionado
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={timelineData}>
+                  <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+                  <XAxis
+                    dataKey="label"
+                    tick={{ fill: "var(--color-muted-foreground)", fontSize: 11 }}
+                  />
+                  <YAxis tick={{ fill: "var(--color-muted-foreground)", fontSize: 11 }} allowDecimals={false} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "var(--color-card)",
+                      border: "1px solid var(--color-border)",
+                      borderRadius: 8,
+                    }}
+                  />
+                  <Legend />
+                  <Bar
+                    dataKey="created"
+                    name="Creados"
+                    fill="var(--color-chart-1)"
+                    radius={[4, 4, 0, 0]}
+                  />
+                  <Bar
+                    dataKey="resolved"
+                    name="Resueltos"
+                    fill="var(--color-chart-5)"
+                    radius={[4, 4, 0, 0]}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-4 md:grid-cols-3">
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-muted-foreground">Tiempo promedio de resolución</p>
+                <p className="text-2xl font-bold">
+                  {analytics && analytics.avg_resolution_days !== null
+                    ? `${analytics.avg_resolution_days.toFixed(1)} días`
+                    : "-"}
+                </p>
+              </div>
+              <Clock className="h-8 w-8 text-muted-foreground" />
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-muted-foreground">Edad promedio hallazgos abiertos</p>
+                <p className="text-2xl font-bold">
+                  {analytics && analytics.avg_open_days !== null
+                    ? `${analytics.avg_open_days.toFixed(1)} días`
+                    : "-"}
+                </p>
+              </div>
+              <Clock className="h-8 w-8 text-warning" />
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-muted-foreground">Hallazgos vencidos</p>
+                <p className="text-2xl font-bold text-destructive">
+                  {analytics ? analytics.overdue : 0}
+                </p>
+              </div>
+              <AlertTriangle className="h-8 w-8 text-destructive" />
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Zonas con más hallazgos</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {analytics && analytics.top_zones.length > 0 ? (
+              <div className="space-y-2 text-sm">
+                {analytics.top_zones.map((z, idx) => (
+                  <div key={idx} className="flex items-center justify-between">
+                    <div>
+                      <p className="font-medium">
+                        {z.label}
+                        {z.floor ? ` · ${z.floor}` : ""}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {z.open} abiertos · {z.total} total
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">Aún no hay datos de zonas.</p>
+            )}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Hallazgo más antiguo sin resolver</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {analytics && analytics.oldest_open ? (
+              <div className="space-y-2 text-sm">
+                <p className="font-medium">
+                  #{analytics.oldest_open.id} · {analytics.oldest_open.title}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {analytics.oldest_open.project_name
+                    ? analytics.oldest_open.project_name
+                    : "Sin proyecto"}
+                  {analytics.oldest_open.plan_zone_name
+                    ? ` · ${analytics.oldest_open.plan_zone_name}`
+                    : ""}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {analytics.oldest_open.location || "Sin ubicación"}
+                </p>
+                <p className="text-sm text-destructive">
+                  Abierto hace {analytics.oldest_open.days_open} días
+                </p>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                No hay hallazgos abiertos actualmente.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
       {/* Filters */}
       <div className="flex gap-4">
         <Select value={filter} onValueChange={setFilter}>
@@ -536,11 +853,18 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
 
                   <div className="mb-4 space-y-2 text-sm">
                     {finding.location && (
-                      <div className="flex items-center gap-2 text-muted-foreground">
-                        <MapPin className="h-4 w-4" />
-                        {finding.location}
-                      </div>
-                    )}
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <MapPin className="h-4 w-4" />
+                    {finding.location}
+                  </div>
+                )}
+                {finding.plan_zone_name && (
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <MapPin className="h-4 w-4" />
+                    {finding.plan_zone_name}
+                    {finding.plan_floor_name ? ` · ${finding.plan_floor_name}` : ""}
+                  </div>
+                )}
                     {finding.responsible_person && (
                       <div className="flex items-center gap-2 text-muted-foreground">
                         <User className="h-4 w-4" />

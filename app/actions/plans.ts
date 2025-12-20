@@ -21,6 +21,12 @@ export interface ZoneItem {
 export interface FloorItem {
   name: string
   zones: ZoneItem[]
+  frame?: {
+    x: number
+    y: number
+    width: number
+    height: number
+  }
 }
 
 export async function extractZonesFromPlan(base64Image: string, mimeType: string): Promise<{ floors: FloorItem[] }> {
@@ -30,17 +36,24 @@ export async function extractZonesFromPlan(base64Image: string, mimeType: string
   const model = (await getSetting("ai_model")) || "gemini-2.5-flash"
   const prompt =
     `Analiza este plano de obra y devuelve un JSON con las zonas agrupadas por piso.\n` +
-    `Piensa en el plano como un mapa de bloques tipo LEGO.\n` +
-    `Para cada piso, define pocas zonas grandes y funcionales (Sector A, Sector B, Pasillo, Oficinas, Patio, etc.).\n` +
+    `La representación debe seguir lo más fielmente posible la geometría y la distribución real del plano.\n` +
+    `Evita reordenar las zonas como si fuera un esquema nuevo o un mapa de bloques abstracto.\n` +
+    `Las zonas deben ubicarse donde están en el plano escaneado (como si pusieras rectángulos transparentes encima del plano original).\n` +
+    `Identifica únicamente espacios arquitectónicos claramente delimitados (habitaciones, salas, terrazas, pasillos, escaleras, garaje, etc.).\n` +
+    `No generes zonas separadas para textos, etiquetas, cotas, mobiliario, puertas, ventanas ni símbolos.\n` +
+    `Ignora también anotaciones de texto o nombres dibujados sobre el plano: solo importa la geometría de los recintos.\n` +
+    `Para cada piso, define las zonas funcionales principales, sin mezclar sectores lejanos en un solo bloque cuando visualmente están separados.\n` +
     `Cuando sea posible, incluye en el nombre una referencia a sus medidas aproximadas\n` +
-    `(por ejemplo: "Sector A (aprox 10x5 m)").\n` +
-    `Cada zona debe incluir una posicion aproximada dentro del plano, usando coordenadas normalizadas\n` +
-    `x, y, width, height en el rango 0 a 1 (0 = borde izquierdo/superior, 1 = borde derecho/inferior).\n` +
+    `(por ejemplo: "Dormitorios (aprox 10x5 m)").\n` +
+    `Primero determina el rectángulo mínimo que contiene SOLO el edificio o la planta (sin margenes ni textos alrededor).\n` +
+    `Representa ese rectángulo como "frame" con coordenadas normalizadas x, y, width, height en el rango 0 a 1 relativas a toda la imagen.\n` +
+    `Luego, para cada zona, usa coordenadas normalizadas x, y, width, height en el rango 0 a 1 RELATIVAS al frame (0 = borde izquierdo/superior del frame, 1 = borde derecho/inferior del frame).\n` +
     `Formato EXACTO de respuesta (solo JSON):\n` +
     `{\n` +
     `  "floors": [\n` +
     `    {\n` +
     `      "name": "Piso 1",\n` +
+    `      "frame": { "x": 0.05, "y": 0.08, "width": 0.9, "height": 0.84 },\n` +
     `      "zones": [\n` +
     `        { "name": "Zona A (aprox 10x5 m)", "code": "A1", "x": 0.1, "y": 0.2, "width": 0.3, "height": 0.15 },\n` +
     `        { "name": "Zona B", "code": "B1", "x": 0.45, "y": 0.25, "width": 0.25, "height": 0.2 }\n` +
@@ -54,9 +67,14 @@ export async function extractZonesFromPlan(base64Image: string, mimeType: string
     `}\n` +
     `Reglas:\n` +
     `- Si no puedes inferir el piso, usa "General".\n` +
-    `- Usa nombres cortos y funcionales que representen sectores.\n` +
-    `- x, y representan la esquina superior izquierda de la zona dentro del plano.\n` +
-    `- width, height representan el ancho y alto relativos de la zona.\n` +
+    `- Usa nombres cortos y funcionales que representen sectores reales del plano.\n` +
+    `- Limita el número de zonas a un máximo de 12 por piso, agrupando espacios muy pequeños en la zona funcional más cercana.\n` +
+    `- frame.x y frame.y representan la esquina superior izquierda del edificio dentro de la imagen completa.\n` +
+    `- frame.width y frame.height representan el ancho y alto relativos del edificio dentro de la imagen completa.\n` +
+    `- En cada zona, x e y representan la esquina superior izquierda de la zona dentro del frame.\n` +
+    `- En cada zona, width y height representan el ancho y alto relativos de la zona dentro del frame.\n` +
+    `- No reordenes ni redistribuyas las zonas; solo coloca rectángulos aproximados encima del plano existente.\n` +
+    `- Evita que las zonas se solapen de forma exagerada salvo que el plano sea ambiguo.\n` +
     `- Responde SOLO el JSON, sin explicaciones ni markdown.`
   const { text } = await generateText({
     model: getModel(provider, model, apiKey) as unknown as LanguageModel,
@@ -158,4 +176,53 @@ export async function getPlanDetail(planId: number): Promise<{
   }
   const floors = floorRows.map((f) => ({ ...f, zones: zonesByFloor[f.id] || [] }))
   return { plan: planRows[0], floors }
+}
+
+export type PlanZoneOption = {
+  id: number
+  name: string
+  code: string | null
+  floor_name: string | null
+  plan_name: string | null
+  project_id: number | null
+}
+
+export async function getPlanZonesByProject(projectId?: number): Promise<PlanZoneOption[]> {
+  const userId = await getCurrentUserId()
+  if (!userId) return []
+  const projectParam = projectId ?? null
+  const rows = await sql<{
+    id: number
+    name: string
+    code: string | null
+    floor_name: string | null
+    plan_name: string | null
+    project_id: number | null
+  }>`
+    SELECT
+      z.id,
+      z.name,
+      z.code,
+      pf.name AS floor_name,
+      p.name AS plan_name,
+      p.project_id
+    FROM plan_zones z
+    LEFT JOIN plan_floors pf ON z.floor_id = pf.id
+    LEFT JOIN plans p ON z.plan_id = p.id
+    WHERE
+      z.user_id = ${userId}
+      AND (${projectParam}::int IS NULL OR p.project_id = ${projectParam}::int)
+    ORDER BY
+      COALESCE(p.name, '') ASC,
+      COALESCE(pf.name, '') ASC,
+      z.name ASC
+  `
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    code: r.code,
+    floor_name: r.floor_name,
+    plan_name: r.plan_name,
+    project_id: r.project_id,
+  }))
 }

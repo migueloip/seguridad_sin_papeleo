@@ -6,12 +6,228 @@ import { getCurrentUserId } from "@/lib/auth"
 import { revalidatePath } from "next/cache"
 import { formatRut, normalizeRut, isValidRut } from "@/lib/utils"
 
+let workerStatsSchemaEnsured: Promise<void> | null = null
+
+async function ensureWorkerStatsSchema() {
+  if (!workerStatsSchemaEnsured) {
+    workerStatsSchemaEnsured = (async () => {
+      try {
+        await sql`
+          CREATE TABLE IF NOT EXISTS worker_stats_daily (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            stat_date DATE NOT NULL,
+            total_workers INTEGER NOT NULL DEFAULT 0,
+            complete_workers INTEGER NOT NULL DEFAULT 0,
+            incomplete_workers INTEGER NOT NULL DEFAULT 0,
+            critical_workers INTEGER NOT NULL DEFAULT 0,
+            total_admonitions INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          )
+        `
+        await sql`
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_stats_daily_user_date
+          ON worker_stats_daily(user_id, stat_date)
+        `
+      } catch {}
+    })()
+  }
+  await workerStatsSchemaEnsured
+}
+
 export type WorkerRow = Worker & {
   project_name: string | null
   valid_docs: number
   expiring_docs: number
   expired_docs: number
   admonitions_count: number
+}
+
+type WorkerStatsDailyRow = {
+  stat_date: Date
+  total_workers: number
+  complete_workers: number
+  incomplete_workers: number
+  critical_workers: number
+  total_admonitions: number
+}
+
+type WorkerStatsTimelineMode = "day" | "week" | "month"
+
+type WorkerStatsTimelineRow = {
+  bucket: string | Date
+  total_workers: number
+  complete_workers: number
+  incomplete_workers: number
+  critical_workers: number
+  total_admonitions: number
+}
+
+function normalizeBucket(raw: string | Date): string {
+  if (typeof raw === "string") {
+    if (raw.length >= 10) return raw.slice(0, 10)
+    const d = new Date(raw)
+    if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10)
+    return raw
+  }
+  return new Date(raw).toISOString().slice(0, 10)
+}
+
+async function snapshotWorkerStatsForToday(): Promise<WorkerStatsDailyRow | null> {
+  const userId = await getCurrentUserId()
+  if (!userId) return null
+  await ensureWorkerStatsSchema()
+  const now = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+
+  const existing = await sql<WorkerStatsDailyRow>`
+    SELECT stat_date, total_workers, complete_workers, incomplete_workers, critical_workers, total_admonitions
+    FROM worker_stats_daily
+    WHERE user_id = ${userId} AND stat_date = ${today}
+    LIMIT 1
+  `
+  if (existing[0]) return existing[0]
+
+  const workers = await getWorkers()
+  const totalWorkers = workers.length
+  let completeWorkers = 0
+  let incompleteWorkers = 0
+  let criticalWorkers = 0
+  let totalAdmonitions = 0
+
+  for (const w of workers) {
+    const valid = Number((w as WorkerRow).valid_docs || 0)
+    const expiring = Number((w as WorkerRow).expiring_docs || 0)
+    const expired = Number((w as WorkerRow).expired_docs || 0)
+    const totalDocs = valid + expiring + expired
+    let status: "completo" | "incompleto" | "critico"
+    if (expired > 0) {
+      status = "critico"
+    } else if (expiring > 0 || totalDocs === 0) {
+      status = "incompleto"
+    } else {
+      status = "completo"
+    }
+    if (status === "critico") {
+      criticalWorkers += 1
+    } else if (status === "completo") {
+      completeWorkers += 1
+    } else {
+      incompleteWorkers += 1
+    }
+    totalAdmonitions += Number((w as WorkerRow).admonitions_count || 0)
+  }
+
+  const inserted = await sql<WorkerStatsDailyRow>`
+    INSERT INTO worker_stats_daily (
+      user_id,
+      stat_date,
+      total_workers,
+      complete_workers,
+      incomplete_workers,
+      critical_workers,
+      total_admonitions
+    )
+    VALUES (
+      ${userId},
+      ${today},
+      ${totalWorkers},
+      ${completeWorkers},
+      ${incompleteWorkers},
+      ${criticalWorkers},
+      ${totalAdmonitions}
+    )
+    ON CONFLICT (user_id, stat_date)
+    DO UPDATE SET
+      total_workers = EXCLUDED.total_workers,
+      complete_workers = EXCLUDED.complete_workers,
+      incomplete_workers = EXCLUDED.incomplete_workers,
+      critical_workers = EXCLUDED.critical_workers,
+      total_admonitions = EXCLUDED.total_admonitions
+    RETURNING stat_date, total_workers, complete_workers, incomplete_workers, critical_workers, total_admonitions
+  `
+  return inserted[0] || null
+}
+
+export async function getWorkerStatsTimeline(
+  mode: WorkerStatsTimelineMode,
+): Promise<WorkerStatsTimelineRow[]> {
+  const userId = await getCurrentUserId()
+  if (!userId) return []
+  await ensureWorkerStatsSchema()
+  await snapshotWorkerStatsForToday()
+
+  if (mode === "day") {
+    const rows = await sql<WorkerStatsTimelineRow>`
+      SELECT
+        stat_date as bucket,
+        total_workers,
+        complete_workers,
+        incomplete_workers,
+        critical_workers,
+        total_admonitions
+      FROM worker_stats_daily
+      WHERE user_id = ${userId}
+        AND stat_date >= CURRENT_DATE - INTERVAL '30 days'
+      ORDER BY stat_date
+    `
+    return rows.map((r) => ({
+      bucket: normalizeBucket(r.bucket),
+      total_workers: Number(r.total_workers || 0),
+      complete_workers: Number(r.complete_workers || 0),
+      incomplete_workers: Number(r.incomplete_workers || 0),
+      critical_workers: Number(r.critical_workers || 0),
+      total_admonitions: Number(r.total_admonitions || 0),
+    }))
+  }
+
+  if (mode === "week") {
+    const rows = await sql<WorkerStatsTimelineRow>`
+      SELECT
+        date_trunc('week', stat_date)::date as bucket,
+        AVG(total_workers)::int as total_workers,
+        AVG(complete_workers)::int as complete_workers,
+        AVG(incomplete_workers)::int as incomplete_workers,
+        AVG(critical_workers)::int as critical_workers,
+        AVG(total_admonitions)::int as total_admonitions
+      FROM worker_stats_daily
+      WHERE user_id = ${userId}
+        AND stat_date >= CURRENT_DATE - INTERVAL '12 weeks'
+      GROUP BY date_trunc('week', stat_date)
+      ORDER BY bucket
+    `
+    return rows.map((r) => ({
+      bucket: normalizeBucket(r.bucket),
+      total_workers: Number(r.total_workers || 0),
+      complete_workers: Number(r.complete_workers || 0),
+      incomplete_workers: Number(r.incomplete_workers || 0),
+      critical_workers: Number(r.critical_workers || 0),
+      total_admonitions: Number(r.total_admonitions || 0),
+    }))
+  }
+
+  const rows = await sql<WorkerStatsTimelineRow>`
+    SELECT
+      date_trunc('month', stat_date)::date as bucket,
+      AVG(total_workers)::int as total_workers,
+      AVG(complete_workers)::int as complete_workers,
+      AVG(incomplete_workers)::int as incomplete_workers,
+      AVG(critical_workers)::int as critical_workers,
+      AVG(total_admonitions)::int as total_admonitions
+    FROM worker_stats_daily
+    WHERE user_id = ${userId}
+      AND stat_date >= CURRENT_DATE - INTERVAL '12 months'
+    GROUP BY date_trunc('month', stat_date)
+    ORDER BY bucket
+  `
+  return rows.map((r) => ({
+    bucket: normalizeBucket(r.bucket),
+    total_workers: Number(r.total_workers || 0),
+    complete_workers: Number(r.complete_workers || 0),
+    incomplete_workers: Number(r.incomplete_workers || 0),
+    critical_workers: Number(r.critical_workers || 0),
+    total_admonitions: Number(r.total_admonitions || 0),
+  }))
 }
 
 export async function getWorkers(projectId?: number) {
