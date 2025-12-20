@@ -15,7 +15,7 @@ Paso 1: Clonar el repositorio
 git clone https://github.com/migueloip/seguridad_sin_papeleo
 
 Paso 2: Instalar dependencias
-cd ssp
+cd seguridad_sin_papeleo
 npm install
 
 Paso 3: Configurar variables de entorno
