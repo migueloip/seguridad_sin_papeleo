@@ -14,11 +14,11 @@ export default function LoginPage() {
           <form action={login} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
-              <Input id="email" name="email" type="email" required />
+              <Input id="email" name="email" type="email" required autoComplete="email" />
             </div>
             <div className="space-y-2">
               <Label htmlFor="password">Contraseña</Label>
-              <Input id="password" name="password" type="password" required />
+              <Input id="password" name="password" type="password" required autoComplete="current-password" />
             </div>
             <Button type="submit" className="w-full">Entrar</Button>
           </form>

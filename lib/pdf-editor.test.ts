@@ -81,4 +81,40 @@ describe("buildDesignerHtmlFromState", () => {
     expect(html).toMatch(/KPIs/)
     expect(html).toMatch(/Línea 1/)
   })
+
+  it("renderiza tabla y matriz con cabeceras", () => {
+    const s: EditorState = {
+      pdfFont: "sans-serif",
+      pdfFontSize: 14,
+      pdfColor: "#111827",
+      editorSections: ["cover", "summary", "matrix", "quotes", "recs"],
+      coverTitle: "Informe",
+      coverSubtitle: "Subtítulo",
+      summaryText: "Texto",
+      matrixRows: [{ description: "Desc", severity: "medio", status: "pendiente", date: "2024-01-01" }],
+      recs: [],
+      brandLogo: null,
+      responsibleName: "Responsable",
+      pdfA: false,
+      designerEnabled: true,
+      elements: [
+        {
+          id: "tbl-1",
+          type: "table",
+          rows: [
+            ["Actividad / tarea", "Peligro", "Riesgo"],
+            ["Corte", "Elemento cortante", "Lesión en mano"],
+          ],
+        },
+        {
+          id: "mx-1",
+          type: "matrix",
+          rows: [{ description: "Desc", severity: "medio", status: "pendiente", date: "2024-01-01" }],
+        },
+      ],
+    }
+    const html = buildDesignerHtmlFromState(s)
+    expect(html).toMatch(/Actividad \/ tarea/)
+    expect(html).toMatch(/Matriz de Hallazgos/)
+  })
 })

@@ -41,6 +41,7 @@ export async function POST(req: Request) {
     await sql`CREATE TABLE IF NOT EXISTS findings (id SERIAL PRIMARY KEY, checklist_id INTEGER REFERENCES completed_checklists(id) ON DELETE SET NULL, project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL, title VARCHAR(255) NOT NULL, description TEXT, severity VARCHAR(50) NOT NULL, location VARCHAR(255), responsible_person VARCHAR(255), due_date DATE, resolved_at TIMESTAMP, resolution_notes TEXT, photos JSONB, status VARCHAR(50) DEFAULT 'open', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`
     await sql`CREATE TABLE IF NOT EXISTS reports (id SERIAL PRIMARY KEY, project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL, report_type VARCHAR(50) NOT NULL, title VARCHAR(255) NOT NULL, date_from DATE, date_to DATE, content JSONB, file_url TEXT, generated_by VARCHAR(255), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`
     await sql`CREATE TABLE IF NOT EXISTS notifications (id SERIAL PRIMARY KEY, type VARCHAR(50) NOT NULL, title VARCHAR(255) NOT NULL, message TEXT, related_id INTEGER, related_type VARCHAR(50), is_read BOOLEAN DEFAULT false, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`
+    await sql`CREATE TABLE IF NOT EXISTS plan_types (id SERIAL PRIMARY KEY, user_id INTEGER REFERENCES users(id) ON DELETE CASCADE, name VARCHAR(100) NOT NULL, description TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`
     await sql`CREATE TABLE IF NOT EXISTS plans (id SERIAL PRIMARY KEY, project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL, name VARCHAR(255) NOT NULL, plan_type VARCHAR(50) NOT NULL, file_name VARCHAR(255) NOT NULL, file_url TEXT, mime_type VARCHAR(100), extracted JSONB, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`
     await sql`CREATE TABLE IF NOT EXISTS plan_floors (id SERIAL PRIMARY KEY, plan_id INTEGER REFERENCES plans(id) ON DELETE CASCADE, name VARCHAR(100) NOT NULL, level INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`
     await sql`CREATE TABLE IF NOT EXISTS plan_zones (id SERIAL PRIMARY KEY, plan_id INTEGER REFERENCES plans(id) ON DELETE CASCADE, floor_id INTEGER REFERENCES plan_floors(id) ON DELETE SET NULL, name VARCHAR(100) NOT NULL, code VARCHAR(50), zone_type VARCHAR(50), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`
@@ -66,6 +67,7 @@ export async function POST(req: Request) {
     await sql`ALTER TABLE IF EXISTS findings ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`
     await sql`ALTER TABLE IF EXISTS completed_checklists ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`
     await sql`ALTER TABLE IF EXISTS reports ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`
+    await sql`ALTER TABLE IF EXISTS plan_types ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`
     await sql`ALTER TABLE IF EXISTS plans ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`
     await sql`ALTER TABLE IF EXISTS plan_floors ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`
     await sql`ALTER TABLE IF EXISTS plan_zones ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`
@@ -76,6 +78,7 @@ export async function POST(req: Request) {
     await sql`CREATE INDEX IF NOT EXISTS idx_findings_user ON findings(user_id)`
     await sql`CREATE INDEX IF NOT EXISTS idx_completed_checklists_user ON completed_checklists(user_id)`
     await sql`CREATE INDEX IF NOT EXISTS idx_reports_user ON reports(user_id)`
+    await sql`CREATE INDEX IF NOT EXISTS idx_plan_types_user ON plan_types(user_id)`
     await sql`CREATE INDEX IF NOT EXISTS idx_plans_user ON plans(user_id)`
     await sql`CREATE INDEX IF NOT EXISTS idx_plan_floors_user ON plan_floors(user_id)`
     await sql`CREATE INDEX IF NOT EXISTS idx_plan_zones_user ON plan_zones(user_id)`
@@ -135,6 +138,7 @@ export async function POST(req: Request) {
     await sql`ALTER TABLE reports ENABLE ROW LEVEL SECURITY`
     await sql`ALTER TABLE settings ENABLE ROW LEVEL SECURITY`
     await sql`ALTER TABLE admonitions ENABLE ROW LEVEL SECURITY`
+    await sql`ALTER TABLE plan_types ENABLE ROW LEVEL SECURITY`
     await sql`ALTER TABLE plans ENABLE ROW LEVEL SECURITY`
     await sql`ALTER TABLE plan_floors ENABLE ROW LEVEL SECURITY`
     await sql`ALTER TABLE plan_zones ENABLE ROW LEVEL SECURITY`
@@ -152,6 +156,15 @@ export async function POST(req: Request) {
     await sql`CREATE POLICY insert_projects_own ON projects FOR INSERT TO authenticated WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
     await sql`CREATE POLICY update_projects_own ON projects FOR UPDATE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id) WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
     await sql`CREATE POLICY delete_projects_own ON projects FOR DELETE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
+
+    await sql`DROP POLICY IF EXISTS select_plan_types_own ON plan_types`
+    await sql`DROP POLICY IF EXISTS insert_plan_types_own ON plan_types`
+    await sql`DROP POLICY IF EXISTS update_plan_types_own ON plan_types`
+    await sql`DROP POLICY IF EXISTS delete_plan_types_own ON plan_types`
+    await sql`CREATE POLICY select_plan_types_own ON plan_types FOR SELECT TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
+    await sql`CREATE POLICY insert_plan_types_own ON plan_types FOR INSERT TO authenticated WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
+    await sql`CREATE POLICY update_plan_types_own ON plan_types FOR UPDATE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id) WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
+    await sql`CREATE POLICY delete_plan_types_own ON plan_types FOR DELETE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
 
     await sql`DROP POLICY IF EXISTS select_workers_own ON workers`
     await sql`DROP POLICY IF EXISTS insert_workers_own ON workers`

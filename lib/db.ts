@@ -108,6 +108,14 @@ export interface Document {
   updated_at: string
 }
 
+export interface PlanType {
+  id: number
+  user_id: number
+  name: string
+  description: string | null
+  created_at: string
+}
+
 export interface ChecklistCategory {
   id: number
   name: string

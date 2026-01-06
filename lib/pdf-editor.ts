@@ -248,15 +248,15 @@ export function buildDesignerHtmlFromState(s: EditorState): string {
     if (el.type === "heading") {
       const tag = el.level === 1 ? "h1" : el.level === 2 ? "h2" : "h3"
       const align = el.align || "left"
-      return `<${tag} style="text-align:${align}">${el.text}</${tag}>`
+      return `<${tag} data-ssp-el-id="${el.id}" style="text-align:${align}">${el.text}</${tag}>`
     }
     if (el.type === "text") {
       const align = el.align || "left"
-      return `<div style="text-align:${align}">${el.html}</div>`
+      return `<div data-ssp-el-id="${el.id}" style="text-align:${align}">${el.html}</div>`
     }
     if (el.type === "plain_text") {
       const align = el.align || "left"
-      return `<div style="text-align:${align};white-space:pre-wrap">${escapeHtml(el.text)}</div>`
+      return `<div data-ssp-el-id="${el.id}" style="text-align:${align};white-space:pre-wrap">${escapeHtml(el.text)}</div>`
     }
     if (el.type === "simple_section") {
       const align = el.align || "left"
@@ -273,23 +273,23 @@ export function buildDesignerHtmlFromState(s: EditorState): string {
               .map((c) => `<span style="border:1px solid #e5e7eb;border-radius:9999px;padding:3px 10px;font-size:12px">${escapeHtml(c)}</span>`)
               .join("")}</div>`
           : ""
-      return `<section>${title}${subtitle}${chips}${body}${bullets}</section>`
+      return `<section data-ssp-el-id="${el.id}">${title}${subtitle}${chips}${body}${bullets}</section>`
     }
     if (el.type === "list") {
       const align = el.align || "left"
       const tag = el.ordered ? "ol" : "ul"
       const items = (el.items || []).map((i) => `<li>${escapeHtml(i)}</li>`).join("")
-      return `<div style="text-align:${align}"><${tag}>${items}</${tag}></div>`
+      return `<div data-ssp-el-id="${el.id}" style="text-align:${align}"><${tag}>${items}</${tag}></div>`
     }
     if (el.type === "image") {
       const w = el.widthPct && el.widthPct > 0 ? `${Math.min(100, Math.max(10, el.widthPct))}%` : "100%"
-      return `<div><img src="${el.src}" alt="${el.alt || ""}" style="width:${w};height:auto"/></div>`
+      return `<div data-ssp-el-id="${el.id}"><img src="${el.src}" alt="${el.alt || ""}" style="width:${w};height:auto"/></div>`
     }
     if (el.type === "table") {
       const body = el.rows
         .map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join("")}</tr>`)
         .join("")
-      return `<table><tbody>${body}</tbody></table>`
+      return `<table data-ssp-el-id="${el.id}"><tbody>${body}</tbody></table>`
     }
     if (el.type === "matrix") {
       const body = el.rows
@@ -298,17 +298,20 @@ export function buildDesignerHtmlFromState(s: EditorState): string {
             `<tr><td>${r.description}</td><td>${r.category || ""}</td><td>${r.owner || ""}</td><td>${r.severity}</td><td>${r.status}</td><td>${r.date}</td></tr>`,
         )
         .join("")
-      return `<section><h2>Matriz de Hallazgos</h2><table><thead><tr><th>Descripción</th><th>Categoría</th><th>Responsable</th><th>Severidad</th><th>Estado</th><th>Fecha</th></tr></thead><tbody>${body}</tbody></table></section>`
+      return `<section data-ssp-el-id="${el.id}"><h2>Matriz de Hallazgos</h2><table><thead><tr><th>Descripción</th><th>Categoría</th><th>Responsable</th><th>Severidad</th><th>Estado</th><th>Fecha</th></tr></thead><tbody>${body}</tbody></table></section>`
     }
     if (el.type === "quote") {
       const q = el.item
-      return `<div><p><strong>${q.name}</strong> · ${q.role} · ${q.date}</p><p>${q.content.replace(/\n/g, "<br/>")}</p>${q.signatureDataUrl ? `<img src="${q.signatureDataUrl}" alt="Firma" style="max-height:60px"/>` : ""}</div>`
+      return `<div data-ssp-el-id="${el.id}"><p><strong>${q.name}</strong> · ${q.role} · ${q.date}</p><p>${q.content.replace(
+        /\n/g,
+        "<br/>",
+      )}</p>${q.signatureDataUrl ? `<img src="${q.signatureDataUrl}" alt="Firma" style="max-height:60px"/>` : ""}</div>`
     }
     if (el.type === "docs") {
       return (el.items || [])
         .map(
           (d) =>
-            `<div style="page-break-before:always"><h3>${d.name}</h3><p>Tipo: ${d.type.toUpperCase()}</p>${
+            `<div data-ssp-el-id="${el.id}" style="page-break-before:always"><h3>${d.name}</h3><p>Tipo: ${d.type.toUpperCase()}</p>${
               d.previewUrl
                 ? `<img src="${d.previewUrl}" alt="Vista previa" style="max-width:100%;height:auto"/>`
                 : `<p>Vista previa no disponible</p>`
@@ -317,10 +320,10 @@ export function buildDesignerHtmlFromState(s: EditorState): string {
         .join("")
     }
     if (el.type === "divider") {
-      return `<hr/>`
+      return `<hr data-ssp-el-id="${el.id}"/>`
     }
     if (el.type === "page_break") {
-      return `<div style="page-break-after:always"></div>`
+      return `<div data-ssp-el-id="${el.id}" style="page-break-after:always"></div>`
     }
     return ""
   })
@@ -343,7 +346,7 @@ export function buildDesignerHtmlFromState(s: EditorState): string {
       <div class="page-number"></div>
     </div>
   `
-  const body = `<div class="workspace">${els.join("")}${signature}</div>${footer}`
+  const body = `<div class="workspace">${els.join("")}${signature}</div>${footer}<script>(function(){try{document.addEventListener('click',function(ev){var el=ev.target;while(el&&el!==document.body){if(el.dataset&&el.dataset.sspElId){parent.postMessage({type:'REPORT_DESIGNER_SELECT',elementId:el.dataset.sspElId},'*');break;}el=el.parentElement;}},true);}catch(e){}})();</script>`
   const meta = s.pdfA ? `<meta name="pdfa" content="true">` : ""
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${s.coverTitle || "Documento"}</title>${meta}${styles}</head><body>${body}</body></html>`
   return html

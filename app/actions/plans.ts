@@ -6,7 +6,7 @@ import { getSetting } from "./settings"
 import { getModel } from "@/lib/ai"
 import { sql } from "@/lib/db"
 import { getCurrentUserId } from "@/lib/auth"
-import type { Plan, PlanFloor, PlanZone } from "@/lib/db"
+import type { Plan, PlanFloor, PlanZone, PlanType } from "@/lib/db"
 import { revalidatePath } from "next/cache"
 
 export interface ZoneItem {
@@ -125,6 +125,65 @@ export async function createPlan(data: {
   return result[0]
 }
 
+export async function getPlanTypes(): Promise<PlanType[]> {
+  const userId = await getCurrentUserId()
+  if (!userId) return []
+  const rows = await sql<PlanType>`
+    SELECT * FROM plan_types
+    WHERE user_id = ${userId}
+    ORDER BY name
+  `
+  return rows
+}
+
+export async function createPlanType(data: { name: string; description?: string }): Promise<PlanType> {
+  const userId = await getCurrentUserId()
+  if (!userId) {
+    throw new Error("Debes iniciar sesión para crear tipos de plano")
+  }
+  const rows = await sql<PlanType>`
+    INSERT INTO plan_types (user_id, name, description, created_at)
+    VALUES (${userId}, ${data.name}, ${data.description || null}, CURRENT_TIMESTAMP)
+    RETURNING *
+  `
+  revalidatePath("/planos")
+  return rows[0]
+}
+
+export async function updatePlanType(data: {
+  id: number
+  name: string
+  description?: string
+}): Promise<PlanType> {
+  const userId = await getCurrentUserId()
+  if (!userId) {
+    throw new Error("Debes iniciar sesión para actualizar tipos de plano")
+  }
+  const rows = await sql<PlanType>`
+    UPDATE plan_types
+    SET name = ${data.name}, description = ${data.description || null}
+    WHERE id = ${data.id} AND user_id = ${userId}
+    RETURNING *
+  `
+  if (!rows[0]) {
+    throw new Error("Tipo de plano no encontrado")
+  }
+  revalidatePath("/planos")
+  return rows[0]
+}
+
+export async function deletePlanType(id: number): Promise<void> {
+  const userId = await getCurrentUserId()
+  if (!userId) {
+    throw new Error("Debes iniciar sesión para eliminar tipos de plano")
+  }
+  await sql`
+    DELETE FROM plan_types
+    WHERE id = ${id} AND user_id = ${userId}
+  `
+  revalidatePath("/planos")
+}
+
 export async function savePlanFloorsAndZones(planId: number, floors: FloorItem[]): Promise<{ floors: PlanFloor[] }> {
   const userId = await getCurrentUserId()
   if (!userId) throw new Error("Unauthorized")
@@ -151,6 +210,16 @@ export async function savePlanFloorsAndZones(planId: number, floors: FloorItem[]
   }
   revalidatePath("/planos")
   return { floors: insertedFloors }
+}
+
+export async function deletePlan(planId: number): Promise<void> {
+  const userId = await getCurrentUserId()
+  if (!userId) throw new Error("Unauthorized")
+  await sql`DELETE FROM plan_zones WHERE plan_id = ${planId} AND user_id = ${userId}`
+  await sql`DELETE FROM plan_floors WHERE plan_id = ${planId} AND user_id = ${userId}`
+  await sql`DELETE FROM plans WHERE id = ${planId} AND user_id = ${userId}`
+  revalidatePath("/planos")
+  revalidatePath("/")
 }
 
 export async function getPlans(): Promise<Plan[]> {

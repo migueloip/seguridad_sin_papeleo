@@ -1,14 +1,23 @@
 "use client"
 
-import { useEffect, useRef, useState, useTransition } from "react"
+import { useEffect, useRef, useState, useTransition, type MouseEvent } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Textarea } from "@/components/ui/textarea"
 import { AlertTriangle, ImageIcon, Download, Copy, MapPin } from "lucide-react"
-import { extractZonesFromPlan, createPlan, savePlanFloorsAndZones, getPlanDetail } from "@/app/actions/plans"
+import {
+  extractZonesFromPlan,
+  createPlan,
+  savePlanFloorsAndZones,
+  getPlanDetail,
+  deletePlan,
+  getPlanTypes,
+  createPlanType,
+  updatePlanType,
+  deletePlanType,
+} from "@/app/actions/plans"
 import type { Plan } from "@/lib/db"
 
 type AutodeskDocumentRoot = {
@@ -62,10 +71,8 @@ interface FloorItem {
 }
 
 export function PlansContent({
-  projects,
   plans,
 }: {
-  projects?: Array<{ id: number; name: string }>
   plans?: Plan[]
 }) {
   const [file, setFile] = useState<File | null>(null)
@@ -75,14 +82,20 @@ export function PlansContent({
   const [isPending, startTransition] = useTransition()
   const [planName, setPlanName] = useState<string>("")
   const [planType, setPlanType] = useState<string>("")
-  const [projectId, setProjectId] = useState<number | null>(null)
+  const [planTypeId, setPlanTypeId] = useState<number | null>(null)
   const [message, setMessage] = useState<string>("")
   const [selectedZoneKey, setSelectedZoneKey] = useState<string | null>(null)
-  const [tab, setTab] = useState<"analysis" | "saved">("analysis")
+  const [tab, setTab] = useState<"ai" | "manual" | "saved" | "plan-types">("ai")
   const [editingPlanId, setEditingPlanId] = useState<number | null>(null)
-  const [manualJson, setManualJson] = useState<string>("")
   const [autodeskUrn, setAutodeskUrn] = useState<string>("")
   const [imageDims, setImageDims] = useState<{ w: number; h: number } | null>(null)
+  const [manualDraw, setManualDraw] = useState<{ floorIndex: number; points: { x: number; y: number }[] } | null>(
+    null,
+  )
+  const [planItems, setPlanItems] = useState<Plan[]>(plans || [])
+  const [planTypes, setPlanTypes] = useState<Array<{ id: number; name: string; description: string | null }>>([])
+  const [newPlanTypeName, setNewPlanTypeName] = useState("")
+  const [newPlanTypeDescription, setNewPlanTypeDescription] = useState("")
 
   async function renderPdfFirstPageToDataURL(pdfFile: File): Promise<string> {
     const arrayBuffer = await pdfFile.arrayBuffer()
@@ -152,6 +165,74 @@ export function PlansContent({
       height: getNum(z, "height"),
     }))
   }
+
+  const handleManualCanvasClick = (floorIndex: number, e: MouseEvent<HTMLDivElement>) => {
+    if (!previewUrl) return
+    const rect = e.currentTarget.getBoundingClientRect()
+    if (!rect.width || !rect.height) return
+    const rawX = (e.clientX - rect.left) / rect.width
+    const rawY = (e.clientY - rect.top) / rect.height
+    const x = Math.min(Math.max(rawX, 0), 1)
+    const y = Math.min(Math.max(rawY, 0), 1)
+    if (!manualDraw || manualDraw.floorIndex !== floorIndex || manualDraw.points.length >= 4) {
+      setManualDraw({ floorIndex, points: [{ x, y }] })
+      return
+    }
+    const nextPoints = [...manualDraw.points, { x, y }]
+    if (nextPoints.length < 4) {
+      setManualDraw({ floorIndex, points: nextPoints })
+      return
+    }
+    const xs = nextPoints.map((p) => p.x)
+    const ys = nextPoints.map((p) => p.y)
+    const minX = Math.min(...xs)
+    const maxX = Math.max(...xs)
+    const minY = Math.min(...ys)
+    const maxY = Math.max(...ys)
+    const width = maxX - minX
+    const height = maxY - minY
+    if (width <= 0.001 || height <= 0.001) {
+      setManualDraw(null)
+      return
+    }
+    setFloors((prev) =>
+      prev.map((f, idx) => {
+        if (idx !== floorIndex) return f
+        const newZone: ZoneItem = {
+          name: `Zona ${f.zones.length + 1}`,
+          x: minX,
+          y: minY,
+          width,
+          height,
+        }
+        return { ...f, zones: [...f.zones, newZone] }
+      }),
+    )
+    setManualDraw(null)
+  }
+
+  useEffect(() => {
+    let active = true
+    ;(async () => {
+      try {
+        const rows = await getPlanTypes()
+        if (!active) return
+        const mapped = (rows || []).map((r) => ({
+          id: Number((r as { id: number }).id),
+          name: String((r as { name: string }).name),
+          description:
+            (r as { description: string | null }).description === null ||
+            (r as { description: string | null }).description === undefined
+              ? null
+              : String((r as { description: string | null }).description),
+        }))
+        setPlanTypes(mapped)
+      } catch {}
+    })()
+    return () => {
+      active = false
+    }
+  }, [])
 
   const handleFileChange = (f: File | null) => {
     setFloors([])
@@ -315,10 +396,11 @@ export function PlansContent({
           await savePlanFloorsAndZones(editingPlanId, floors)
           setMessage("Plano actualizado")
         } else {
+          const chosenType = planTypes.find((t) => t.id === planTypeId) || null
+          const typeName = chosenType?.name || planType.trim()
           const created: Plan = await createPlan({
-            project_id: projectId || undefined,
             name: planName.trim(),
-            plan_type: planType.trim(),
+            plan_type: typeName,
             file_name: file?.name || "plano.png",
             file_url: undefined,
             mime_type: mimeType || "image/png",
@@ -360,54 +442,18 @@ export function PlansContent({
     )
   }
 
-  const loadFloorsFromJson = (text: string) => {
-    const trimmed = text.trim()
-    if (!trimmed) {
-      alert("Pega el JSON primero")
-      return
-    }
-    try {
-      const parsed = JSON.parse(trimmed) as unknown
-      const rawFloors =
-        Array.isArray((parsed as UnknownRecord)?.["floors"])
-          ? ((parsed as UnknownRecord)["floors"] as unknown[])
-          : Array.isArray(parsed)
-            ? (parsed as unknown[])
-            : []
-      if (!Array.isArray(rawFloors) || rawFloors.length === 0) {
-        alert("El JSON no contiene pisos válidos")
-        return
-      }
-      const mapped: FloorItem[] = rawFloors.map((fl: unknown) => ({
-        name: getStr(fl, "name", "General"),
-        zones: getZones(fl),
-        frame: getFrame(fl),
-      }))
-      setFloors(mapped)
-      setSelectedZoneKey(null)
-      setMessage("")
-      alert("JSON cargado en el editor")
-    } catch {
-      alert("JSON inválido")
-    }
-  }
-
-  const handleLoadJsonClick = () => {
-    loadFloorsFromJson(manualJson)
-  }
-
-  const pasteJsonFromClipboard = async () => {
-    try {
-      const text = await navigator.clipboard.readText()
-      if (!text) {
-        alert("El portapapeles está vacío")
-        return
-      }
-      setManualJson(text)
-      loadFloorsFromJson(text)
-    } catch {
-      alert("No se pudo leer el portapapeles")
-    }
+  const autoNameAndCodeZones = () => {
+    setFloors((prev) =>
+      prev.map((floor, floorIndex) => ({
+        ...floor,
+        zones: floor.zones.map((z, zoneIndex) => {
+          const name = z.name && z.name.trim().length > 0 ? z.name : `Zona ${floorIndex + 1}.${zoneIndex + 1}`
+          const code =
+            z.code && z.code.trim().length > 0 ? z.code : `P${floorIndex + 1}-Z${zoneIndex + 1}`
+          return { ...z, name, code }
+        }),
+      })),
+    )
   }
 
   const loadPlanForEditing = (planId: number) => {
@@ -435,14 +481,13 @@ export function PlansContent({
         setFile(null)
         setPreviewUrl("")
         setMimeType("")
-        setManualJson("")
         setEditingPlanId(Number(detail.plan.id))
         setPlanName(detail.plan.name || "")
         setPlanType(detail.plan.plan_type || "")
-        setProjectId(detail.plan.project_id ?? null)
+        setPlanTypeId(null)
         setMessage("")
         setAutodeskUrn("")
-        setTab("analysis")
+        setTab("ai")
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Error cargando plano"
         setMessage(msg)
@@ -570,22 +615,40 @@ export function PlansContent({
     )
   }
 
-  const projectNameById = new Map((projects || []).map((p) => [p.id, p.name]))
+  const projectNameById = new Map((plans || []).map((p) => [p.id, (p as any).project_name]))
+
+  const handleDeletePlan = (planId: number, name: string) => {
+    const ok = window.confirm(
+      `¿Eliminar el plano "${name}" y todas sus zonas asociadas? Esta acción no se puede deshacer.`,
+    )
+    if (!ok) return
+    startTransition(async () => {
+      try {
+        await deletePlan(planId)
+        setPlanItems((prev) => prev.filter((p) => p.id !== planId))
+      } catch {
+      }
+    })
+  }
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-foreground">Planos</h1>
-        <p className="text-muted-foreground">Analiza planos con IA y gestiona tus planos guardados</p>
+        <p className="text-muted-foreground">
+          Genera zonas de planos con IA o edítalas manualmente y gestiona los planos guardados
+        </p>
       </div>
 
-      <Tabs value={tab} onValueChange={(v) => setTab(v as "analysis" | "saved")}>
+      <Tabs value={tab} onValueChange={(v) => setTab(v as "ai" | "manual" | "saved" | "plan-types")}>
         <TabsList>
-          <TabsTrigger value="analysis">Análisis de planos</TabsTrigger>
+          <TabsTrigger value="ai">Generador por IA</TabsTrigger>
+          <TabsTrigger value="manual">Editor manual de zonas</TabsTrigger>
           <TabsTrigger value="saved">Planos guardados</TabsTrigger>
+          <TabsTrigger value="plan-types">Tipos de plano</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="analysis" className="mt-4">
+        <TabsContent value="ai" className="mt-4">
           <div
             className={`grid gap-6 ${
               floors.length > 0 ? "items-start lg:grid-cols-[minmax(0,2.2fr)_minmax(320px,1fr)]" : ""
@@ -854,35 +917,28 @@ export function PlansContent({
                       />
                     </div>
                     <div className="grid gap-2">
-                      <Label htmlFor="plan_type">Tipo</Label>
+                      <Label htmlFor="plan_type">Tipo de plano</Label>
                       <select
                         id="plan_type"
                         className="h-10 rounded-md border border-input bg-background px-3 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                        value={planType}
-                        onChange={(e) => setPlanType(e.target.value)}
-                      >
-                        <option value="">Selecciona</option>
-                        <option value="arquitectonico">Arquitectónico</option>
-                        <option value="electrico">Eléctrico</option>
-                        <option value="evacuacion">Evacuación</option>
-                        <option value="seguridad">Seguridad</option>
-                      </select>
-                    </div>
-                    <div className="grid gap-2">
-                      <Label htmlFor="project">Proyecto</Label>
-                      <select
-                        id="project"
-                        className="h-10 rounded-md border border-input bg-background px-3 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                        value={projectId ?? ""}
+                        value={planTypeId ?? ""}
                         onChange={(e) => {
                           const v = e.target.value
-                          setProjectId(v ? Number(v) : null)
+                          const id = v ? Number(v) : NaN
+                          if (!Number.isFinite(id)) {
+                            setPlanTypeId(null)
+                            setPlanType("")
+                            return
+                          }
+                          setPlanTypeId(id)
+                          const chosen = planTypes.find((t) => t.id === id) || null
+                          setPlanType(chosen?.name || "")
                         }}
                       >
-                        <option value="">Sin proyecto</option>
-                        {(projects || []).map((p) => (
-                          <option key={p.id} value={p.id}>
-                            {p.name}
+                        <option value="">Selecciona un tipo</option>
+                        {planTypes.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.name}
                           </option>
                         ))}
                       </select>
@@ -907,8 +963,7 @@ export function PlansContent({
                         setEditingPlanId(null)
                         setPlanName("")
                         setPlanType("")
-                        setProjectId(null)
-                        setManualJson("")
+                        setPlanTypeId(null)
                         setSelectedZoneKey(null)
                         setMessage("")
                         handleFileChange(null)
@@ -931,14 +986,17 @@ export function PlansContent({
               </CardHeader>
               <CardContent className="space-y-3">
                 <p className="text-sm text-muted-foreground">
-                  Visualiza el plano CAD en 2D/3D usando Autodesk Viewer. Usa un URN generado en tu
-                  cuenta de Autodesk Platform Services.
+                  Visualiza el plano CAD en 2D/3D usando Autodesk Viewer. Usa un URN generado en tu cuenta de Autodesk
+                  Platform Services.
                 </p>
                 <AutodeskViewer urn={autodeskUrn.trim()} />
               </CardContent>
             </Card>
           )}
-          <Card className="mt-6">
+        </TabsContent>
+
+        <TabsContent value="manual" className="mt-4">
+          <Card>
             <CardHeader>
               <CardTitle>Editor manual de zonas (sin IA)</CardTitle>
             </CardHeader>
@@ -948,7 +1006,7 @@ export function PlansContent({
               </p>
               <div className="flex flex-wrap gap-2">
                 <Button type="button" size="sm" onClick={addFloor}>
-                  Agregar piso
+                  {floors.length === 0 ? "Crear piso 1" : `Agregar piso ${floors.length + 1}`}
                 </Button>
                 <Button
                   type="button"
@@ -958,11 +1016,13 @@ export function PlansContent({
                     setFloors([])
                     setSelectedZoneKey(null)
                     setEditingPlanId(null)
-                    setManualJson("")
                     setMessage("")
                   }}
                 >
                   Limpiar pisos y zonas
+                </Button>
+                <Button type="button" size="sm" variant="outline" onClick={autoNameAndCodeZones}>
+                  Asignar nombres y códigos auto
                 </Button>
               </div>
               <div className="grid gap-4">
@@ -993,6 +1053,64 @@ export function PlansContent({
                         </Button>
                       </div>
                     </div>
+                    {previewUrl && (
+                      <div className="space-y-1">
+                        <p className="text-[11px] text-muted-foreground">
+                          {manualDraw && manualDraw.floorIndex === floorIndex
+                            ? `Selecciona el punto ${manualDraw.points.length + 1} de 4 sobre la imagen para definir la zona.`
+                            : "Haz clic cuatro veces sobre la imagen para marcar las esquinas de una nueva zona."}
+                        </p>
+                        <div
+                          className="relative mx-auto mt-1 w-full max-w-3xl overflow-hidden rounded-md border bg-muted"
+                          style={{
+                            aspectRatio:
+                              imageDims && imageDims.w > 0 && imageDims.h > 0
+                                ? `${imageDims.w}/${imageDims.h}`
+                                : undefined,
+                            backgroundImage: previewUrl ? `url(${previewUrl})` : undefined,
+                            backgroundSize: "contain",
+                            backgroundRepeat: "no-repeat",
+                            backgroundPosition: "center",
+                          }}
+                          onClick={(e) => handleManualCanvasClick(floorIndex, e)}
+                        >
+                          {floor.zones.map((z, idx) => {
+                            if (
+                              typeof z.x !== "number" ||
+                              typeof z.y !== "number" ||
+                              typeof z.width !== "number" ||
+                              typeof z.height !== "number"
+                            ) {
+                              return null
+                            }
+                            const left = `${z.x * 100}%`
+                            const top = `${z.y * 100}%`
+                            const width = `${z.width * 100}%`
+                            const height = `${z.height * 100}%`
+                            return (
+                              <div
+                                key={`${floor.name}-manual-${idx}`}
+                                className="absolute flex items-center justify-center rounded-md border border-border bg-background/70 text-[10px] font-medium leading-tight text-foreground"
+                                style={{
+                                  left,
+                                  top,
+                                  width,
+                                  height,
+                                  minWidth: "6%",
+                                  minHeight: "6%",
+                                }}
+                              >
+                                <MapPin className="absolute left-1 top-1 h-3 w-3 text-destructive" />
+                                <span className="mx-2 text-center">
+                                  {z.name}
+                                  {z.code ? ` (${z.code})` : ""}
+                                </span>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
                     <div className="flex flex-wrap gap-2">
                       <Button type="button" size="sm" variant="outline" onClick={() => addZoneToFloor(floorIndex)}>
                         Agregar zona
@@ -1003,7 +1121,7 @@ export function PlansContent({
                         {floor.zones.map((z, zoneIndex) => (
                           <div
                             key={`${floor.name}-${zoneIndex}`}
-                            className="grid gap-2 rounded-md border p-2 text-xs md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_repeat(4,minmax(0,1fr))_auto]"
+                            className="grid gap-2 rounded-md border p-2 text-xs md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_auto]"
                           >
                             <div className="space-y-1">
                               <Label className="text-[11px]">Nombre</Label>
@@ -1047,110 +1165,6 @@ export function PlansContent({
                                 className="h-7 text-xs"
                               />
                             </div>
-                            <div className="space-y-1">
-                              <Label className="text-[11px]">x</Label>
-                              <Input
-                                type="number"
-                                step="0.01"
-                                min={0}
-                                max={1}
-                                value={typeof z.x === "number" ? z.x : ""}
-                                onChange={(e) => {
-                                  const n = Number(e.target.value)
-                                  const value = Number.isFinite(n) ? Math.min(Math.max(n, 0), 1) : undefined
-                                  setFloors((prev) =>
-                                    prev.map((f, fi) => {
-                                      if (fi !== floorIndex) return f
-                                      return {
-                                        ...f,
-                                        zones: f.zones.map((zone, zi) =>
-                                          zi === zoneIndex ? { ...zone, x: value } : zone,
-                                        ),
-                                      }
-                                    }),
-                                  )
-                                }}
-                                className="h-7 text-xs"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <Label className="text-[11px]">y</Label>
-                              <Input
-                                type="number"
-                                step="0.01"
-                                min={0}
-                                max={1}
-                                value={typeof z.y === "number" ? z.y : ""}
-                                onChange={(e) => {
-                                  const n = Number(e.target.value)
-                                  const value = Number.isFinite(n) ? Math.min(Math.max(n, 0), 1) : undefined
-                                  setFloors((prev) =>
-                                    prev.map((f, fi) => {
-                                      if (fi !== floorIndex) return f
-                                      return {
-                                        ...f,
-                                        zones: f.zones.map((zone, zi) =>
-                                          zi === zoneIndex ? { ...zone, y: value } : zone,
-                                        ),
-                                      }
-                                    }),
-                                  )
-                                }}
-                                className="h-7 text-xs"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <Label className="text-[11px]">width</Label>
-                              <Input
-                                type="number"
-                                step="0.01"
-                                min={0}
-                                max={1}
-                                value={typeof z.width === "number" ? z.width : ""}
-                                onChange={(e) => {
-                                  const n = Number(e.target.value)
-                                  const value = Number.isFinite(n) ? Math.min(Math.max(n, 0), 1) : undefined
-                                  setFloors((prev) =>
-                                    prev.map((f, fi) => {
-                                      if (fi !== floorIndex) return f
-                                      return {
-                                        ...f,
-                                        zones: f.zones.map((zone, zi) =>
-                                          zi === zoneIndex ? { ...zone, width: value } : zone,
-                                        ),
-                                      }
-                                    }),
-                                  )
-                                }}
-                                className="h-7 text-xs"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <Label className="text-[11px]">height</Label>
-                              <Input
-                                type="number"
-                                step="0.01"
-                                min={0}
-                                max={1}
-                                value={typeof z.height === "number" ? z.height : ""}
-                                onChange={(e) => {
-                                  const n = Number(e.target.value)
-                                  const value = Number.isFinite(n) ? Math.min(Math.max(n, 0), 1) : undefined
-                                  setFloors((prev) =>
-                                    prev.map((f, fi) => {
-                                      if (fi !== floorIndex) return f
-                                      return {
-                                        ...f,
-                                        zones: f.zones.map((zone, zi) =>
-                                          zi === zoneIndex ? { ...zone, height: value } : zone,
-                                        ),
-                                      }
-                                    }),
-                                  )
-                                }}
-                                className="h-7 text-xs"
-                              />
-                            </div>
                             <div className="flex items-end">
                               <Button
                                 type="button"
@@ -1168,27 +1182,6 @@ export function PlansContent({
                   </div>
                 ))}
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="manual_json" className="text-xs">
-                  JSON opcional de pisos y zonas
-                </Label>
-                <Textarea
-                  id="manual_json"
-                  value={manualJson}
-                  onChange={(e) => setManualJson(e.target.value)}
-                  placeholder='{"floors":[{"name":"Piso 1","zones":[{"name":"Zona A","x":0.1,"y":0.2,"width":0.3,"height":0.2}]}]}'
-                  className="text-xs"
-                  rows={6}
-                />
-                <div className="flex flex-wrap gap-2">
-                  <Button type="button" size="sm" variant="outline" onClick={handleLoadJsonClick}>
-                    Cargar JSON
-                  </Button>
-                  <Button type="button" size="sm" variant="outline" onClick={pasteJsonFromClipboard}>
-                    Pegar JSON
-                  </Button>
-                </div>
-              </div>
             </CardContent>
           </Card>
         </TabsContent>
@@ -1199,13 +1192,13 @@ export function PlansContent({
               <CardTitle>Planos guardados</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              {!plans || plans.length === 0 ? (
+              {planItems.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
                   Aún no hay planos guardados. Genera un plano en la pestaña de análisis.
                 </p>
               ) : (
                 <div className="grid gap-3">
-                  {plans.map((plan) => (
+                  {planItems.map((plan) => (
                     <div
                       key={plan.id}
                       className="flex flex-col justify-between gap-2 rounded-md border p-3 text-sm sm:flex-row sm:items-center"
@@ -1213,19 +1206,201 @@ export function PlansContent({
                       <div className="space-y-1">
                         <div className="font-medium">{plan.name}</div>
                         <div className="text-xs text-muted-foreground">
-                          Tipo: {plan.plan_type}{" "}
-                          {plan.project_id ? `· Proyecto: ${projectNameById.get(plan.project_id) || plan.project_id}` : ""}
+                          Tipo: {plan.plan_type}
                         </div>
                       </div>
                       <div className="flex gap-2">
                         <Button type="button" variant="outline" size="sm" onClick={() => loadPlanForEditing(plan.id)}>
                           Ver/editar
                         </Button>
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => handleDeletePlan(plan.id, plan.name)}
+                          disabled={isPending}
+                        >
+                          Eliminar
+                        </Button>
                       </div>
                     </div>
                   ))}
                 </div>
               )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="plan-types" className="mt-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>Tipos de plano</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-4 md:grid-cols-[minmax(0,1.1fr)_minmax(0,1.3fr)]">
+                <div className="space-y-3">
+                  <div className="grid gap-2">
+                    <Label htmlFor="new_plan_type_name">Nombre del tipo</Label>
+                    <Input
+                      id="new_plan_type_name"
+                      value={newPlanTypeName}
+                      onChange={(e) => setNewPlanTypeName(e.target.value)}
+                      placeholder="Ej: Plano de evacuación"
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="new_plan_type_desc">Descripción</Label>
+                    <Input
+                      id="new_plan_type_desc"
+                      value={newPlanTypeDescription}
+                      onChange={(e) => setNewPlanTypeDescription(e.target.value)}
+                      placeholder="Uso principal, normativa, observaciones, etc."
+                    />
+                  </div>
+                  <div className="flex justify-end">
+                    <Button
+                      type="button"
+                      onClick={() => {
+                        if (!newPlanTypeName.trim()) {
+                          alert("Ingresa un nombre para el tipo de plano")
+                          return
+                        }
+                        startTransition(async () => {
+                          try {
+                            const created = await createPlanType({
+                              name: newPlanTypeName.trim(),
+                              description: newPlanTypeDescription.trim() || undefined,
+                            })
+                            const mapped = {
+                              id: Number((created as { id: number }).id),
+                              name: String((created as { name: string }).name),
+                              description:
+                                (created as { description: string | null }).description === null ||
+                                (created as { description: string | null }).description === undefined
+                                  ? null
+                                  : String((created as { description: string | null }).description),
+                            }
+                            setPlanTypes((prev) => [...prev, mapped].sort((a, b) => a.name.localeCompare(b.name)))
+                            setNewPlanTypeName("")
+                            setNewPlanTypeDescription("")
+                          } catch (e) {
+                            const msg = e instanceof Error ? e.message : "Error creando tipo de plano"
+                            alert(msg)
+                          }
+                        })
+                      }}
+                    >
+                      Guardar tipo
+                    </Button>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  {planTypes.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      Aún no hay tipos de plano. Crea al menos uno para poder asignarlo a los planos.
+                    </p>
+                  ) : (
+                    <div className="grid gap-2">
+                      {planTypes.map((t) => (
+                        <div
+                          key={t.id}
+                          className="flex items-start justify-between gap-3 rounded-md border p-3 text-sm"
+                        >
+                          <div className="space-y-1">
+                            <div className="font-medium">{t.name}</div>
+                            {t.description && (
+                              <div className="text-xs text-muted-foreground">{t.description}</div>
+                            )}
+                          </div>
+                          <div className="flex gap-2">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                setNewPlanTypeName(t.name)
+                                setNewPlanTypeDescription(t.description || "")
+                                setPlanTypeId(t.id)
+                              }}
+                            >
+                              Usar
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                const name = window.prompt("Nuevo nombre del tipo", t.name) || ""
+                                if (!name.trim()) return
+                                const description =
+                                  window.prompt(
+                                    "Descripción",
+                                    t.description || "",
+                                  ) || ""
+                                startTransition(async () => {
+                                  try {
+                                    const updated = await updatePlanType({
+                                      id: t.id,
+                                      name: name.trim(),
+                                      description: description.trim() || undefined,
+                                    })
+                                    const mapped = {
+                                      id: Number((updated as { id: number }).id),
+                                      name: String((updated as { name: string }).name),
+                                      description:
+                                        (updated as { description: string | null }).description === null ||
+                                        (updated as { description: string | null }).description === undefined
+                                          ? null
+                                          : String((updated as { description: string | null }).description),
+                                    }
+                                    setPlanTypes((prev) =>
+                                      prev
+                                        .map((pt) => (pt.id === mapped.id ? mapped : pt))
+                                        .sort((a, b) => a.name.localeCompare(b.name)),
+                                    )
+                                  } catch (e) {
+                                    const msg = e instanceof Error ? e.message : "Error actualizando tipo de plano"
+                                    alert(msg)
+                                  }
+                                })
+                              }}
+                            >
+                              Editar
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="destructive"
+                              onClick={() => {
+                                const ok = window.confirm(
+                                  `¿Eliminar el tipo de plano "${t.name}"? No se eliminarán los planos existentes, solo el tipo.`,
+                                )
+                                if (!ok) return
+                                startTransition(async () => {
+                                  try {
+                                    await deletePlanType(t.id)
+                                    setPlanTypes((prev) => prev.filter((pt) => pt.id !== t.id))
+                                    if (planTypeId === t.id) {
+                                      setPlanTypeId(null)
+                                      setPlanType("")
+                                    }
+                                  } catch (e) {
+                                    const msg =
+                                      e instanceof Error ? e.message : "Error eliminando tipo de plano"
+                                    alert(msg)
+                                  }
+                                })
+                              }}
+                            >
+                              Eliminar
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
