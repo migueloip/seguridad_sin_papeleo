@@ -1,17 +1,10 @@
-import { PrismaClient } from "@prisma/client"
-import { withAccelerate } from "@prisma/extension-accelerate"
-
-const globalForPrisma = globalThis as unknown as {
-  prisma?: PrismaClient | ReturnType<PrismaClient["$extends"]>
-}
+import postgres from "postgres"
 
 const databaseUrlRaw = process.env.DATABASE_URL || ""
 const directUrlRaw = process.env.DIRECT_URL || ""
 let dbUrl = databaseUrlRaw || directUrlRaw || "postgresql://postgres:postgres@localhost:5432/ssp?schema=public"
 
-const l = dbUrl.toLowerCase()
-const isAccelerate = !!dbUrl && (l.startsWith("prisma+postgres://") || l.startsWith("prisma://") || l.includes("accelerate.prisma-data.net") || l.includes("db.prisma.io"))
-
+// Configure Supabase connection parameters
 try {
   const u = new URL(dbUrl)
   const h = u.hostname.toLowerCase()
@@ -24,35 +17,18 @@ try {
   if (isSupabasePoolerHost && port !== "6543") {
     u.port = "6543"
   }
-  if (isSupabasePoolerHost && u.searchParams.get("pgbouncer") !== "true") {
-    u.searchParams.set("pgbouncer", "true")
-  }
-  if (isSupabasePoolerHost && !u.searchParams.get("connection_limit")) {
-    u.searchParams.set("connection_limit", "1")
-  }
-  if (isSupabasePoolerHost && !u.searchParams.get("pool_timeout")) {
-    u.searchParams.set("pool_timeout", "0")
-  }
   dbUrl = u.toString()
-} catch {}
+} catch { }
 
-process.env.DATABASE_URL = dbUrl
-if (isAccelerate) {
-  process.env.PRISMA_CLIENT_DATA_PROXY = "true"
-} else {
-  delete process.env.PRISMA_CLIENT_DATA_PROXY
-  delete process.env.PRISMA_ACCELERATE_URL
-}
+// Create postgres connection with connection pooling
+const sql = postgres(dbUrl, {
+  max: 10,
+  idle_timeout: 20,
+  connect_timeout: 10,
+  ssl: dbUrl.includes("supabase") ? "require" : undefined,
+})
 
-const base = (globalForPrisma.prisma as PrismaClient | undefined) ?? new PrismaClient({ log: ["error", "warn"] })
-export const prisma = isAccelerate ? base.$extends(withAccelerate()) : base
-
-if (!globalForPrisma.prisma) globalForPrisma.prisma = prisma
-
-export const sql = prisma.$queryRaw.bind(prisma) as unknown as <T = unknown>(
-  strings: TemplateStringsArray,
-  ...values: unknown[]
-) => Promise<T[]>
+export { sql }
 
 // Types
 export interface Project {

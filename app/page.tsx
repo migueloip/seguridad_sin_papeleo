@@ -1,6 +1,7 @@
-import { ProjectsContent } from "@/components/projects-content"
+import { DashboardContent } from "@/components/dashboard-content"
+import { DashboardLayout } from "@/components/dashboard-layout"
 import { getSession } from "@/lib/auth"
-import { getProjects } from "@/app/actions/projects"
+import { getDashboardStats } from "@/app/actions/dashboard"
 import { logout } from "@/app/actions/auth"
 import { redirect } from "next/navigation"
 import { Button } from "@/components/ui/button"
@@ -9,25 +10,26 @@ import { AnimatedPage } from "@/components/animated-page"
 export const dynamic = "force-dynamic"
 
 export default async function Home() {
-  const [projects, session] = await Promise.all([getProjects(), getSession()])
+  const session = await getSession()
   if (!session) redirect("/auth/login")
+
+  const stats = await getDashboardStats()
+
+  // Construct user object matching DashboardLayout expectation
+  const layoutUser = {
+    name: session.name,
+    email: session.email,
+    role: session.role
+  }
 
   return (
     <AnimatedPage duration={400}>
-      <div className="min-h-screen bg-background">
-        <header className="flex items-center justify-between border-b border-border bg-card p-4 md:p-6">
-          <div>
-            <h1 className="text-xl font-semibold">Bienvenido</h1>
-            <p className="text-sm text-muted-foreground">Selecciona un proyecto para administrar</p>
-          </div>
-          <form action={logout}>
-            <Button variant="outline">Cerrar sesión</Button>
-          </form>
-        </header>
-        <main className="p-4 md:p-6 lg:p-8">
-          <ProjectsContent initialProjects={projects} />
-        </main>
-      </div>
+      <DashboardLayout user={layoutUser}>
+        <DashboardContent
+          stats={stats}
+          userName={session.name || session.email.split("@")[0]}
+        />
+      </DashboardLayout>
     </AnimatedPage>
   )
 }

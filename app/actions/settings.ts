@@ -1,6 +1,6 @@
 "use server"
 
-import { prisma, sql } from "@/lib/db"
+import { sql } from "@/lib/db"
 import { revalidatePath } from "next/cache"
 import crypto from "crypto"
 import { getCurrentUserId } from "@/lib/auth"
@@ -12,7 +12,7 @@ export interface Setting {
   description: string | null
 }
 
-const SENSITIVE_KEYS = new Set(["ai_api_key", "smtp_pass"]) 
+const SENSITIVE_KEYS = new Set(["ai_api_key", "smtp_pass"])
 function getKey(): Buffer {
   const secret = process.env.CONFIG_ENCRYPTION_SECRET || ""
   return crypto.createHash("sha256").update(secret).digest()
@@ -42,13 +42,13 @@ function decryptIfNeeded(key: string, value: string | null): string | null {
 export async function getSettings(): Promise<Setting[]> {
   try {
     const userId = await getCurrentUserId()
-    const defaults = await sql<{ id: number; key: string; value: string | null; description: string | null }>`
+    const defaults = await Promise.resolve(sql<{ id: number; key: string; value: string | null; description: string | null }[]>`
       SELECT id, key, value, description FROM settings WHERE user_id IS NULL ORDER BY key ASC
-    `
+    `)
     const overrides = userId
-      ? await sql<{ id: number; key: string; value: string | null; description: string | null }>`
+      ? await Promise.resolve(sql<{ id: number; key: string; value: string | null; description: string | null }[]>`
           SELECT id, key, value, description FROM settings WHERE user_id = ${userId}
-        `
+        `)
       : []
     const byKey = new Map<string, Setting>()
     for (const s of defaults) {
@@ -89,16 +89,16 @@ export async function getSetting(key: string): Promise<string | null> {
   try {
     const userId = await getCurrentUserId()
     if (userId) {
-      const u = await sql<{ value: string | null }>`
+      const u = await Promise.resolve(sql<{ value: string | null }[]>`
         SELECT value FROM settings WHERE user_id = ${userId} AND key = ${key} LIMIT 1
-      `
+      `)
       if (u[0]) {
         return decryptIfNeeded(key, u[0].value ?? null)
       }
     }
-    const d = await sql<{ value: string | null }>`
+    const d = await Promise.resolve(sql<{ value: string | null }[]>`
       SELECT value FROM settings WHERE user_id IS NULL AND key = ${key} LIMIT 1
-    `
+    `)
     const raw = d[0]?.value ?? null
     return decryptIfNeeded(key, raw)
   } catch {

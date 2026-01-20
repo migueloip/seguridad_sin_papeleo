@@ -7,13 +7,42 @@ import { redirect } from "next/navigation"
 import bcrypt from "bcryptjs"
 import { createSession, destroySession } from "@/lib/auth"
 
+// Retry wrapper for database operations (handles Neon connection drops)
+async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, delayMs = 1000): Promise<T> {
+  let lastError: Error | undefined
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn()
+    } catch (error) {
+      lastError = error as Error
+      const errorMessage = String(error)
+      const isConnectionError =
+        errorMessage.includes("Server has closed the connection") ||
+        errorMessage.includes("Connection terminated") ||
+        errorMessage.includes("Tenant or user not found") ||
+        errorMessage.includes("terminating connection") ||
+        errorMessage.includes("P1017")
+
+      if (isConnectionError && attempt < maxRetries) {
+        console.warn(`Database connection error (attempt ${attempt}/${maxRetries}), retrying in ${delayMs}ms...`)
+        await new Promise((resolve) => setTimeout(resolve, delayMs))
+        continue
+      }
+      throw error
+    }
+  }
+  throw lastError
+}
+
 async function backfillUserId(userId: number) {
-  await sql`UPDATE projects SET user_id = ${userId} WHERE user_id IS NULL`
-  await sql`UPDATE workers SET user_id = ${userId} WHERE user_id IS NULL`
-  await sql`UPDATE documents SET user_id = ${userId} WHERE user_id IS NULL`
-  await sql`UPDATE findings SET user_id = ${userId} WHERE user_id IS NULL`
-  await sql`UPDATE completed_checklists SET user_id = ${userId} WHERE user_id IS NULL`
-  await sql`UPDATE reports SET user_id = ${userId} WHERE user_id IS NULL`
+  await withRetry(async () => {
+    await sql`UPDATE projects SET user_id = ${userId} WHERE user_id IS NULL`
+    await sql`UPDATE workers SET user_id = ${userId} WHERE user_id IS NULL`
+    await sql`UPDATE documents SET user_id = ${userId} WHERE user_id IS NULL`
+    await sql`UPDATE findings SET user_id = ${userId} WHERE user_id IS NULL`
+    await sql`UPDATE completed_checklists SET user_id = ${userId} WHERE user_id IS NULL`
+    await sql`UPDATE reports SET user_id = ${userId} WHERE user_id IS NULL`
+  })
 }
 
 export async function register(formData: FormData) {
@@ -25,7 +54,7 @@ export async function register(formData: FormData) {
     throw new Error("Email y contraseña son obligatorios")
   }
 
-  const existing = await sql<{ id: number }>`SELECT id FROM users WHERE email = ${email} LIMIT 1`
+  const existing = await withRetry(async () => await sql<{ id: number }[]>`SELECT id FROM users WHERE email = ${email} LIMIT 1`)
   if (existing.length) {
     throw new Error("Este email ya está registrado")
   }
@@ -33,11 +62,11 @@ export async function register(formData: FormData) {
   const passwordHash = await bcrypt.hash(password, 10)
   const adminEmails = (process.env.ADMIN_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean)
   const role = adminEmails.includes(email) ? "admin" : "user"
-  const result = await sql<{ id: number; role: string | null }>`
+  const result = await withRetry(async () => await sql<{ id: number; role: string | null }[]>`
     INSERT INTO users (email, name, password_hash, role)
     VALUES (${email}, ${name || null}, ${passwordHash}, ${role})
     RETURNING id, role
-  `
+  `)
   const userId = Number(result[0].id)
   await createSession(userId)
   await backfillUserId(userId)
@@ -53,7 +82,7 @@ export async function login(formData: FormData) {
     throw new Error("Email y contraseña son obligatorios")
   }
 
-  const user = await sql<User>`SELECT * FROM users WHERE email = ${email} LIMIT 1`
+  const user = await withRetry(async () => await sql<User[]>`SELECT * FROM users WHERE email = ${email} LIMIT 1`)
   const u = user[0]
   if (!u) {
     throw new Error("Credenciales inválidas")
@@ -65,7 +94,7 @@ export async function login(formData: FormData) {
 
   const adminEmails = (process.env.ADMIN_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean)
   if (adminEmails.includes(email) && u.role !== "admin") {
-    await sql`UPDATE users SET role = 'admin' WHERE id = ${u.id}`
+    await withRetry(async () => await sql`UPDATE users SET role = 'admin' WHERE id = ${u.id}`)
     u.role = "admin"
   }
 

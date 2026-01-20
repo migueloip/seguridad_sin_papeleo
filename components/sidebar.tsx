@@ -12,6 +12,7 @@ function buildNavigation(pathname: string) {
   const m = pathname.match(/^\/proyectos\/(\d+)/)
   const base = m ? `/proyectos/${m[1]}` : ""
   return [
+    { name: "Principal", href: "/", icon: FileBarChart }, // Added Dashboard link
     { name: "Planos", href: base ? `${base}/planos` : "/planos", icon: ImageIcon },
     { name: "Documentos", href: `${base}/documentos`, icon: FileText },
     { name: "Informes", href: `${base}/informes`, icon: FileBarChart },
@@ -32,13 +33,13 @@ export function Sidebar({ open, onClose, user }: SidebarComponentProps) {
   const pathname = usePathname()
   const [companyName, setCompanyName] = useState<string | null>(null)
   useEffect(() => {
-    ;(async () => {
+    ; (async () => {
       try {
         const res = await fetch("/api/settings/company-name", { cache: "no-store" })
         const data = await res.json()
         const name = typeof data?.company_name === "string" ? data.company_name : null
         setCompanyName(name)
-      } catch {}
+      } catch { }
     })()
   }, [])
   const secondaryText =

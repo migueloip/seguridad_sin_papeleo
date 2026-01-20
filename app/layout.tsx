@@ -29,7 +29,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="es" suppressHydrationWarning>
-      <body className={`${geist.className} ${geistMono.className} font-sans antialiased`}>
+      <body className={`${geist.className} ${geistMono.className} font-sans antialiased`} suppressHydrationWarning>
         {children}
         <Toaster />
       </body>

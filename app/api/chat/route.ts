@@ -1,5 +1,5 @@
 
-import { streamText, tool, convertToModelMessages, type UIMessage, type ToolExecutionOptions } from 'ai';
+import { streamText, tool, convertToModelMessages, type UIMessage } from 'ai';
 import { getModel } from '@/lib/ai';
 import { getSetting } from '@/app/actions/settings';
 import { getReportData } from '@/app/actions/reports';
@@ -57,10 +57,7 @@ export async function POST(req: Request) {
             queryProjectData: tool({
                 description: "Obtener datos reales del proyecto actual: Hallazgos, Documentos, Trabajadores o Resumen General.",
                 parameters: queryProjectDataParams,
-                execute: async (
-                    { dataType, period }: z.infer<typeof queryProjectDataParams>,
-                    _options: ToolExecutionOptions,
-                ) => {
+                execute: async ({ dataType, period }: z.infer<typeof queryProjectDataParams>, _options: any) => {
                     const data = await getReportData(period, projectId);
                     if (dataType === "findings") {
                         return {
@@ -78,20 +75,17 @@ export async function POST(req: Request) {
                     if (dataType === "workers") return data.workers;
                     return data;
                 },
-            }),
+            } as any),
             generateReportElement: tool({
                 description: "Crear un nuevo elemento visual para agregar al informe. Úsalo cuando el usuario pida agregar algo.",
                 parameters: generateReportElementParams,
-                execute: async (
-                    args: z.infer<typeof generateReportElementParams>,
-                    _options: ToolExecutionOptions,
-                ) => {
+                execute: async (args: z.infer<typeof generateReportElementParams>, _options: any) => {
                     return {
                         _action: "CREATE_ELEMENT",
                         elementData: args,
                     };
                 },
-            })
+            } as any)
         },
     });
 
