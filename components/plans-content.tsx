@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState, useTransition, type MouseEvent } from "react"
+import { useCallback, useEffect, useRef, useState, useTransition, type MouseEvent } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -20,7 +20,6 @@ import {
   updatePlanData,
 } from "@/app/actions/plans"
 import type { Plan } from "@/lib/db"
-import { PlanEditor } from "./plans-3d/editor"
 import type { PlanData } from "./plans-3d/types"
 
 type AutodeskDocumentRoot = {
@@ -88,7 +87,7 @@ export function PlansContent({
   const [planTypeId, setPlanTypeId] = useState<number | null>(null)
   const [message, setMessage] = useState<string>("")
   const [selectedZoneKey, setSelectedZoneKey] = useState<string | null>(null)
-  const [tab, setTab] = useState<"ai" | "manual" | "saved" | "plan-types" | "3d-beta">("ai")
+  const [tab, setTab] = useState<"saved" | "3d-beta">("3d-beta")
   const [editingPlanId, setEditingPlanId] = useState<number | null>(null)
   const [autodeskUrn, setAutodeskUrn] = useState<string>("")
   const [imageDims, setImageDims] = useState<{ w: number; h: number } | null>(null)
@@ -101,10 +100,146 @@ export function PlansContent({
   const [newPlanTypeDescription, setNewPlanTypeDescription] = useState("")
   const [plan3dData, setPlan3dData] = useState<PlanData | null>(null)
   const [mounted, setMounted] = useState(false)
+  const architect3dLastSaved = useRef<string | null>(null)
+  const architect3dIframeRef = useRef<HTMLIFrameElement | null>(null)
 
   useEffect(() => {
     setMounted(true)
   }, [])
+
+  useEffect(() => {
+    if (!mounted) return
+    if (tab !== "3d-beta") return
+    sendArchitect3dLoadMessage()
+  }, [mounted, tab, sendArchitect3dLoadMessage])
+
+  const sendArchitect3dLoadMessage = useCallback(() => {
+    if (!architect3dLastSaved.current) return
+    const iframe = architect3dIframeRef.current
+    if (!iframe || !iframe.contentWindow) return
+    try {
+      iframe.contentWindow.postMessage(
+        { type: "architect3d:load", payload: architect3dLastSaved.current },
+        "*",
+      )
+    } catch {
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const handler = (event: MessageEvent) => {
+      const data = event.data as { type?: string; payload?: unknown }
+      if (!data || data.type !== "architect3d:save") return
+      const payload = data.payload
+      if (typeof payload !== "string") return
+      architect3dLastSaved.current = payload
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(payload)
+      } catch {
+        parsed = null
+      }
+      const root = parsed && typeof parsed === "object" ? (parsed as UnknownRecord) : null
+      let plan3d: PlanData | null = null
+      if (root) {
+        const floorplan = root["floorplan"]
+        if (floorplan && typeof floorplan === "object") {
+          const fp = floorplan as UnknownRecord
+          const cornersObj = (fp["corners"] || {}) as UnknownRecord
+          const wallsArr = Array.isArray(fp["walls"]) ? (fp["walls"] as UnknownRecord[]) : []
+          const entries = Object.entries(cornersObj)
+          if (entries.length && wallsArr.length) {
+            const corners: Record<string, { x: number; y: number }> = {}
+            let minX = Number.POSITIVE_INFINITY
+            let maxX = Number.NEGATIVE_INFINITY
+            let minY = Number.POSITIVE_INFINITY
+            let maxY = Number.NEGATIVE_INFINITY
+            for (const [id, value] of entries) {
+              const o = value as UnknownRecord
+              const vx = o["x"]
+              const vy = o["y"]
+              const x = typeof vx === "number" ? vx : Number(vx)
+              const y = typeof vy === "number" ? vy : Number(vy)
+              if (!Number.isFinite(x) || !Number.isFinite(y)) continue
+              corners[id] = { x, y }
+              if (x < minX) minX = x
+              if (x > maxX) maxX = x
+              if (y < minY) minY = y
+              if (y > maxY) maxY = y
+            }
+            const cornerIds = Object.keys(corners)
+            if (cornerIds.length) {
+              let width = maxX - minX
+              let height = maxY - minY
+              if (!(width > 0)) width = 10
+              if (!(height > 0)) height = 10
+              const walls = wallsArr
+                .map((w, idx) => {
+                  const ww = w as UnknownRecord
+                  const c1Id = typeof ww["corner1"] === "string" ? (ww["corner1"] as string) : ""
+                  const c2Id = typeof ww["corner2"] === "string" ? (ww["corner2"] as string) : ""
+                  const c1 = corners[c1Id]
+                  const c2 = corners[c2Id]
+                  if (!c1 || !c2) return null
+                  return {
+                    id: `w-${idx}`,
+                    start: { x: c1.x, y: c1.y },
+                    end: { x: c2.x, y: c2.y },
+                    height: 3,
+                    thickness: 0.2,
+                  }
+                })
+                .filter(Boolean) as PlanData["walls"]
+              if (walls.length) {
+                plan3d = {
+                  width,
+                  height,
+                  scale: 1,
+                  walls,
+                  doors: [],
+                  windows: [],
+                  layers: [
+                    {
+                      id: "l-structure",
+                      name: "Estructura",
+                      visible: true,
+                      color: "#94a3b8",
+                      elements: [],
+                    },
+                  ],
+                  zones: [],
+                }
+              }
+            }
+          }
+        }
+      }
+      const payloadForDb: UnknownRecord = {}
+      if (root) {
+        payloadForDb["architect3d"] = root
+      }
+      if (plan3d) {
+        payloadForDb["plan3d"] = plan3d
+        setPlan3dData(plan3d)
+      }
+      if (!editingPlanId || Object.keys(payloadForDb).length === 0) return
+      startTransition(async () => {
+        try {
+          await updatePlanData(editingPlanId, payloadForDb)
+          setMessage("Plano 3D guardado desde Architect3D")
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : "Error guardando plano 3D"
+          setMessage(msg)
+          alert(msg)
+        }
+      })
+    }
+    window.addEventListener("message", handler)
+    return () => {
+      window.removeEventListener("message", handler)
+    }
+  }, [editingPlanId, startTransition])
 
   async function renderPdfFirstPageToDataURL(pdfFile: File): Promise<string> {
     const arrayBuffer = await pdfFile.arrayBuffer()
@@ -506,7 +641,7 @@ export function PlansContent({
           setTab("3d-beta")
         } else {
           setPlan3dData(null)
-          setTab("ai")
+          setTab("saved")
         }
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Error cargando plano"
@@ -678,12 +813,12 @@ export function PlansContent({
 
       {/* Hydration fix: Render Tabs only on client to avoid ID mismatches */}
       {mounted && (
-        <Tabs value={tab} onValueChange={(v) => setTab(v as "ai" | "manual" | "saved" | "plan-types" | "3d-beta")}>
+        <Tabs value={tab} onValueChange={(v) => setTab(v as any)}>
           <TabsList>
-            <TabsTrigger value="ai">Generador por IA</TabsTrigger>
-            <TabsTrigger value="manual">Editor manual de zonas</TabsTrigger>
+            
+            
             <TabsTrigger value="saved">Planos guardados</TabsTrigger>
-            <TabsTrigger value="plan-types">Tipos de plano</TabsTrigger>
+            
             <TabsTrigger value="3d-beta">Editor 3D (Beta)</TabsTrigger>
           </TabsList>
 
@@ -1446,13 +1581,16 @@ export function PlansContent({
           <TabsContent value="3d-beta" className="mt-4">
             <Card>
               <CardHeader>
-                <CardTitle>Editor 3D (Beta)</CardTitle>
+                <CardTitle>Editor 3D (Architect3D)</CardTitle>
               </CardHeader>
               <CardContent>
-                <PlanEditor
-                  initialData={plan3dData}
-                  onSave={handleSave3D}
-                />
+                <div className="h-[80vh] min-h-[480px] w-full overflow-hidden rounded-md border bg-muted/40">
+                  <iframe
+                    src="/architect3d/index.html"
+                    className="h-full w-full border-0"
+                    allowFullScreen
+                  />
+                </div>
               </CardContent>
             </Card>
           </TabsContent>

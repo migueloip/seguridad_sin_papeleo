@@ -3,8 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
+    "copy:architect3d": "node scripts/copy-architect3d.js",
+    "dev": "npm run copy:architect3d && next dev",
+    "build": "npm run copy:architect3d && next build",
     "start": "next start",
     "lint": "eslint .",
     "test": "vitest run"
