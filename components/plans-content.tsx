@@ -87,7 +87,7 @@ export function PlansContent({
   const [planTypeId, setPlanTypeId] = useState<number | null>(null)
   const [message, setMessage] = useState<string>("")
   const [selectedZoneKey, setSelectedZoneKey] = useState<string | null>(null)
-  const [tab, setTab] = useState<"saved" | "3d-beta">("3d-beta")
+  const [tab, setTab] = useState<"saved" | "3d-beta" | "ai">("3d-beta")
   const [editingPlanId, setEditingPlanId] = useState<number | null>(null)
   const [autodeskUrn, setAutodeskUrn] = useState<string>("")
   const [imageDims, setImageDims] = useState<{ w: number; h: number } | null>(null)
@@ -107,12 +107,6 @@ export function PlansContent({
     setMounted(true)
   }, [])
 
-  useEffect(() => {
-    if (!mounted) return
-    if (tab !== "3d-beta") return
-    sendArchitect3dLoadMessage()
-  }, [mounted, tab, sendArchitect3dLoadMessage])
-
   const sendArchitect3dLoadMessage = useCallback(() => {
     if (!architect3dLastSaved.current) return
     const iframe = architect3dIframeRef.current
@@ -125,6 +119,12 @@ export function PlansContent({
     } catch {
     }
   }, [])
+
+  useEffect(() => {
+    if (!mounted) return
+    if (tab !== "3d-beta") return
+    sendArchitect3dLoadMessage()
+  }, [mounted, tab, sendArchitect3dLoadMessage])
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -634,10 +634,22 @@ export function PlansContent({
         setMessage("")
         setAutodeskUrn("")
 
-        // Check for 3D data
         const extracted = detail.plan?.extracted as any
-        if (extracted && extracted.walls && Array.isArray(extracted.walls)) {
-          setPlan3dData(extracted as PlanData)
+        if (extracted && extracted.architect3d) {
+          try {
+            architect3dLastSaved.current =
+              typeof extracted.architect3d === "string"
+                ? extracted.architect3d
+                : JSON.stringify(extracted.architect3d)
+          } catch {
+            architect3dLastSaved.current = null
+          }
+        } else {
+          architect3dLastSaved.current = null
+        }
+        const extracted3d = extracted && extracted.plan3d ? (extracted.plan3d as any) : extracted
+        if (extracted3d && extracted3d.walls && Array.isArray(extracted3d.walls)) {
+          setPlan3dData(extracted3d as PlanData)
           setTab("3d-beta")
         } else {
           setPlan3dData(null)
@@ -1586,9 +1598,11 @@ export function PlansContent({
               <CardContent>
                 <div className="h-[80vh] min-h-[480px] w-full overflow-hidden rounded-md border bg-muted/40">
                   <iframe
+                    ref={architect3dIframeRef}
                     src="/architect3d/index.html"
                     className="h-full w-full border-0"
                     allowFullScreen
+                    onLoad={sendArchitect3dLoadMessage}
                   />
                 </div>
               </CardContent>

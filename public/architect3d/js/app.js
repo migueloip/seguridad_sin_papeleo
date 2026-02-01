@@ -119,6 +119,11 @@ var mainControls = function(blueprint3d)
 
 	  function saveDesign() {
 	    var data = blueprint3d.model.exportSerialized();
+      try {
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage({ type: "architect3d:save", payload: data }, "*");
+        }
+      } catch (e) {}
 	    var a = window.document.createElement('a');
 	    var blob = new Blob([data], {type : 'text'});
 	    a.href = window.URL.createObjectURL(blob);
@@ -127,6 +132,16 @@ var mainControls = function(blueprint3d)
 	    a.click();
 	    document.body.removeChild(a)
 	  }
+
+    window.addEventListener("message", function(event) {
+      var msg = event && event.data ? event.data : null;
+      if (!msg || msg.type !== "architect3d:load") return;
+      var payload = msg.payload;
+      if (typeof payload !== "string") return;
+      try {
+        blueprint3d.model.loadSerialized(payload);
+      } catch (e) {}
+    });
 
 	  function saveGLTF()
 	  {

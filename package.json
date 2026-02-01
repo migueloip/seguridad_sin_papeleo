@@ -3,9 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "build:architect3d": "npm --prefix external_component/architect3d-master run build",
     "copy:architect3d": "node scripts/copy-architect3d.js",
-    "dev": "npm run copy:architect3d && next dev",
-    "build": "npm run copy:architect3d && next build",
+    "prepare:architect3d": "npm run build:architect3d && npm run copy:architect3d",
+    "dev": "npm run prepare:architect3d && next dev",
+    "build": "npm run prepare:architect3d && next build",
     "start": "next start",
     "lint": "eslint .",
     "test": "vitest run"

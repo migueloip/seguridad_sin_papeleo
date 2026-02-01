@@ -133,6 +133,16 @@ var mainControls = function(blueprint3d)
 	    document.body.removeChild(a)
 	  }
 
+    window.addEventListener("message", function(event) {
+      var msg = event && event.data ? event.data : null;
+      if (!msg || msg.type !== "architect3d:load") return;
+      var payload = msg.payload;
+      if (typeof payload !== "string") return;
+      try {
+        blueprint3d.model.loadSerialized(payload);
+      } catch (e) {}
+    });
+
 	  function saveGLTF()
 	  {
 		  blueprint3d.three.exportForBlender();
