@@ -6,7 +6,9 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export function normalizeRut(rut: string) {
-  const cleaned = rut.replace(/[^0-9kK]/g, "").toUpperCase()
+  const cleaned = (rut || "").replace(/[^0-9kK]/g, "").toUpperCase()
+  // Necesita al menos cuerpo (1+) + dígito verificador (1).
+  if (cleaned.length < 2) return cleaned
   const body = cleaned.slice(0, -1)
   const dv = cleaned.slice(-1)
   return `${body}-${dv}`

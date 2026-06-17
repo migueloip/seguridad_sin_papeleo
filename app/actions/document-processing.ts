@@ -60,13 +60,25 @@ Responde SOLO con el JSON, sin explicaciones adicionales. Si no puedes extraer a
     })
 
     const cleanedText = text.replace(/```json\n?|\n?```/g, "").trim()
+    let parsed: ExtractedData | null = null
     try {
-      return JSON.parse(cleanedText)
+      parsed = JSON.parse(cleanedText) as ExtractedData
     } catch {
       const jsonMatch = cleanedText.match(/\{[\s\S]*\}/)
       if (jsonMatch) {
-        return JSON.parse(jsonMatch[0])
+        try {
+          parsed = JSON.parse(jsonMatch[0]) as ExtractedData
+        } catch {}
       }
+    }
+
+    if (parsed) {
+      if (parsed.rut) {
+        try {
+          parsed.rut = formatRut(parsed.rut)
+        } catch {}
+      }
+      return parsed
     }
 
     return {

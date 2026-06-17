@@ -25,13 +25,6 @@ export interface DashboardStats {
     resolved: number
     critical: number
   }
-  recentActivity: Array<{
-    id: number
-    type: "document" | "finding" | "worker" | "project"
-    action: string
-    description: string
-    created_at: string
-  }>
   upcomingExpirations: Array<{
     id: number
     file_name: string
@@ -64,7 +57,6 @@ export async function getDashboardStats(): Promise<DashboardStats> {
       workers: { total: 0, active: 0 },
       documents: { total: 0, valid: 0, expiring: 0, expired: 0 },
       findings: { total: 0, open: 0, in_progress: 0, resolved: 0, critical: 0 },
-      recentActivity: [],
       upcomingExpirations: [],
       findingsWeekly: [],
       riskByLocation: [],
@@ -100,7 +92,7 @@ export async function getDashboardStats(): Promise<DashboardStats> {
       SELECT 
         COUNT(*)::int as total,
         COUNT(*) FILTER (WHERE status = 'valid')::int as valid,
-        COUNT(*) FILTER (WHERE status = 'expiring_soon')::int as expiring,
+        COUNT(*) FILTER (WHERE status = 'expiring')::int as expiring,
         COUNT(*) FILTER (WHERE status = 'expired')::int as expired
       FROM documents WHERE user_id = ${userId}
     `,
@@ -133,7 +125,8 @@ export async function getDashboardStats(): Promise<DashboardStats> {
       ORDER BY d.expiry_date ASC
       LIMIT 5
     `,
-    // Findings weekly (last 8 weeks)
+    // Findings weekly (last 8 weeks): abiertos = creados esa semana,
+    // cerrados = resueltos esa semana (por resolved_at).
     sql<{ semana: string; abiertos: number; cerrados: number }[]>`
       WITH weeks AS (
         SELECT generate_series(
@@ -142,15 +135,20 @@ export async function getDashboardStats(): Promise<DashboardStats> {
           '1 week'::interval
         )::date as week_start
       )
-      SELECT 
+      SELECT
         TO_CHAR(w.week_start, 'DD/MM') as semana,
-        COALESCE(SUM(CASE WHEN f.status IN ('open', 'in_progress') THEN 1 ELSE 0 END), 0)::int as abiertos,
-        COALESCE(SUM(CASE WHEN f.status IN ('resolved', 'closed') THEN 1 ELSE 0 END), 0)::int as cerrados
+        COALESCE((
+          SELECT COUNT(*) FROM findings f
+          WHERE f.user_id = ${userId}
+            AND date_trunc('week', f.created_at::date) = w.week_start
+        ), 0)::int as abiertos,
+        COALESCE((
+          SELECT COUNT(*) FROM findings f
+          WHERE f.user_id = ${userId}
+            AND f.resolved_at IS NOT NULL
+            AND date_trunc('week', f.resolved_at::date) = w.week_start
+        ), 0)::int as cerrados
       FROM weeks w
-      LEFT JOIN findings f ON 
-        f.user_id = ${userId} AND
-        date_trunc('week', f.created_at::date) = w.week_start
-      GROUP BY w.week_start
       ORDER BY w.week_start
     `,
     // Risk by location
@@ -181,7 +179,6 @@ export async function getDashboardStats(): Promise<DashboardStats> {
     workers: workerStats[0] || { total: 0, active: 0 },
     documents: documentStats[0] || { total: 0, valid: 0, expiring: 0, expired: 0 },
     findings: findingStats[0] || { total: 0, open: 0, in_progress: 0, resolved: 0, critical: 0 },
-    recentActivity: [],
     upcomingExpirations: upcomingExpirations.map((e) => ({
       ...e,
       days_until: Number(e.days_until),

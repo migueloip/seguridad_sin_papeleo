@@ -1,5 +1,5 @@
 import { cookies } from "next/headers"
-import { sql } from "@/lib/db"
+import { sql, tenantContext } from "@/lib/db"
 
 type SessionWithUser = {
   user_id: number
@@ -20,7 +20,13 @@ export async function getSession() {
       WHERE s.token = ${token} AND s.expires_at > CURRENT_TIMESTAMP
       LIMIT 1
     `
-    return result[0] || null
+    const session = result[0] || null
+    if (session) {
+      // Fija el contexto de tenant para el resto del request: las queries
+      // posteriores correrán bajo la RLS de este usuario (ver lib/db.ts).
+      tenantContext.enterWith({ userId: Number(session.user_id) })
+    }
+    return session
   } catch {
     return null
   }

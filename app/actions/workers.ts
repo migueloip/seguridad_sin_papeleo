@@ -80,14 +80,9 @@ async function snapshotWorkerStatsForToday(): Promise<WorkerStatsDailyRow | null
   const now = new Date()
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
 
-  const existing = await sql<WorkerStatsDailyRow>`
-    SELECT stat_date, total_workers, complete_workers, incomplete_workers, critical_workers, total_admonitions
-    FROM worker_stats_daily
-    WHERE user_id = ${userId} AND stat_date = ${today}
-    LIMIT 1
-  `
-  if (existing[0]) return existing[0]
-
+  // Siempre recalcula y hace upsert del snapshot de HOY, para que las KPIs del
+  // día reflejen altas/bajas y cambios de documentos (antes retornaba el primer
+  // snapshot del día y nunca lo actualizaba). Los días previos quedan intactos.
   const workers = await getWorkers()
   const totalWorkers = workers.length
   let completeWorkers = 0

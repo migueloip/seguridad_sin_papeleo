@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server"
-import { sql } from "@/lib/db"
+import { sql, clearTenantContext } from "@/lib/db"
 import { getSession } from "@/lib/auth"
 
 export async function POST(req: Request) {
@@ -7,6 +7,10 @@ export async function POST(req: Request) {
     const session = await getSession()
     if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401 })
     if ((session.role || "user") !== "admin") return NextResponse.json({ error: "forbidden" }, { status: 403 })
+    // getSession fijó el contexto de tenant (rol authenticated). El DDL de esta
+    // ruta (CREATE/ALTER/CREATE POLICY) requiere el rol dueño `postgres`, así que
+    // limpiamos el contexto para correr todo como postgres.
+    clearTenantContext()
     const url = new URL(req.url)
     const scope = url.searchParams.get("scope")
     if (scope === "admonitions") {
@@ -123,147 +127,62 @@ export async function POST(req: Request) {
       const formatted = `${withDots}-${dv}`
       await sql`UPDATE workers SET rut = ${formatted} WHERE id = ${w.id}`
     }
-    await sql`ALTER TABLE users ENABLE ROW LEVEL SECURITY`
-    await sql`ALTER TABLE sessions ENABLE ROW LEVEL SECURITY`
-    await sql`ALTER TABLE notifications ENABLE ROW LEVEL SECURITY`
-    await sql`ALTER TABLE document_types ENABLE ROW LEVEL SECURITY`
-    await sql`ALTER TABLE checklist_categories ENABLE ROW LEVEL SECURITY`
-    await sql`ALTER TABLE checklist_templates ENABLE ROW LEVEL SECURITY`
-    await sql`ALTER TABLE projects ENABLE ROW LEVEL SECURITY`
-    await sql`ALTER TABLE workers ENABLE ROW LEVEL SECURITY`
-    await sql`ALTER TABLE documents ENABLE ROW LEVEL SECURITY`
-    await sql`ALTER TABLE mobile_documents ENABLE ROW LEVEL SECURITY`
-    await sql`ALTER TABLE findings ENABLE ROW LEVEL SECURITY`
-    await sql`ALTER TABLE completed_checklists ENABLE ROW LEVEL SECURITY`
-    await sql`ALTER TABLE reports ENABLE ROW LEVEL SECURITY`
-    await sql`ALTER TABLE settings ENABLE ROW LEVEL SECURITY`
-    await sql`ALTER TABLE admonitions ENABLE ROW LEVEL SECURITY`
-    await sql`ALTER TABLE plan_types ENABLE ROW LEVEL SECURITY`
-    await sql`ALTER TABLE plans ENABLE ROW LEVEL SECURITY`
-    await sql`ALTER TABLE plan_floors ENABLE ROW LEVEL SECURITY`
-    await sql`ALTER TABLE plan_zones ENABLE ROW LEVEL SECURITY`
+    // --- Row Level Security ---------------------------------------------------
+    // La app se conecta como `postgres` (BYPASSRLS), así que las queries con
+    // contexto de tenant cambian a `SET LOCAL ROLE authenticated` (ver lib/db.ts),
+    // rol que SÍ está sujeto a RLS. Por eso TODAS las políticas son TO authenticated:
+    // el rol `anon` de PostgREST queda denegado (no se exponen datos por la API REST
+    // de Supabase) y `postgres` sigue con bypass para el bootstrap/DDL.
+    // El user_id se lee con current_setting('app.user_id') (NULLIF por el '' inicial)
+    // -> sin contexto no hay filas (fail-closed para el rol authenticated).
 
-    await sql`DROP POLICY IF EXISTS select_document_types_all ON document_types`
-    await sql`DROP POLICY IF EXISTS select_document_types_anon ON document_types`
-    await sql`CREATE POLICY select_document_types_all ON document_types FOR SELECT TO authenticated USING (true)`
-    await sql`CREATE POLICY select_document_types_anon ON document_types FOR SELECT TO anon USING (true)`
+    // Tablas de bootstrap/compartidas: RLS habilitada (protege de PostgREST anon)
+    // con política permisiva solo para `authenticated`, ya que la app las consulta
+    // como authenticated cuando hay contexto. La tenencia de estas la controla el
+    // código (auth por token, filtros de admin).
+    const bootstrapTables = [
+      "users", "sessions", "notifications", "document_types",
+      "checklist_categories", "checklist_templates",
+    ]
+    for (const t of bootstrapTables) {
+      await sql.unsafe(`ALTER TABLE IF EXISTS ${t} ENABLE ROW LEVEL SECURITY`)
+      // Limpia esquemas RLS previos (huérfanos) que usaban app.current_user_id.
+      await sql.unsafe(`DROP POLICY IF EXISTS tenant_isolation ON ${t}`)
+      await sql.unsafe(`DROP POLICY IF EXISTS self_only ON ${t}`)
+      await sql.unsafe(`DROP POLICY IF EXISTS select_document_types_all ON ${t}`)
+      await sql.unsafe(`DROP POLICY IF EXISTS select_document_types_anon ON ${t}`)
+      await sql.unsafe(`DROP POLICY IF EXISTS app_all_${t} ON ${t}`)
+      await sql.unsafe(`CREATE POLICY app_all_${t} ON ${t} FOR ALL TO authenticated USING (true) WITH CHECK (true)`)
+    }
 
-    await sql`DROP POLICY IF EXISTS select_projects_own ON projects`
-    await sql`DROP POLICY IF EXISTS insert_projects_own ON projects`
-    await sql`DROP POLICY IF EXISTS update_projects_own ON projects`
-    await sql`DROP POLICY IF EXISTS delete_projects_own ON projects`
-    await sql`CREATE POLICY select_projects_own ON projects FOR SELECT TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY insert_projects_own ON projects FOR INSERT TO authenticated WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY update_projects_own ON projects FOR UPDATE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id) WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY delete_projects_own ON projects FOR DELETE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
-
-    await sql`DROP POLICY IF EXISTS select_plan_types_own ON plan_types`
-    await sql`DROP POLICY IF EXISTS insert_plan_types_own ON plan_types`
-    await sql`DROP POLICY IF EXISTS update_plan_types_own ON plan_types`
-    await sql`DROP POLICY IF EXISTS delete_plan_types_own ON plan_types`
-    await sql`CREATE POLICY select_plan_types_own ON plan_types FOR SELECT TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY insert_plan_types_own ON plan_types FOR INSERT TO authenticated WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY update_plan_types_own ON plan_types FOR UPDATE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id) WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY delete_plan_types_own ON plan_types FOR DELETE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
-
-    await sql`DROP POLICY IF EXISTS select_workers_own ON workers`
-    await sql`DROP POLICY IF EXISTS insert_workers_own ON workers`
-    await sql`DROP POLICY IF EXISTS update_workers_own ON workers`
-    await sql`DROP POLICY IF EXISTS delete_workers_own ON workers`
-    await sql`CREATE POLICY select_workers_own ON workers FOR SELECT TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY insert_workers_own ON workers FOR INSERT TO authenticated WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY update_workers_own ON workers FOR UPDATE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id) WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY delete_workers_own ON workers FOR DELETE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
-
-    await sql`DROP POLICY IF EXISTS select_documents_own ON documents`
-    await sql`DROP POLICY IF EXISTS insert_documents_own ON documents`
-    await sql`DROP POLICY IF EXISTS update_documents_own ON documents`
-    await sql`DROP POLICY IF EXISTS delete_documents_own ON documents`
-    await sql`CREATE POLICY select_documents_own ON documents FOR SELECT TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY insert_documents_own ON documents FOR INSERT TO authenticated WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY update_documents_own ON documents FOR UPDATE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id) WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY delete_documents_own ON documents FOR DELETE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
-
-    await sql`DROP POLICY IF EXISTS select_mobile_documents_own ON mobile_documents`
-    await sql`DROP POLICY IF EXISTS insert_mobile_documents_own ON mobile_documents`
-    await sql`DROP POLICY IF EXISTS update_mobile_documents_own ON mobile_documents`
-    await sql`DROP POLICY IF EXISTS delete_mobile_documents_own ON mobile_documents`
-    await sql`CREATE POLICY select_mobile_documents_own ON mobile_documents FOR SELECT TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY insert_mobile_documents_own ON mobile_documents FOR INSERT TO authenticated WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY update_mobile_documents_own ON mobile_documents FOR UPDATE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id) WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY delete_mobile_documents_own ON mobile_documents FOR DELETE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
-
-    await sql`DROP POLICY IF EXISTS select_findings_own ON findings`
-    await sql`DROP POLICY IF EXISTS insert_findings_own ON findings`
-    await sql`DROP POLICY IF EXISTS update_findings_own ON findings`
-    await sql`DROP POLICY IF EXISTS delete_findings_own ON findings`
-    await sql`CREATE POLICY select_findings_own ON findings FOR SELECT TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY insert_findings_own ON findings FOR INSERT TO authenticated WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY update_findings_own ON findings FOR UPDATE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id) WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY delete_findings_own ON findings FOR DELETE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
-
-    await sql`DROP POLICY IF EXISTS select_completed_checklists_own ON completed_checklists`
-    await sql`DROP POLICY IF EXISTS insert_completed_checklists_own ON completed_checklists`
-    await sql`DROP POLICY IF EXISTS update_completed_checklists_own ON completed_checklists`
-    await sql`DROP POLICY IF EXISTS delete_completed_checklists_own ON completed_checklists`
-    await sql`CREATE POLICY select_completed_checklists_own ON completed_checklists FOR SELECT TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY insert_completed_checklists_own ON completed_checklists FOR INSERT TO authenticated WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY update_completed_checklists_own ON completed_checklists FOR UPDATE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id) WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY delete_completed_checklists_own ON completed_checklists FOR DELETE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
-
-    await sql`DROP POLICY IF EXISTS select_reports_own ON reports`
-    await sql`DROP POLICY IF EXISTS insert_reports_own ON reports`
-    await sql`DROP POLICY IF EXISTS update_reports_own ON reports`
-    await sql`DROP POLICY IF EXISTS delete_reports_own ON reports`
-    await sql`CREATE POLICY select_reports_own ON reports FOR SELECT TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY insert_reports_own ON reports FOR INSERT TO authenticated WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY update_reports_own ON reports FOR UPDATE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id) WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY delete_reports_own ON reports FOR DELETE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
-
-    await sql`DROP POLICY IF EXISTS select_settings_own ON settings`
-    await sql`DROP POLICY IF EXISTS insert_settings_own ON settings`
-    await sql`DROP POLICY IF EXISTS update_settings_own ON settings`
-    await sql`DROP POLICY IF EXISTS delete_settings_own ON settings`
-    await sql`CREATE POLICY select_settings_own ON settings FOR SELECT TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY insert_settings_own ON settings FOR INSERT TO authenticated WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY update_settings_own ON settings FOR UPDATE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id) WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY delete_settings_own ON settings FOR DELETE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
-
-    await sql`DROP POLICY IF EXISTS select_admonitions_own ON admonitions`
-    await sql`DROP POLICY IF EXISTS insert_admonitions_own ON admonitions`
-    await sql`DROP POLICY IF EXISTS update_admonitions_own ON admonitions`
-    await sql`DROP POLICY IF EXISTS delete_admonitions_own ON admonitions`
-    await sql`CREATE POLICY select_admonitions_own ON admonitions FOR SELECT TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY insert_admonitions_own ON admonitions FOR INSERT TO authenticated WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY update_admonitions_own ON admonitions FOR UPDATE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id) WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY delete_admonitions_own ON admonitions FOR DELETE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
-
-    await sql`DROP POLICY IF EXISTS select_plans_own ON plans`
-    await sql`DROP POLICY IF EXISTS insert_plans_own ON plans`
-    await sql`DROP POLICY IF EXISTS update_plans_own ON plans`
-    await sql`DROP POLICY IF EXISTS delete_plans_own ON plans`
-    await sql`CREATE POLICY select_plans_own ON plans FOR SELECT TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY insert_plans_own ON plans FOR INSERT TO authenticated WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY update_plans_own ON plans FOR UPDATE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id) WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY delete_plans_own ON plans FOR DELETE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
-
-    await sql`DROP POLICY IF EXISTS select_plan_floors_own ON plan_floors`
-    await sql`DROP POLICY IF EXISTS insert_plan_floors_own ON plan_floors`
-    await sql`DROP POLICY IF EXISTS update_plan_floors_own ON plan_floors`
-    await sql`DROP POLICY IF EXISTS delete_plan_floors_own ON plan_floors`
-    await sql`CREATE POLICY select_plan_floors_own ON plan_floors FOR SELECT TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY insert_plan_floors_own ON plan_floors FOR INSERT TO authenticated WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY update_plan_floors_own ON plan_floors FOR UPDATE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id) WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY delete_plan_floors_own ON plan_floors FOR DELETE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
-
-    await sql`DROP POLICY IF EXISTS select_plan_zones_own ON plan_zones`
-    await sql`DROP POLICY IF EXISTS insert_plan_zones_own ON plan_zones`
-    await sql`DROP POLICY IF EXISTS update_plan_zones_own ON plan_zones`
-    await sql`DROP POLICY IF EXISTS delete_plan_zones_own ON plan_zones`
-    await sql`CREATE POLICY select_plan_zones_own ON plan_zones FOR SELECT TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY insert_plan_zones_own ON plan_zones FOR INSERT TO authenticated WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY update_plan_zones_own ON plan_zones FOR UPDATE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id) WITH CHECK ((auth.jwt()->>'user_id')::int = user_id)`
-    await sql`CREATE POLICY delete_plan_zones_own ON plan_zones FOR DELETE TO authenticated USING ((auth.jwt()->>'user_id')::int = user_id)`
+    // Tablas tenant: aislamiento por usuario impuesto por la base de datos.
+    const tenantTables = [
+      "projects", "plan_types", "workers", "worker_stats_daily", "documents",
+      "mobile_documents", "mobile_tombstones", "findings", "completed_checklists",
+      "reports", "settings", "admonitions", "plans", "plan_floors", "plan_zones",
+    ]
+    for (const t of tenantTables) {
+      await sql.unsafe(`ALTER TABLE IF EXISTS ${t} ENABLE ROW LEVEL SECURITY`)
+      // No se fuerza RLS: las queries de la app corren como `authenticated` (no es
+      // dueño), así que la RLS normal aplica. NO FORCE normaliza estados previos.
+      await sql.unsafe(`ALTER TABLE IF EXISTS ${t} NO FORCE ROW LEVEL SECURITY`)
+      // Limpia el esquema RLS previo (huérfano) basado en app.current_user_id.
+      await sql.unsafe(`DROP POLICY IF EXISTS tenant_isolation ON ${t}`)
+      for (const action of ["select", "insert", "update", "delete"]) {
+        await sql.unsafe(`DROP POLICY IF EXISTS ${action}_${t}_own ON ${t}`)
+      }
+      // settings incluye filas globales (user_id IS NULL) con los defaults, que
+      // deben ser legibles por cualquier usuario. INSERT/UPDATE siguen estrictos
+      // (un usuario solo escribe filas con su propio user_id).
+      const visible = t === "settings"
+        ? `(NULLIF(current_setting('app.user_id', true), '')::int = user_id OR user_id IS NULL)`
+        : `(NULLIF(current_setting('app.user_id', true), '')::int = user_id)`
+      const owned = `(NULLIF(current_setting('app.user_id', true), '')::int = user_id)`
+      await sql.unsafe(`CREATE POLICY select_${t}_own ON ${t} FOR SELECT TO authenticated USING ${visible}`)
+      await sql.unsafe(`CREATE POLICY insert_${t}_own ON ${t} FOR INSERT TO authenticated WITH CHECK ${owned}`)
+      await sql.unsafe(`CREATE POLICY update_${t}_own ON ${t} FOR UPDATE TO authenticated USING ${visible} WITH CHECK ${owned}`)
+      await sql.unsafe(`CREATE POLICY delete_${t}_own ON ${t} FOR DELETE TO authenticated USING ${visible}`)
+    }
 
     return NextResponse.json({ ok: true, rls: true })
   } catch (e: unknown) {

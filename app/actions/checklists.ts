@@ -6,6 +6,7 @@ import { generateText } from "ai"
 import type { LanguageModel } from "ai"
 import { getSetting } from "./settings"
 import { getModel } from "@/lib/ai"
+import { revalidatePath } from "next/cache"
 
 export type ChecklistItemInput = {
   id?: string
@@ -99,10 +100,7 @@ export async function extractChecklistFromImage(
       result.description = obj.description as string | null
     }
 
-    let itemsSource: unknown = obj.items
-    if (!itemsSource && Array.isArray(obj.items)) {
-      itemsSource = obj.items
-    }
+    const itemsSource: unknown = obj.items
 
     let itemsArray: unknown
     if (itemsSource && typeof itemsSource === "object" && !Array.isArray(itemsSource)) {
@@ -197,5 +195,239 @@ export async function createChecklistTemplate(
   }
 
   return { id: Number(row.id) }
+}
+
+// ---------------------------------------------------------------------------
+// Flujo de completar checklists
+// ---------------------------------------------------------------------------
+
+export type ChecklistResponseItem = {
+  id: string
+  text: string
+  checked: boolean
+  hasIssue: boolean
+  note: string
+}
+
+export type ChecklistTemplateSummary = {
+  id: number
+  name: string
+  description: string | null
+  items: ChecklistResponseItem[]
+  item_count: number
+  created_at: string
+}
+
+export type CompletedChecklistSummary = {
+  id: number
+  template_id: number | null
+  template_name: string | null
+  project_id: number | null
+  project_name: string | null
+  inspector_name: string | null
+  location: string | null
+  notes: string | null
+  status: string
+  completed_at: string
+  total_items: number
+  checked_items: number
+  issue_items: number
+  items: ChecklistResponseItem[]
+}
+
+// El JSONB de items/responses se guarda como { items: [...] }. Esto lo normaliza
+// a un array tipado, tolerando formatos antiguos (array plano, string, etc.).
+function normalizeChecklistItems(raw: unknown): ChecklistResponseItem[] {
+  let source: unknown = raw
+  if (typeof raw === "string" && raw) {
+    try {
+      source = JSON.parse(raw)
+    } catch {
+      source = []
+    }
+  }
+  let arr: unknown = source
+  if (source && typeof source === "object" && !Array.isArray(source)) {
+    const o = source as Record<string, unknown>
+    arr = Array.isArray(o.items) ? o.items : []
+  }
+  if (!Array.isArray(arr)) return []
+  return arr
+    .map((it, i): ChecklistResponseItem | null => {
+      if (!it || typeof it !== "object") return null
+      const o = it as Record<string, unknown>
+      const text =
+        typeof o.text === "string" ? o.text : typeof o.title === "string" ? o.title : ""
+      if (!text.trim()) return null
+      return {
+        id: typeof o.id === "string" && o.id ? o.id : `item-${i + 1}`,
+        text,
+        checked: o.checked === true,
+        hasIssue: o.hasIssue === true,
+        note: typeof o.note === "string" ? o.note : "",
+      }
+    })
+    .filter((x): x is ChecklistResponseItem => x !== null)
+}
+
+export async function getChecklistTemplates(): Promise<ChecklistTemplateSummary[]> {
+  const userId = await getCurrentUserId()
+  if (!userId) return []
+  const rows = await sql<{
+    id: number
+    name: string
+    description: string | null
+    items: unknown
+    created_at: string
+  }>`
+    SELECT id, name, description, items, created_at::text as created_at
+    FROM checklist_templates
+    WHERE user_id = ${userId}
+    ORDER BY created_at DESC
+  `
+  return rows.map((r) => {
+    const items = normalizeChecklistItems(r.items)
+    return {
+      id: Number(r.id),
+      name: r.name,
+      description: r.description,
+      items,
+      item_count: items.length,
+      created_at: String(r.created_at),
+    }
+  })
+}
+
+export async function getCompletedChecklists(): Promise<CompletedChecklistSummary[]> {
+  const userId = await getCurrentUserId()
+  if (!userId) return []
+  const rows = await sql<{
+    id: number
+    template_id: number | null
+    template_name: string | null
+    project_id: number | null
+    project_name: string | null
+    inspector_name: string | null
+    location: string | null
+    notes: string | null
+    status: string
+    completed_at: string
+    responses: unknown
+  }>`
+    SELECT
+      c.id, c.template_id, t.name as template_name,
+      c.project_id, p.name as project_name,
+      c.inspector_name, c.location, c.notes, c.status,
+      c.completed_at::text as completed_at, c.responses
+    FROM completed_checklists c
+    LEFT JOIN checklist_templates t ON c.template_id = t.id
+    LEFT JOIN projects p ON c.project_id = p.id
+    WHERE c.user_id = ${userId}
+    ORDER BY c.completed_at DESC
+  `
+  return rows.map((r) => {
+    const items = normalizeChecklistItems(r.responses)
+    return {
+      id: Number(r.id),
+      template_id: r.template_id === null ? null : Number(r.template_id),
+      template_name: r.template_name,
+      project_id: r.project_id === null ? null : Number(r.project_id),
+      project_name: r.project_name,
+      inspector_name: r.inspector_name,
+      location: r.location,
+      notes: r.notes,
+      status: r.status,
+      completed_at: String(r.completed_at),
+      total_items: items.length,
+      checked_items: items.filter((i) => i.checked).length,
+      issue_items: items.filter((i) => i.hasIssue).length,
+      items,
+    }
+  })
+}
+
+export type CompleteChecklistInput = {
+  template_id?: number | null
+  project_id?: number | null
+  inspector_name?: string | null
+  location?: string | null
+  notes?: string | null
+  items: ChecklistResponseItem[]
+  createFindings?: boolean
+}
+
+export async function completeChecklist(
+  data: CompleteChecklistInput,
+): Promise<{ id: number; findingsCreated: number }> {
+  const userId = await getCurrentUserId()
+  if (!userId) {
+    throw new Error("Debes iniciar sesión para completar checklists")
+  }
+  const items = Array.isArray(data.items) ? normalizeChecklistItems({ items: data.items }) : []
+  if (items.length === 0) {
+    throw new Error("El checklist no tiene ítems")
+  }
+
+  const rows = await sql<{ id: number }>`
+    INSERT INTO completed_checklists
+      (template_id, project_id, inspector_name, location, completed_at, responses, notes, status, user_id)
+    VALUES (
+      ${data.template_id || null},
+      ${data.project_id || null},
+      ${data.inspector_name || null},
+      ${data.location || null},
+      CURRENT_TIMESTAMP,
+      ${JSON.stringify({ items })}::jsonb,
+      ${data.notes || null},
+      'completed',
+      ${userId}
+    )
+    RETURNING id
+  `
+  const completedId = Number(rows[0]?.id)
+  if (!completedId) {
+    throw new Error("No se pudo guardar el checklist")
+  }
+
+  // Por cada ítem marcado con problema, crear un hallazgo vinculado.
+  let findingsCreated = 0
+  if (data.createFindings) {
+    const issueItems = items.filter((i) => i.hasIssue)
+    for (const it of issueItems) {
+      await sql`
+        INSERT INTO findings
+          (checklist_id, project_id, title, description, severity, location, status, user_id)
+        VALUES (
+          ${completedId},
+          ${data.project_id || null},
+          ${it.text.slice(0, 250)},
+          ${it.note || null},
+          'medium',
+          ${data.location || null},
+          'open',
+          ${userId}
+        )
+      `
+      findingsCreated += 1
+    }
+  }
+
+  revalidatePath("/checklists")
+  if (findingsCreated > 0) revalidatePath("/hallazgos")
+  return { id: completedId, findingsCreated }
+}
+
+export async function deleteChecklistTemplate(id: number): Promise<void> {
+  const userId = await getCurrentUserId()
+  if (!userId) return
+  await sql`DELETE FROM checklist_templates WHERE id = ${id} AND user_id = ${userId}`
+  revalidatePath("/checklists")
+}
+
+export async function deleteCompletedChecklist(id: number): Promise<void> {
+  const userId = await getCurrentUserId()
+  if (!userId) return
+  await sql`DELETE FROM completed_checklists WHERE id = ${id} AND user_id = ${userId}`
+  revalidatePath("/checklists")
 }
 

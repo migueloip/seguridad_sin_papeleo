@@ -249,12 +249,11 @@ export async function generateAIReport(
       `## Conclusion\n` +
       `Se recomienda mantener la vigilancia sobre los indicadores y ejecutar acciones correctivas oportunas.`
     const inserted = await sql<{ id: number }>`
-      INSERT INTO reports (report_type, title, date_from, date_to, content, generated_by, project_id)
-      VALUES (${reportType}, ${title}, ${new Date(data.dateFrom)}, ${new Date(data.dateTo)}, ${JSON.stringify({ markdown: content })}::jsonb, 'Sistema (sin IA)', ${projectId || null})
+      INSERT INTO reports (report_type, title, date_from, date_to, content, generated_by, project_id, user_id)
+      VALUES (${reportType}, ${title}, ${new Date(data.dateFrom)}, ${new Date(data.dateTo)}, ${JSON.stringify({ markdown: content })}::jsonb, 'Sistema (sin IA)', ${projectId || null}, ${userId})
       RETURNING id
     `
     const idNum = Number(inserted[0].id)
-    await sql`UPDATE reports SET user_id = ${userId} WHERE id = ${idNum}`
     return { content, title, id: idNum }
   }
 
@@ -317,12 +316,11 @@ El informe debe ser profesional, conciso y orientado a la accion. Usa formato Ma
     const { text } = await generateText({ model, prompt })
 
     const inserted = await sql<{ id: number }>`
-      INSERT INTO reports (report_type, title, date_from, date_to, content, generated_by, project_id)
-      VALUES (${reportType}, ${title}, ${new Date(data.dateFrom)}, ${new Date(data.dateTo)}, ${JSON.stringify({ markdown: text })}::jsonb, 'Sistema', ${projectId || null})
+      INSERT INTO reports (report_type, title, date_from, date_to, content, generated_by, project_id, user_id)
+      VALUES (${reportType}, ${title}, ${new Date(data.dateFrom)}, ${new Date(data.dateTo)}, ${JSON.stringify({ markdown: text })}::jsonb, 'Sistema', ${projectId || null}, ${userId})
       RETURNING id
     `
     const idNum = Number(inserted[0].id)
-    await sql`UPDATE reports SET user_id = ${userId} WHERE id = ${idNum}`
 
     return { content: text, title, id: idNum }
   } catch (error) {

@@ -4,7 +4,7 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useEffect, useState } from "react"
 import { cn } from "@/lib/utils"
-import { FileText, FileBarChart, AlertTriangle, Users, Settings, X, ImageIcon } from "lucide-react"
+import { FileText, FileBarChart, AlertTriangle, Users, Settings, X, ImageIcon, ClipboardCheck } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { logout } from "@/app/actions/auth"
 
@@ -17,6 +17,7 @@ function buildNavigation(pathname: string) {
     { name: "Documentos", href: `${base}/documentos`, icon: FileText },
     { name: "Informes", href: `${base}/informes`, icon: FileBarChart },
     { name: "Hallazgos", href: `${base}/hallazgos`, icon: AlertTriangle },
+    { name: "Checklists", href: "/checklists", icon: ClipboardCheck },
     { name: "Personal", href: `${base}/personal`, icon: Users },
   ]
 }

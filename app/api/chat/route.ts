@@ -24,7 +24,7 @@ export async function POST(req: Request) {
     const { messages, projectId } = await req.json() as { messages: UIMessage[]; projectId?: number };
 
     const apiKey = await getSetting("ai_api_key");
-    const aiModel = (await getSetting("ai_model")) || "gemini-1.5-flash";
+    const aiModel = (await getSetting("ai_model")) || "gemini-2.5-flash";
 
     if (!apiKey) {
         return new Response("AI API Key not configured", { status: 400 });
@@ -56,8 +56,8 @@ export async function POST(req: Request) {
         tools: {
             queryProjectData: tool({
                 description: "Obtener datos reales del proyecto actual: Hallazgos, Documentos, Trabajadores o Resumen General.",
-                parameters: queryProjectDataParams,
-                execute: async ({ dataType, period }: z.infer<typeof queryProjectDataParams>, _options: any) => {
+                inputSchema: queryProjectDataParams,
+                execute: async ({ dataType, period }: z.infer<typeof queryProjectDataParams>) => {
                     const data = await getReportData(period, projectId);
                     if (dataType === "findings") {
                         return {
@@ -75,17 +75,17 @@ export async function POST(req: Request) {
                     if (dataType === "workers") return data.workers;
                     return data;
                 },
-            } as any),
+            }),
             generateReportElement: tool({
                 description: "Crear un nuevo elemento visual para agregar al informe. Úsalo cuando el usuario pida agregar algo.",
-                parameters: generateReportElementParams,
-                execute: async (args: z.infer<typeof generateReportElementParams>, _options: any) => {
+                inputSchema: generateReportElementParams,
+                execute: async (args: z.infer<typeof generateReportElementParams>) => {
                     return {
                         _action: "CREATE_ELEMENT",
                         elementData: args,
                     };
                 },
-            } as any)
+            }),
         },
     });
 

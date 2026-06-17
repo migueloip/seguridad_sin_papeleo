@@ -1,4 +1,5 @@
 import postgres from "postgres"
+import { AsyncLocalStorage } from "node:async_hooks"
 
 const databaseUrlRaw = process.env.DATABASE_URL || ""
 const directUrlRaw = process.env.DIRECT_URL || ""
@@ -21,14 +22,83 @@ try {
 } catch { }
 
 // Create postgres connection with connection pooling
-const sql = postgres(dbUrl, {
+const client = postgres(dbUrl, {
   max: 10,
   idle_timeout: 20,
   connect_timeout: 10,
   ssl: dbUrl.includes("supabase") ? "require" : undefined,
 })
 
+/**
+ * Contexto de tenant por-request. La capa de auth (lib/auth.ts y
+ * lib/mobile-auth.ts) fija el user_id con `tenantContext.enterWith({ userId })`
+ * una vez resuelta la sesión; las políticas RLS lo leen vía
+ * `current_setting('app.user_id')`. Ver scripts de RLS en
+ * app/api/admin/migrate/route.ts.
+ */
+export const tenantContext = new AsyncLocalStorage<{ userId: number } | undefined>()
+
+function isTemplateCall(args: unknown[]): args is [TemplateStringsArray, ...unknown[]] {
+  const first = args[0] as { raw?: unknown } | undefined
+  return Array.isArray(first) && first != null && "raw" in (first as object)
+}
+
+// DDL (CREATE/ALTER/DROP/...) debe correr como el dueño `postgres`, no como
+// `authenticated` (que no tiene permisos de esquema). Varias acciones hacen
+// "ensure schema" (CREATE TABLE/INDEX IF NOT EXISTS, ALTER ... ADD COLUMN)
+// después de resolver la sesión, así que detectamos DDL y lo dejamos pasar como
+// postgres aunque haya contexto de tenant.
+const DDL_RE = /^[\s(]*(create|alter|drop|truncate|grant|revoke|comment)\s/i
+
+/**
+ * Wrapper sobre el cliente porsager. Cuando hay contexto de tenant, cada query
+ * tagged-template (que no sea DDL) se ejecuta dentro de una micro-transacción que:
+ *   1. cambia el rol a `authenticated` (SET LOCAL ROLE) — el rol dueño `postgres`
+ *      de Supabase tiene BYPASSRLS, así que las políticas NO le aplican; en cambio
+ *      `authenticated` (del que `postgres` es miembro) sí está sujeto a RLS;
+ *   2. fija `app.user_id` (set_config local a la transacción — seguro con el pool);
+ *   3. corre la query, ya filtrada por la RLS.
+ * Ambos cambios son LOCAL a la transacción, así que la conexión vuelve a `postgres`
+ * al hacer COMMIT (seguro con el pool). Sin contexto (bootstrap de auth: login,
+ * getSession) o si es DDL, la query corre directa como `postgres`. Es transparente
+ * para los call sites: la firma y los métodos (`.json`, etc.) son los del cliente real.
+ */
+const sql: typeof client = new Proxy(client, {
+  apply(target, _thisArg, args: unknown[]) {
+    const direct = () => (target as unknown as (...a: unknown[]) => unknown)(...args)
+    const ctx = tenantContext.getStore()
+    if (!ctx || !isTemplateCall(args)) return direct()
+    const [strings, ...values] = args
+    if (DDL_RE.test(strings[0] ?? "")) return direct()
+    return client.begin(async (tx) => {
+      const run = tx as unknown as (...a: unknown[]) => Promise<unknown>
+      await run`SET LOCAL ROLE authenticated`
+      await run`SELECT set_config('app.user_id', ${String(ctx.userId)}, true)`
+      return run(strings, ...values)
+    })
+  },
+})
+
 export { sql }
+
+/**
+ * Limpia el contexto de tenant para el resto del request: las queries volverán a
+ * correr como `postgres` (con BYPASSRLS y permisos de DDL). Lo usa el endpoint de
+ * migración, que ejecuta DDL (CREATE/ALTER/CREATE POLICY) que `authenticated` no
+ * puede ejecutar.
+ */
+export function clearTenantContext(): void {
+  tenantContext.enterWith(undefined)
+}
+
+/**
+ * Ejecuta `fn` con el contexto de tenant fijado. Útil para rutas o tests que no
+ * pasan por la cookie de sesión. En el flujo normal el contexto se fija con
+ * `enterWith` en la capa de auth, así que no hace falta envolver cada acción.
+ */
+export function runAsUser<T>(userId: number, fn: () => Promise<T>): Promise<T> {
+  return tenantContext.run({ userId }, fn)
+}
 
 // Types
 export interface Project {
