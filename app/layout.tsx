@@ -2,6 +2,7 @@ import type React from "react"
 import type { Metadata } from "next"
 import { Space_Grotesk, IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google"
 import { Toaster } from "sonner"
+import { NavigationProgress } from "@/components/navigation-progress"
 import "./globals.css"
 
 // Easysecure typography: Space Grotesk (display), IBM Plex Sans (body), IBM Plex Mono (labels).
@@ -52,6 +53,7 @@ export default function RootLayout({
         className={`${spaceGrotesk.variable} ${ibmPlexSans.variable} ${ibmPlexMono.variable} font-sans antialiased`}
         suppressHydrationWarning
       >
+        <NavigationProgress />
         {children}
         <Toaster />
       </body>

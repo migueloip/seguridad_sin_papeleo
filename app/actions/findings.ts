@@ -5,7 +5,7 @@ import { getCurrentUserId } from "@/lib/auth"
 import { revalidatePath } from "next/cache"
 import { generateText } from "ai"
 import type { LanguageModel } from "ai"
-import { getSetting } from "./settings"
+import { getAiSettings } from "./settings"
 import { getModel } from "@/lib/ai"
 
 export type FindingRow = {
@@ -1633,17 +1633,14 @@ export async function scanFindingImage(base64Image: string, mimeType: string): P
   responsible_person?: string
   due_date?: string
 }> {
-  const apiKey =
-    (await getSetting("ai_api_key")) || process.env.AI_API_KEY || process.env.GOOGLE_API_KEY || ""
-  if (!apiKey) {
+  const ai = await getAiSettings()
+  if (!ai.ready) {
     return {}
   }
-  const provider = "google"
-  const model = (await getSetting("ai_model")) || "gemini-2.5-flash"
   const prompt =
     `Analiza la imagen y devuelve un JSON con: title, description, severity (low|medium|high|critical), location, responsible_person, due_date (YYYY-MM-DD). Si algun dato no se puede inferir usa null. Responde solo el JSON.`
   const { text } = await generateText({
-    model: getModel(provider, model, apiKey) as unknown as LanguageModel,
+    model: getModel(ai.provider, ai.model, ai.apiKey, ai.baseUrl) as unknown as LanguageModel,
     messages: [
       {
         role: "user",
@@ -1672,9 +1669,8 @@ export async function generateCorrectiveAction(args: {
   location?: string
   photos?: string[]
 }): Promise<string> {
-  const apiKey =
-    (await getSetting("ai_api_key")) || process.env.AI_API_KEY || process.env.GOOGLE_API_KEY || ""
-  if (!apiKey) {
+  const ai = await getAiSettings()
+  if (!ai.ready) {
     const lines = [
       "- Restringir y señalizar el área afectada.",
       "- Asignar responsable para ejecutar la corrección.",
@@ -1684,8 +1680,6 @@ export async function generateCorrectiveAction(args: {
     ]
     return lines.join("\n")
   }
-  const provider = "google"
-  const model = (await getSetting("ai_model")) || "gemini-2.5-flash"
   const base =
     `Genera una accion correctiva concreta y accionable en espanol para un hallazgo de seguridad.\n` +
     `Incluye pasos claros, responsables, y plazos sugeridos.\n` +
@@ -1699,7 +1693,7 @@ export async function generateCorrectiveAction(args: {
     `Ubicacion: ${args.location || "-"}\n`
   const photo = Array.isArray(args.photos) && args.photos.length > 0 ? args.photos[0] : undefined
   const { text } = await generateText({
-    model: getModel(provider, model, apiKey) as unknown as LanguageModel,
+    model: getModel(ai.provider, ai.model, ai.apiKey, ai.baseUrl) as unknown as LanguageModel,
     messages: [
       {
         role: "user",

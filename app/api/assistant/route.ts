@@ -1,6 +1,6 @@
 import { streamText, convertToModelMessages, type UIMessage } from "ai"
 import { getModel } from "@/lib/ai"
-import { getSetting } from "@/app/actions/settings"
+import { getAiSettings } from "@/app/actions/settings"
 import { sql } from "@/lib/db"
 import { getCurrentUserId } from "@/lib/auth"
 
@@ -9,9 +9,8 @@ export const maxDuration = 30
 export async function POST(req: Request) {
   const { messages, projectId } = (await req.json()) as { messages: UIMessage[]; projectId?: number }
 
-  const apiKey = await getSetting("ai_api_key")
-  const aiModel = (await getSetting("ai_model")) || "gemini-2.5-flash"
-  if (!apiKey) {
+  const ai = await getAiSettings()
+  if (!ai.ready) {
     return new Response("Configura tu API Key de Google AI en Configuración para usar el asistente.", {
       status: 400,
     })
@@ -81,7 +80,7 @@ export async function POST(req: Request) {
     // Sin datos: el asistente responde igual, indicando que no pudo leer el proyecto.
   }
 
-  const model = getModel("google", aiModel, apiKey)
+  const model = getModel(ai.provider, ai.model, ai.apiKey, ai.baseUrl)
   const system =
     `Eres el asistente de Easysecure, experto en prevención de riesgos para obras de construcción en Chile. ` +
     `Respondes preguntas sobre este proyecto (hallazgos, documentos y vencimientos, personal, planos de riesgo, ` +

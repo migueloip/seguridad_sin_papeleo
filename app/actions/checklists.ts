@@ -6,7 +6,7 @@ import { getCurrentUserId } from "@/lib/auth"
 import { revalidatePath } from "next/cache"
 import { generateText } from "ai"
 import type { LanguageModel } from "ai"
-import { getSetting } from "./settings"
+import { getAiSettings } from "./settings"
 import { getModel } from "@/lib/ai"
 
 export type ChecklistItemInput = {
@@ -31,14 +31,10 @@ export async function extractChecklistFromImage(
   base64: string,
   mime: string,
 ): Promise<ChecklistExtractionResult> {
-  const apiKey =
-    (await getSetting("ai_api_key")) || process.env.AI_API_KEY || process.env.GOOGLE_API_KEY || ""
-  if (!apiKey) {
+  const ai = await getAiSettings()
+  if (!ai.ready) {
     return {}
   }
-
-  const provider = "google"
-  const model = (await getSetting("ai_model")) || "gemini-2.5-flash"
   const prompt =
     `Analiza esta imagen de un checklist o formulario de inspección de seguridad laboral y ` +
     `extrae los ítems de revisión más relevantes. ` +
@@ -62,7 +58,7 @@ export async function extractChecklistFromImage(
     `Incluye entre 5 y 30 ítems claros y accionables enfocados en seguridad y prevención de riesgos.`
 
   const { text } = await generateText({
-    model: getModel(provider, model, apiKey) as unknown as LanguageModel,
+    model: getModel(ai.provider, ai.model, ai.apiKey, ai.baseUrl) as unknown as LanguageModel,
     messages: [
       {
         role: "user",

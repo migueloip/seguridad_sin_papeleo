@@ -1,7 +1,7 @@
 import { generateText } from "ai"
 import type { LanguageModel } from "ai"
 import { getMobileSessionFromRequest } from "@/lib/mobile-auth"
-import { getSettingForUser, mobileJson, mobileOptions } from "@/lib/mobile-api"
+import { getAiSettingsForUser, mobileJson, mobileOptions } from "@/lib/mobile-api"
 import { getModel } from "@/lib/ai"
 
 export function OPTIONS() {
@@ -22,14 +22,8 @@ export async function POST(req: Request) {
   const mode = body?.mode === "epp" ? "epp" : "finding"
   if (!image) return mobileJson({ error: "image requerida (base64)" }, { status: 400 })
 
-  const apiKey =
-    (await getSettingForUser(session.user_id, "ai_api_key")) ||
-    process.env.AI_API_KEY ||
-    process.env.GOOGLE_API_KEY ||
-    ""
-  if (!apiKey) return mobileJson({ error: "no_api_key" }, { status: 422 })
-
-  const model = (await getSettingForUser(session.user_id, "ai_model")) || "gemini-2.5-flash"
+  const ai = await getAiSettingsForUser(session.user_id)
+  if (!ai.ready) return mobileJson({ error: "no_api_key" }, { status: 422 })
   const prompt =
     mode === "epp"
       ? `Eres prevencionista de riesgos en una obra de construcción chilena. La imagen muestra a uno o más ` +
@@ -47,7 +41,7 @@ export async function POST(req: Request) {
 
   try {
     const { text } = await generateText({
-      model: getModel("google", model, apiKey) as unknown as LanguageModel,
+      model: getModel(ai.provider, ai.model, ai.apiKey, ai.baseUrl) as unknown as LanguageModel,
       messages: [
         {
           role: "user",

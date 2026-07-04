@@ -6,7 +6,7 @@ import { Plan, PlanFloor, PlanZone, PlanType } from "@/lib/db"
 import { revalidatePath } from "next/cache"
 import { generateText } from "ai"
 import type { LanguageModel } from "ai"
-import { getSetting } from "./settings"
+import { getAiSettings } from "./settings"
 import { getModel } from "@/lib/ai"
 
 export async function getPlans(projectId?: number) {
@@ -24,12 +24,10 @@ export async function getPlans(projectId?: number) {
 // --- Legacy Actions (Restored) ---
 
 export async function extractZonesFromPlan(base64: string, mime: string) {
-  const apiKey =
-    (await getSetting("ai_api_key")) || process.env.AI_API_KEY || process.env.GOOGLE_API_KEY || ""
-  if (!apiKey) {
+  const ai = await getAiSettings()
+  if (!ai.ready) {
     throw new Error("Configura la API Key de IA en Configuración para usar el escáner de planos.")
   }
-  const model = (await getSetting("ai_model")) || "gemini-2.5-flash"
   const prompt =
     `Eres un experto en prevención de riesgos laborales. Analiza este plano de obra/edificio y detecta las ZONAS DE RIESGO. ` +
     `Devuelve SOLO un JSON con esta estructura exacta:\n` +
@@ -39,7 +37,7 @@ export async function extractZonesFromPlan(base64: string, mime: string) {
     `(trabajo en altura, riesgo eléctrico, circulación, almacenamiento de inflamables, maquinaria, etc.). ` +
     `No incluyas texto fuera del JSON.`
   const { text } = await generateText({
-    model: getModel("google", model, apiKey) as unknown as LanguageModel,
+    model: getModel(ai.provider, ai.model, ai.apiKey, ai.baseUrl) as unknown as LanguageModel,
     messages: [
       {
         role: "user",

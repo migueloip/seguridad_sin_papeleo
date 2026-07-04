@@ -4,6 +4,7 @@ import { sql } from "@/lib/db"
 import { revalidatePath } from "next/cache"
 import crypto from "crypto"
 import { getCurrentUserId } from "@/lib/auth"
+import { defaultModelFor } from "@/lib/ai"
 
 export interface Setting {
   id: number
@@ -104,6 +105,35 @@ export async function getSetting(key: string): Promise<string | null> {
   } catch {
     return null
   }
+}
+
+export type AiSettings = {
+  provider: string
+  model: string
+  apiKey: string
+  baseUrl: string | null
+  /** true si hay lo mínimo para llamar al proveedor (custom permite key vacía). */
+  ready: boolean
+}
+
+/**
+ * Configuración de IA unificada (proveedor, modelo, key, URL base) con
+ * defaults por proveedor. Único punto de verdad para todos los flujos de IA.
+ */
+export async function getAiSettings(): Promise<AiSettings> {
+  const [provider0, model0, key0, baseUrl0] = await Promise.all([
+    getSetting("ai_provider"),
+    getSetting("ai_model"),
+    getSetting("ai_api_key"),
+    getSetting("ai_base_url"),
+  ])
+  const provider = provider0 || "google"
+  const apiKey =
+    key0 || (provider === "google" ? process.env.AI_API_KEY || process.env.GOOGLE_API_KEY || "" : "")
+  const baseUrl = baseUrl0?.trim() || null
+  const model = model0?.trim() || defaultModelFor(provider)
+  const ready = provider === "custom" ? Boolean(baseUrl) : Boolean(apiKey)
+  return { provider, model, apiKey, baseUrl, ready }
 }
 
 export async function updateSetting(key: string, value: string): Promise<void> {

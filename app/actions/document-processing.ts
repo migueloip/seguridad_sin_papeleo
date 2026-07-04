@@ -2,7 +2,7 @@
 
 import { generateText } from "ai"
 import type { LanguageModel } from "ai"
-import { getSetting } from "./settings"
+import { getAiSettings, getSetting } from "./settings"
 import { getModel } from "@/lib/ai"
 import { formatRut } from "@/lib/utils"
 
@@ -28,17 +28,15 @@ export async function parseDocumentDescription(text: string): Promise<{
   notas: string | null
 }> {
   const empty = { tipoDocumento: null, nombre: null, vigenciaMeses: null, notas: null }
-  const apiKey =
-    (await getSetting("ai_api_key")) || process.env.AI_API_KEY || process.env.GOOGLE_API_KEY || ""
-  if (!apiKey || !text.trim()) return empty
-  const model = (await getSetting("ai_model")) || "gemini-2.5-flash"
+  const ai = await getAiSettings()
+  if (!ai.ready || !text.trim()) return empty
   const prompt =
     `Eres un asistente que rellena un formulario de documento de seguridad laboral. ` +
     `A partir de la descripción del usuario, responde SOLO con un JSON:\n` +
     `{"tipoDocumento": "<tipo de documento o null>", "nombre": "<nombre del trabajador o null>", "vigenciaMeses": <meses de vigencia como número o null>, "notas": "<observaciones o null>"}\n` +
     `Descripción: "${text}"`
   const { text: out } = await generateText({
-    model: getModel("google", model, apiKey) as unknown as LanguageModel,
+    model: getModel(ai.provider, ai.model, ai.apiKey, ai.baseUrl) as unknown as LanguageModel,
     messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
   })
   const cleaned = out.replace(/```json\n?|\n?```/g, "").trim()
@@ -56,9 +54,8 @@ export async function parseDocumentDescription(text: string): Promise<{
 }
 
 export async function extractDocumentData(base64Image: string, mimeType: string): Promise<ExtractedData> {
-  const apiKey =
-    (await getSetting("ai_api_key")) || process.env.AI_API_KEY || process.env.GOOGLE_API_KEY || ""
-  if (!apiKey) {
+  const ai = await getAiSettings()
+  if (!ai.ready) {
     return {
       rut: null,
       nombre: null,
@@ -70,8 +67,6 @@ export async function extractDocumentData(base64Image: string, mimeType: string)
     }
   }
 
-  const provider = "google"
-  const model = (await getSetting("ai_model")) || "gemini-2.5-flash"
 
   const prompt = `Analiza esta imagen de un documento y extrae la siguiente información en formato JSON:
 - rut: RUT chileno (formato XX.XXX.XXX-X)
@@ -86,7 +81,7 @@ Responde SOLO con el JSON, sin explicaciones adicionales. Si no puedes extraer a
 
   try {
     const { text } = await generateText({
-      model: getModel(provider, model, apiKey) as unknown as LanguageModel,
+      model: getModel(ai.provider, ai.model, ai.apiKey, ai.baseUrl) as unknown as LanguageModel,
       messages: [
         {
           role: "user",
@@ -131,19 +126,16 @@ export interface ClassificationResult {
 }
 
 export async function classifyUpload(base64: string, mime: string): Promise<ClassificationResult> {
-  const apiKey =
-    (await getSetting("ai_api_key")) || process.env.AI_API_KEY || process.env.GOOGLE_API_KEY || ""
-  if (!apiKey) {
+  const ai = await getAiSettings()
+  if (!ai.ready) {
     return { target: "document" }
   }
-  const provider = "google"
-  const model = (await getSetting("ai_model")) || "gemini-2.5-flash"
   const prompt =
     `Clasifica el contenido de este archivo en una sola categoria: "document" | "finding" | "checklist". ` +
     `Devuelve JSON con campos: target, rut (formato XX.XXX.XXX-X si existe), documentType (si es documento), checklistTemplate (si es checklist). ` +
     `Responde solo el JSON.`
   const { text } = await generateText({
-    model: getModel(provider, model, apiKey) as unknown as LanguageModel,
+    model: getModel(ai.provider, ai.model, ai.apiKey, ai.baseUrl) as unknown as LanguageModel,
     messages: [
       {
         role: "user",

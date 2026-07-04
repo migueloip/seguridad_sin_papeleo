@@ -12,7 +12,10 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.7",
     "@ai-sdk/google": "^2.0.46",
+    "@ai-sdk/openai": "^4.0.7",
+    "@ai-sdk/openai-compatible": "^3.0.5",
     "@ai-sdk/react": "^3.0.6",
     "@hookform/resolvers": "^3.10.0",
     "@pascal-app/core": "^0.5.1",

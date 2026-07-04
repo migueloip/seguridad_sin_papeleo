@@ -1,7 +1,7 @@
 
 import { streamText, tool, convertToModelMessages, type UIMessage } from 'ai';
 import { getModel } from '@/lib/ai';
-import { getSetting } from '@/app/actions/settings';
+import { getAiSettings } from '@/app/actions/settings';
 import { getReportData } from '@/app/actions/reports';
 import { z } from 'zod';
 
@@ -23,14 +23,13 @@ export const maxDuration = 30;
 export async function POST(req: Request) {
     const { messages, projectId } = await req.json() as { messages: UIMessage[]; projectId?: number };
 
-    const apiKey = await getSetting("ai_api_key");
-    const aiModel = (await getSetting("ai_model")) || "gemini-1.5-flash";
+    const ai = await getAiSettings();
 
-    if (!apiKey) {
+    if (!ai.ready) {
         return new Response("AI API Key not configured", { status: 400 });
     }
 
-    const model = getModel("google", aiModel, apiKey);
+    const model = getModel(ai.provider, ai.model, ai.apiKey, ai.baseUrl);
 
     // Sistema de contexto
     const systemPrompt = `Eres un asistente experto en Prevención de Riesgos de Chile y un diseñador de informes técnicos profesional.
@@ -57,7 +56,7 @@ export async function POST(req: Request) {
             queryProjectData: tool({
                 description: "Obtener datos reales del proyecto actual: Hallazgos, Documentos, Trabajadores o Resumen General.",
                 parameters: queryProjectDataParams,
-                execute: async ({ dataType, period }: z.infer<typeof queryProjectDataParams>, _options: any) => {
+                execute: async ({ dataType, period }: z.infer<typeof queryProjectDataParams>) => {
                     const data = await getReportData(period, projectId);
                     if (dataType === "findings") {
                         return {
@@ -75,17 +74,17 @@ export async function POST(req: Request) {
                     if (dataType === "workers") return data.workers;
                     return data;
                 },
-            } as any),
+            } as Parameters<typeof tool>[0]),
             generateReportElement: tool({
                 description: "Crear un nuevo elemento visual para agregar al informe. Úsalo cuando el usuario pida agregar algo.",
                 parameters: generateReportElementParams,
-                execute: async (args: z.infer<typeof generateReportElementParams>, _options: any) => {
+                execute: async (args: z.infer<typeof generateReportElementParams>) => {
                     return {
                         _action: "CREATE_ELEMENT",
                         elementData: args,
                     };
                 },
-            } as any)
+            } as Parameters<typeof tool>[0])
         },
     });
 

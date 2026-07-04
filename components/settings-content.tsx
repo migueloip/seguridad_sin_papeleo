@@ -13,6 +13,20 @@ import { Textarea } from "@/components/ui/textarea"
 import { Key, Sparkles, Building, Save, Loader2, CheckCircle, Eye, EyeOff, ScanText, LayoutGrid, PenLine } from "lucide-react"
 import { updateSettings, type Setting } from "@/app/actions/settings"
 
+const AI_MODEL_SUGGESTIONS: Record<string, string[]> = {
+  google: ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-pro-latest", "gemini-1.5-flash-latest"],
+  openai: ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"],
+  anthropic: ["claude-sonnet-5", "claude-haiku-4-5-20251001", "claude-opus-4-8"],
+  custom: ["llama3.1", "qwen2.5", "mistral", "deepseek-chat"],
+}
+
+const AI_MODEL_PLACEHOLDER: Record<string, string> = {
+  google: "gemini-2.5-flash (por defecto)",
+  openai: "gpt-4o-mini (por defecto)",
+  anthropic: "claude-sonnet-5 (por defecto)",
+  custom: "nombre exacto del modelo en tu servidor",
+}
+
 const NAV_SECTIONS = [
   { key: "hallazgos", label: "Hallazgos", desc: "Reporte y seguimiento de hallazgos" },
   { key: "documentos", label: "Documentos", desc: "Control documental y vencimientos" },
@@ -142,31 +156,72 @@ export function SettingsContent({ initialSettings }: SettingsContentProps) {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Key className="h-5 w-5" />
-                Configuracion de Google AI
+                Proveedor de IA
               </CardTitle>
               <CardDescription>
-                Configura la API Key de Google AI para funciones de IA como generacion de informes
+                Elige el proveedor y modelo para informes, escaneo de fotos, asistente y OCR.
+                Soporta Google Gemini, OpenAI, Anthropic Claude y cualquier endpoint compatible
+                con OpenAI (OpenRouter, Ollama, LM Studio, Groq, DeepSeek…).
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor="ai_model">Modelo</Label>
+                  <Label htmlFor="ai_provider">Proveedor</Label>
                   <Select
-                    value={settings.ai_model || "gemini-2.5-flash"}
-                    onValueChange={(value) => updateSetting("ai_model", value)}
+                    value={settings.ai_provider || "google"}
+                    onValueChange={(value) => updateSetting("ai_provider", value)}
                   >
-                    <SelectTrigger id="ai_model">
-                      <SelectValue placeholder="Seleccionar modelo" />
+                    <SelectTrigger id="ai_provider">
+                      <SelectValue placeholder="Seleccionar proveedor" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="gemini-2.5-flash">Gemini 2.5 Flash</SelectItem>
-                      <SelectItem value="gemini-1.5-pro-latest">Gemini 1.5 Pro (latest)</SelectItem>
-                      <SelectItem value="gemini-1.5-flash-latest">Gemini 1.5 Flash (latest)</SelectItem>
-                      <SelectItem value="gemini-2.0-flash">Gemini 2.0 Flash</SelectItem>
+                      <SelectItem value="google">Google Gemini</SelectItem>
+                      <SelectItem value="openai">OpenAI (GPT)</SelectItem>
+                      <SelectItem value="anthropic">Anthropic (Claude)</SelectItem>
+                      <SelectItem value="custom">Compatible con OpenAI (URL personalizada)</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ai_model">Modelo</Label>
+                  <Input
+                    id="ai_model"
+                    list="ai-model-suggestions"
+                    value={settings.ai_model || ""}
+                    onChange={(e) => updateSetting("ai_model", e.target.value)}
+                    placeholder={AI_MODEL_PLACEHOLDER[settings.ai_provider || "google"]}
+                  />
+                  <datalist id="ai-model-suggestions">
+                    {(AI_MODEL_SUGGESTIONS[settings.ai_provider || "google"] || []).map((m) => (
+                      <option key={m} value={m} />
+                    ))}
+                  </datalist>
+                  <p className="text-xs text-muted-foreground">
+                    Vacío = modelo por defecto del proveedor. Puedes escribir cualquier modelo.
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="ai_base_url">
+                  URL base {(settings.ai_provider || "google") === "custom" ? "(requerida)" : "(opcional)"}
+                </Label>
+                <Input
+                  id="ai_base_url"
+                  value={settings.ai_base_url || ""}
+                  onChange={(e) => updateSetting("ai_base_url", e.target.value)}
+                  placeholder={
+                    (settings.ai_provider || "google") === "custom"
+                      ? "https://openrouter.ai/api/v1 · http://localhost:11434/v1 (Ollama)"
+                      : "Deja vacío para usar el endpoint oficial del proveedor"
+                  }
+                />
+                <p className="text-xs text-muted-foreground">
+                  {(settings.ai_provider || "google") === "custom"
+                    ? "Endpoint compatible con la API de OpenAI. Para servidores locales (Ollama/LM Studio) la API Key puede quedar vacía."
+                    : "Solo si usas un proxy o gateway propio; normalmente se deja vacía."}
+                </p>
               </div>
 
               <div className="space-y-2">
@@ -212,18 +267,35 @@ export function SettingsContent({ initialSettings }: SettingsContentProps) {
               </div>
 
               <div className="rounded-lg bg-muted p-4">
-                <h4 className="mb-2 font-medium">Como obtener una API Key</h4>
+                <h4 className="mb-2 font-medium">Dónde obtener una API Key</h4>
                 <ul className="space-y-1 text-sm text-muted-foreground">
                   <li>
-                    <strong>Google AI:</strong> Visita{" "}
-                    <a
-                      href="https://aistudio.google.com/apikey"
-                      target="_blank"
-                      className="text-primary underline"
-                      rel="noreferrer"
-                    >
+                    <strong>Google Gemini:</strong>{" "}
+                    <a href="https://aistudio.google.com/apikey" target="_blank" className="text-primary underline" rel="noreferrer">
                       aistudio.google.com
                     </a>
+                  </li>
+                  <li>
+                    <strong>OpenAI:</strong>{" "}
+                    <a href="https://platform.openai.com/api-keys" target="_blank" className="text-primary underline" rel="noreferrer">
+                      platform.openai.com
+                    </a>
+                  </li>
+                  <li>
+                    <strong>Anthropic:</strong>{" "}
+                    <a href="https://console.anthropic.com/settings/keys" target="_blank" className="text-primary underline" rel="noreferrer">
+                      console.anthropic.com
+                    </a>
+                  </li>
+                  <li>
+                    <strong>OpenRouter</strong> (muchos modelos con una sola key):{" "}
+                    <a href="https://openrouter.ai/keys" target="_blank" className="text-primary underline" rel="noreferrer">
+                      openrouter.ai
+                    </a>{" "}
+                    — proveedor &quot;Compatible con OpenAI&quot; y URL <code>https://openrouter.ai/api/v1</code>
+                  </li>
+                  <li>
+                    <strong>Ollama local</strong> (gratis, sin key): URL <code>http://localhost:11434/v1</code>
                   </li>
                 </ul>
               </div>

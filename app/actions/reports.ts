@@ -4,7 +4,7 @@ import { sql } from "@/lib/db"
 import type { Report as DbReport } from "@/lib/db"
 import { generateText } from "ai"
 import type { LanguageModel } from "ai"
-import { getSetting } from "./settings"
+import { getAiSettings, getSetting } from "./settings"
 import { getModel } from "@/lib/ai"
 import { getCurrentUserId } from "@/lib/auth"
 import type { DesignerElement, EditorState, MatrixRow, Severity, Status } from "@/lib/pdf-editor"
@@ -207,12 +207,10 @@ export async function generateAIReport(
   projectId?: number,
 ): Promise<{ content: string; title: string; id: number }> {
   const userId = await getCurrentUserId()
-  const apiKey = await getSetting("ai_api_key")
-  const aiModel = (await getSetting("ai_model")) || "gemini-2.5-flash"
-  const aiProvider = "google"
+  const ai = await getAiSettings()
   const styleExamples = (await getSetting("ai_report_style_examples")) || ""
 
-  if (!apiKey) {
+  if (!ai.ready) {
     const reportTypeMap: Record<string, string> = {
       weekly: "Reporte Semanal de Seguridad",
       monthly: "Informe Mensual de Seguridad",
@@ -313,7 +311,7 @@ Genera un informe estructurado con:
 El informe debe ser profesional, conciso y orientado a la accion. Usa formato Markdown.`
 
   try {
-    const model = getModel(aiProvider, aiModel, apiKey) as unknown as LanguageModel
+    const model = getModel(ai.provider, ai.model, ai.apiKey, ai.baseUrl) as unknown as LanguageModel
     const { text } = await generateText({ model, prompt })
 
     const inserted = await sql<{ id: number }>`
@@ -492,9 +490,7 @@ export async function fillPdfDesignerWithAI(args: FillPdfDesignerArgs): Promise<
   if (!userId) {
     throw new Error("Debes iniciar sesión")
   }
-  const apiKey = await getSetting("ai_api_key")
-  const aiModel = (await getSetting("ai_model")) || "gemini-2.5-flash"
-  const aiProvider = "google"
+  const ai = await getAiSettings()
 
   const data = await getReportData(args.period, args.projectId)
   const state = args.state
@@ -509,7 +505,7 @@ export async function fillPdfDesignerWithAI(args: FillPdfDesignerArgs): Promise<
     `Personal: total ${data.workers.total}`,
   ].join("\n")
 
-  if (!apiKey) {
+  if (!ai.ready) {
     const filled = templateElements.map((el) => {
       if (el.type === "plain_text" && !el.text.trim()) return { ...el, text: fallbackSummary }
       if (el.type === "simple_section" && !el.body.trim())
@@ -694,7 +690,7 @@ TEMPLATE_JSON (JSON):
 ${JSON.stringify(templateJson)}
 `
 
-  const model = getModel(aiProvider, aiModel, apiKey) as unknown as LanguageModel
+  const model = getModel(ai.provider, ai.model, ai.apiKey, ai.baseUrl) as unknown as LanguageModel
   const { text } = await generateText({ model, prompt })
   const parsed = parseJsonFromAiText(text)
   if (!parsed || typeof parsed !== "object") {
@@ -713,12 +709,10 @@ export async function fillMatrixWithAI(args: { projectId?: number; request?: str
   if (!userId) {
     throw new Error("Debes iniciar sesión")
   }
-  const apiKey = await getSetting("ai_api_key")
-  if (!apiKey) {
+  const ai = await getAiSettings()
+  if (!ai.ready) {
     return []
   }
-  const aiModel = (await getSetting("ai_model")) || "gemini-2.5-flash"
-  const aiProvider = "google"
 
   const data = await getReportData("monthly", args.projectId)
   const request = String(args.request || "").trim()
@@ -750,7 +744,7 @@ El resultado debe ser un arreglo JSON de objetos con estructura:
 ]
 `
 
-  const model = getModel(aiProvider, aiModel, apiKey) as unknown as LanguageModel
+  const model = getModel(ai.provider, ai.model, ai.apiKey, ai.baseUrl) as unknown as LanguageModel
   try {
     const { text } = await generateText({ model, prompt })
     const parsed = parseJsonFromAiText(text)
@@ -764,11 +758,9 @@ El resultado debe ser un arreglo JSON de objetos con estructura:
 export async function rewriteTextWithAI(input: string): Promise<string> {
   const trimmed = String(input || "").trim()
   if (!trimmed) return input
-  const apiKey = await getSetting("ai_api_key")
-  if (!apiKey) return input
-  const aiModel = (await getSetting("ai_model")) || "gemini-2.5-flash"
-  const aiProvider = "google"
-  const model = getModel(aiProvider, aiModel, apiKey) as unknown as LanguageModel
+  const ai = await getAiSettings()
+  if (!ai.ready) return input
+  const model = getModel(ai.provider, ai.model, ai.apiKey, ai.baseUrl) as unknown as LanguageModel
   const prompt = `Reescribe el siguiente texto en español con lenguaje técnico-formal chileno, claro y profesional, manteniendo el significado pero mejorando redacción y coherencia preventiva:\n\n${trimmed}`
   try {
     const { text } = await generateText({ model, prompt })

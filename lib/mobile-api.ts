@@ -45,6 +45,30 @@ function decryptIfNeeded(key: string, value: string | null): string | null {
   }
 }
 
+/** Configuración de IA por userId (equivalente Bearer de getAiSettings). */
+export async function getAiSettingsForUser(userId: number): Promise<{
+  provider: string
+  model: string
+  apiKey: string
+  baseUrl: string | null
+  ready: boolean
+}> {
+  const { defaultModelFor } = await import("@/lib/ai")
+  const [provider0, model0, key0, baseUrl0] = await Promise.all([
+    getSettingForUser(userId, "ai_provider"),
+    getSettingForUser(userId, "ai_model"),
+    getSettingForUser(userId, "ai_api_key"),
+    getSettingForUser(userId, "ai_base_url"),
+  ])
+  const provider = provider0 || "google"
+  const apiKey =
+    key0 || (provider === "google" ? process.env.AI_API_KEY || process.env.GOOGLE_API_KEY || "" : "")
+  const baseUrl = baseUrl0?.trim() || null
+  const model = model0?.trim() || defaultModelFor(provider)
+  const ready = provider === "custom" ? Boolean(baseUrl) : Boolean(apiKey)
+  return { provider, model, apiKey, baseUrl, ready }
+}
+
 /** getSetting con userId explícito (override de usuario → default global). */
 export async function getSettingForUser(userId: number, key: string): Promise<string | null> {
   try {
