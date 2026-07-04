@@ -11,9 +11,11 @@ const DynamicReportsContent = dynamic(
 export default function ReportsContentClient({
   initialReports,
   projectId,
+  reportId,
 }: {
   initialReports?: GeneratedReportSummary[]
   projectId?: number
+  reportId?: number
 }) {
-  return <DynamicReportsContent initialReports={initialReports} projectId={projectId} />
+  return <DynamicReportsContent initialReports={initialReports} projectId={projectId} reportId={reportId} />
 }

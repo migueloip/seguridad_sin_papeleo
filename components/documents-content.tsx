@@ -1,13 +1,16 @@
 "use client"
 
 import { useState, useTransition, useEffect } from "react"
+import { toast } from "sonner"
+import { confirmToast } from "@/lib/confirm"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { FieldInbox } from "@/components/easysecure/field-inbox"
+import Link from "next/link"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import {
   Dialog,
@@ -27,9 +30,7 @@ import {
   CheckCircle,
   Clock,
   Plus,
-  Upload,
   Trash2,
-  Edit,
   Sparkles,
 } from "lucide-react"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts"
@@ -291,37 +292,9 @@ export function DocumentsContent({
 
   const mobileKey = (c: MobileDocumentCandidate) => `${c.mobile_document_id}:${c.photo_index}`
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "valid":
-        return (
-          <Badge className="bg-success text-success-foreground">
-            <CheckCircle className="mr-1 h-3 w-3" />
-            Vigente
-          </Badge>
-        )
-      case "expiring":
-        return (
-          <Badge className="bg-warning text-warning-foreground">
-            <Clock className="mr-1 h-3 w-3" />
-            Por Vencer
-          </Badge>
-        )
-      case "expired":
-        return (
-          <Badge variant="destructive">
-            <AlertCircle className="mr-1 h-3 w-3" />
-            Vencido
-          </Badge>
-        )
-      default:
-        return <Badge variant="secondary">Desconocido</Badge>
-    }
-  }
-
   const handleCreateDocument = () => {
     if (!newDocument.worker_id || !newDocument.document_type_id || !newDocument.file_name) {
-      alert("Trabajador, tipo de documento y nombre de archivo son requeridos")
+      toast.error("Trabajador, tipo de documento y nombre de archivo son requeridos")
       return
     }
 
@@ -382,7 +355,7 @@ export function DocumentsContent({
           })
         } else {
           setMobilePreview(null)
-          alert("No se pudo cargar la imagen")
+          toast.error("No se pudo cargar la imagen")
         }
       } finally {
         setIsMobilePreviewLoading(false)
@@ -405,7 +378,7 @@ export function DocumentsContent({
   const handleSaveMobileManual = () => {
     if (!mobileManualCandidate) return
     if (!mobileManualForm.worker_id || !mobileManualForm.document_type_id || !mobileManualForm.file_name) {
-      alert("Trabajador, tipo de documento y nombre de archivo son requeridos")
+      toast.error("Trabajador, tipo de documento y nombre de archivo son requeridos")
       return
     }
     const key = mobileKey(mobileManualCandidate)
@@ -483,7 +456,7 @@ export function DocumentsContent({
   const handleSaveMobileAi = () => {
     if (!mobileAiCandidate) return
     if (!mobileAiForm.worker_id || !mobileAiForm.document_type_id || !mobileAiForm.file_name) {
-      alert("Trabajador, tipo de documento y nombre de archivo son requeridos")
+      toast.error("Trabajador, tipo de documento y nombre de archivo son requeridos")
       return
     }
     const key = mobileKey(mobileAiCandidate)
@@ -531,22 +504,18 @@ export function DocumentsContent({
   }
 
   const handleDeleteMobileCandidate = (candidate: MobileDocumentCandidate) => {
-    if (
-      typeof window !== "undefined" &&
-      !window.confirm("¿Seguro que quieres eliminar esta foto desde el teléfono?")
-    ) {
-      return
-    }
     const key = mobileKey(candidate)
-    startTransition(async () => {
-      try {
-        await deleteMobilePhoto({
-          mobile_document_id: candidate.mobile_document_id,
-          photo_index: candidate.photo_index,
-        })
-        setMobileDocuments((prev) => prev.filter((c) => mobileKey(c) !== key))
-      } catch {
-      }
+    confirmToast("¿Eliminar esta foto desde el teléfono?", () => {
+      startTransition(async () => {
+        try {
+          await deleteMobilePhoto({
+            mobile_document_id: candidate.mobile_document_id,
+            photo_index: candidate.photo_index,
+          })
+          setMobileDocuments((prev) => prev.filter((c) => mobileKey(c) !== key))
+        } catch {
+        }
+      })
     })
   }
 
@@ -557,7 +526,7 @@ export function DocumentsContent({
 
   const handleDownloadFile = (doc: Document) => {
     if (!doc.file_url) {
-      alert("Este documento no tiene archivo asociado")
+      toast.error("Este documento no tiene archivo asociado")
       return
     }
     const a = document.createElement("a")
@@ -627,12 +596,19 @@ export function DocumentsContent({
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Documentos</h1>
-          <p className="text-muted-foreground">Gestiona todos los documentos del personal</p>
+          <h1 className="font-display text-[27px] font-bold tracking-[-0.02em]">Documentos</h1>
+          <p className="text-sm text-muted-foreground">Control documental y vencimientos</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <Link
+            href="/documentos/nuevo"
+            className="flex h-[42px] items-center gap-2 rounded-[11px] bg-primary px-[17px] text-sm font-semibold text-white transition-colors hover:bg-[#241f17]"
+          >
+            <Plus className="h-[17px] w-[17px] text-brand" />
+            Crear documento
+          </Link>
           <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
             <DialogTrigger asChild>
               <Button variant="outline">
@@ -730,14 +706,6 @@ export function DocumentsContent({
               </div>
             </DialogContent>
           </Dialog>
-          <Button type="button" variant="outline" onClick={() => setTab("scan")}>
-            <Upload className="mr-2 h-4 w-4" />
-            Documentos escaneados
-          </Button>
-          <Button type="button" variant="outline" onClick={() => setTab("mobile")}>
-            <Upload className="mr-2 h-4 w-4" />
-            Desde teléfono
-          </Button>
         </div>
       </div>
 
@@ -748,52 +716,50 @@ export function DocumentsContent({
           <TabsTrigger value="mobile">Desde teléfono</TabsTrigger>
         </TabsList>
         <TabsContent value="main" className="space-y-6">
-          <div className="grid gap-4 sm:grid-cols-4">
-            <Card>
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-muted-foreground">Total</p>
-                    <p className="text-2xl font-bold">{stats.total}</p>
-                  </div>
-                  <FileText className="h-8 w-8 text-muted-foreground" />
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div className="flex items-center gap-3.5 rounded-2xl border border-border bg-card p-[18px]">
+              <span
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl"
+                style={{ background: "var(--success-tint)" }}
+              >
+                <CheckCircle className="h-[22px] w-[22px]" style={{ color: "var(--success)" }} />
+              </span>
+              <div>
+                <div className="font-display text-[26px] font-bold">{stats.vigentes}</div>
+                <div className="text-[13px] text-muted-foreground">Vigentes</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-3.5 rounded-2xl border border-border bg-card p-[18px]">
+              <span
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl"
+                style={{ background: "var(--warning-tint)" }}
+              >
+                <Clock className="h-[22px] w-[22px]" style={{ color: "var(--warning)" }} />
+              </span>
+              <div>
+                <div className="font-display text-[26px] font-bold" style={{ color: "var(--warning)" }}>
+                  {stats.porVencer}
                 </div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-muted-foreground">Vigentes</p>
-                    <p className="text-2xl font-bold text-success">{stats.vigentes}</p>
-                  </div>
-                  <CheckCircle className="h-8 w-8 text-success" />
+                <div className="text-[13px] text-muted-foreground">Por vencer</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-3.5 rounded-2xl border border-border bg-card p-[18px]">
+              <span
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl"
+                style={{ background: "var(--danger-tint)" }}
+              >
+                <AlertCircle className="h-[22px] w-[22px]" style={{ color: "var(--danger)" }} />
+              </span>
+              <div>
+                <div className="font-display text-[26px] font-bold" style={{ color: "var(--danger)" }}>
+                  {stats.vencidos}
                 </div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-muted-foreground">Por Vencer</p>
-                    <p className="text-2xl font-bold text-warning">{stats.porVencer}</p>
-                  </div>
-                  <Clock className="h-8 w-8 text-warning" />
-                </div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-muted-foreground">Vencidos</p>
-                    <p className="text-2xl font-bold text-destructive">{stats.vencidos}</p>
-                  </div>
-                  <AlertCircle className="h-8 w-8 text-destructive" />
-                </div>
-              </CardContent>
-            </Card>
+                <div className="text-[13px] text-muted-foreground">Vencidos</div>
+              </div>
+            </div>
           </div>
+
+          <FieldInbox />
 
           <Card>
             <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -997,61 +963,105 @@ export function DocumentsContent({
                 </Select>
               </div>
 
-              <div className="rounded-lg border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Tipo de Documento</TableHead>
-                      <TableHead>Persona</TableHead>
-                      <TableHead>RUT</TableHead>
-                      <TableHead>Emision</TableHead>
-                      <TableHead>Vencimiento</TableHead>
-                      <TableHead>Estado</TableHead>
-                      <TableHead className="text-right">Acciones</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredDocuments.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">
-                          No se encontraron documentos
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      filteredDocuments.map((doc) => (
-                        <TableRow key={doc.id}>
-                          <TableCell className="font-medium">{doc.document_type || "Sin tipo"}</TableCell>
-                          <TableCell>
-                            {doc.first_name} {doc.last_name}
-                          </TableCell>
-                          <TableCell>{doc.rut || "-"}</TableCell>
-                          <TableCell>{formatDate(doc.issue_date)}</TableCell>
-                          <TableCell>{formatDate(doc.expiry_date)}</TableCell>
-                          <TableCell>{getStatusBadge(doc.status)}</TableCell>
-                          <TableCell className="text-right">
-                            <div className="flex justify-end gap-2">
-                              <Button variant="ghost" size="icon" onClick={() => handleOpenEdit(doc)}>
-                                <Edit className="h-4 w-4" />
-                              </Button>
-                              <Button variant="ghost" size="icon" onClick={() => handleView(doc)}>
-                                <Eye className="h-4 w-4" />
-                              </Button>
-                              <Button variant="ghost" size="icon" onClick={() => handleDownloadFile(doc)}>
-                                <Download className="h-4 w-4" />
-                              </Button>
-                              <Button variant="ghost" size="icon" onClick={() => handleDownloadData(doc)}>
-                                <FileText className="h-4 w-4" />
-                              </Button>
-                              <Button variant="ghost" size="icon" onClick={() => handleDelete(doc.id)}>
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
+              <div className="overflow-hidden rounded-2xl border border-border bg-card">
+                <div className="grid grid-cols-[2.2fr_1.6fr_1fr_1.2fr_auto] gap-3.5 border-b border-secondary px-5 py-3.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  <div>Documento</div>
+                  <div>Trabajador</div>
+                  <div>Vence</div>
+                  <div>Estado</div>
+                  <div />
+                </div>
+                {filteredDocuments.length === 0 ? (
+                  <div className="px-5 py-10 text-center text-sm text-muted-foreground">
+                    No se encontraron documentos
+                  </div>
+                ) : (
+                  filteredDocuments.map((doc) => {
+                    const meta =
+                      doc.status === "valid"
+                        ? { color: "var(--success)", tint: "var(--success-tint)", label: "Vigente" }
+                        : doc.status === "expiring"
+                          ? { color: "var(--warning)", tint: "var(--warning-tint)", label: "Por vencer" }
+                          : { color: "var(--danger)", tint: "var(--danger-tint)", label: "Vencido" }
+                    const initials =
+                      `${(doc.first_name || "")[0] || ""}${(doc.last_name || "")[0] || ""}`.toUpperCase() || "—"
+                    return (
+                      <div
+                        key={doc.id}
+                        className="grid grid-cols-[2.2fr_1.6fr_1fr_1.2fr_auto] items-center gap-3.5 border-b border-secondary/60 px-5 py-3.5 transition-colors hover:bg-secondary/40"
+                      >
+                        <div className="flex min-w-0 items-center gap-2.5">
+                          <span
+                            className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-[9px]"
+                            style={{ background: meta.tint }}
+                          >
+                            <FileText className="h-4 w-4" style={{ color: meta.color }} />
+                          </span>
+                          <span className="truncate text-sm font-semibold">
+                            {doc.document_type || "Sin tipo"}
+                          </span>
+                        </div>
+                        <div className="flex min-w-0 items-center gap-2.5">
+                          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-secondary text-[11px] font-semibold text-muted-foreground">
+                            {initials}
+                          </span>
+                          <div className="min-w-0">
+                            <div className="truncate text-[13px] font-medium">
+                              {doc.first_name} {doc.last_name}
                             </div>
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
+                            <div className="truncate text-xs text-muted-foreground">{doc.rut || ""}</div>
+                          </div>
+                        </div>
+                        <div className="font-mono text-[13px] text-[#6f6a60]">{formatDate(doc.expiry_date)}</div>
+                        <div>
+                          <span
+                            className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold"
+                            style={{ color: meta.color, background: meta.tint }}
+                          >
+                            <span className="h-1.5 w-1.5 rounded-full" style={{ background: meta.color }} />
+                            {meta.label}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            onClick={() => handleOpenEdit(doc)}
+                            className="h-8 rounded-lg border border-border px-3 text-xs font-semibold transition-colors hover:bg-secondary"
+                          >
+                            Editar
+                          </button>
+                          <button
+                            onClick={() => handleView(doc)}
+                            title="Ver"
+                            className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary"
+                          >
+                            <Eye className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={() => handleDownloadFile(doc)}
+                            title="Descargar archivo"
+                            className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary"
+                          >
+                            <Download className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={() => handleDownloadData(doc)}
+                            title="Exportar datos"
+                            className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary"
+                          >
+                            <FileText className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={() => handleDelete(doc.id)}
+                            title="Eliminar"
+                            className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary hover:text-[var(--danger)]"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })
+                )}
               </div>
             </CardContent>
           </Card>
@@ -1298,6 +1308,7 @@ export function DocumentsContent({
                     {formatDate(mobilePreview.candidate.created_at)}
                   </p>
                   <div className="max-h-[60vh] overflow-hidden rounded-md border bg-muted">
+                    {/* eslint-disable-next-line @next/next/no-img-element -- imageUrl dinámica desde fotos móviles (blob o storage), unoptimized */}
                     <img
                       src={mobilePreview.imageUrl}
                       alt={mobilePreview.candidate.title || mobilePreview.candidate.file_name}

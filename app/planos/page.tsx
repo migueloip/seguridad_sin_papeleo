@@ -4,6 +4,8 @@ import { getSession } from "@/lib/auth"
 import { getPlans } from "@/app/actions/plans"
 import { redirect } from "next/navigation"
 
+export const metadata = { title: "Planos y riesgos" }
+
 export default async function PlanosPage() {
   const session = await getSession()
   if (!session) redirect("/auth/login")

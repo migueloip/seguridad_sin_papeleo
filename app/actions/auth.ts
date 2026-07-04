@@ -34,7 +34,19 @@ async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, delayMs = 1000
   throw lastError
 }
 
-async function backfillUserId(userId: number) {
+/**
+ * Asigna registros huérfanos (user_id NULL) al primer admin que se registra en
+ * el sistema. Se ejecuta SOLO durante el primer register cuando la tabla users
+ * está vacía — adoptar datos pre-existentes de antes de la migración 004.
+ *
+ * Antes esto se ejecutaba en CADA login/register, lo cual era inseguro (race
+ * condition entre usuarios) y lento (UPDATE masivo en cada login).
+ */
+async function adoptOrphanDataIfFirstUser(userId: number) {
+  const userCount = await withRetry(async () =>
+    await sql<{ count: string }>`SELECT COUNT(*)::text AS count FROM users WHERE id <> ${userId}`,
+  )
+  if (Number(userCount[0]?.count ?? "0") > 0) return
   await withRetry(async () => {
     await sql`UPDATE projects SET user_id = ${userId} WHERE user_id IS NULL`
     await sql`UPDATE workers SET user_id = ${userId} WHERE user_id IS NULL`
@@ -45,51 +57,90 @@ async function backfillUserId(userId: number) {
   })
 }
 
+export type AuthFormState = { error: string; values?: { name?: string; email?: string } } | null
+
 export async function register(formData: FormData) {
+  const result = await registerAction(null, formData)
+  if (result?.error) throw new Error(result.error)
+}
+
+export async function registerAction(_prev: AuthFormState, formData: FormData): Promise<AuthFormState> {
   const email = String(formData.get("email") || "").trim().toLowerCase()
   const name = String(formData.get("name") || "").trim()
   const password = String(formData.get("password") || "")
+  const confirm = formData.get("confirm")
+  const fail = (error: string): AuthFormState => ({ error, values: { name, email } })
 
   if (!email || !password) {
-    throw new Error("Email y contraseña son obligatorios")
+    return fail("Email y contraseña son obligatorios")
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return fail("El email no tiene un formato válido")
+  }
+  if (password.length < 8) {
+    return fail("La contraseña debe tener al menos 8 caracteres")
+  }
+  if (confirm !== null && String(confirm) !== password) {
+    return fail("Las contraseñas no coinciden")
   }
 
-  const existing = await withRetry(async () => await sql<{ id: number }[]>`SELECT id FROM users WHERE email = ${email} LIMIT 1`)
+  let existing: { id: number }[]
+  try {
+    existing = await withRetry(async () => await sql<{ id: number }>`SELECT id FROM users WHERE email = ${email} LIMIT 1`)
+  } catch {
+    return fail("No se pudo conectar con el servidor. Intenta de nuevo.")
+  }
   if (existing.length) {
-    throw new Error("Este email ya está registrado")
+    return fail("Este email ya está registrado")
   }
 
   const passwordHash = await bcrypt.hash(password, 10)
   const adminEmails = (process.env.ADMIN_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean)
   const role = adminEmails.includes(email) ? "admin" : "user"
-  const result = await withRetry(async () => await sql<{ id: number; role: string | null }[]>`
-    INSERT INTO users (email, name, password_hash, role)
-    VALUES (${email}, ${name || null}, ${passwordHash}, ${role})
-    RETURNING id, role
-  `)
+  let result: { id: number; role: string | null }[]
+  try {
+    result = await withRetry(async () => await sql<{ id: number; role: string | null }>`
+      INSERT INTO users (email, name, password_hash, role)
+      VALUES (${email}, ${name || null}, ${passwordHash}, ${role})
+      RETURNING id, role
+    `)
+  } catch {
+    return fail("No se pudo crear la cuenta. Intenta de nuevo.")
+  }
   const userId = Number(result[0].id)
   await createSession(userId)
-  await backfillUserId(userId)
+  await adoptOrphanDataIfFirstUser(userId)
   const createdRole = result[0].role || "user"
   redirect(createdRole === "admin" ? "/admin" : "/")
 }
 
 export async function login(formData: FormData) {
+  const result = await loginAction(null, formData)
+  if (result?.error) throw new Error(result.error)
+}
+
+export async function loginAction(_prev: AuthFormState, formData: FormData): Promise<AuthFormState> {
   const email = String(formData.get("email") || "").trim().toLowerCase()
   const password = String(formData.get("password") || "")
+  const fail = (error: string): AuthFormState => ({ error, values: { email } })
 
   if (!email || !password) {
-    throw new Error("Email y contraseña son obligatorios")
+    return fail("Email y contraseña son obligatorios")
   }
 
-  const user = await withRetry(async () => await sql<User[]>`SELECT * FROM users WHERE email = ${email} LIMIT 1`)
+  let user: User[]
+  try {
+    user = await withRetry(async () => await sql<User>`SELECT * FROM users WHERE email = ${email} LIMIT 1`)
+  } catch {
+    return fail("No se pudo conectar con el servidor. Intenta de nuevo.")
+  }
   const u = user[0]
   if (!u) {
-    throw new Error("Credenciales inválidas")
+    return fail("Credenciales inválidas")
   }
   const ok = await bcrypt.compare(password, u.password_hash)
   if (!ok) {
-    throw new Error("Credenciales inválidas")
+    return fail("Credenciales inválidas")
   }
 
   const adminEmails = (process.env.ADMIN_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean)
@@ -99,7 +150,6 @@ export async function login(formData: FormData) {
   }
 
   await createSession(Number(u.id))
-  await backfillUserId(Number(u.id))
   redirect((u.role || "user") === "admin" ? "/admin" : "/")
 }
 

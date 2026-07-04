@@ -1,15 +1,34 @@
 import type React from "react"
 import type { Metadata } from "next"
-import { Geist, Geist_Mono } from "next/font/google"
+import { Space_Grotesk, IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google"
 import { Toaster } from "sonner"
 import "./globals.css"
 
-const geist = Geist({ subsets: ["latin"] })
-const geistMono = Geist_Mono({ subsets: ["latin"] })
+// Easysecure typography: Space Grotesk (display), IBM Plex Sans (body), IBM Plex Mono (labels).
+const spaceGrotesk = Space_Grotesk({
+  subsets: ["latin"],
+  variable: "--font-space-grotesk",
+  display: "swap",
+})
+const ibmPlexSans = IBM_Plex_Sans({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
+  variable: "--font-ibm-plex-sans",
+  display: "swap",
+})
+const ibmPlexMono = IBM_Plex_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
+  variable: "--font-ibm-plex-mono",
+  display: "swap",
+})
 
 export const metadata: Metadata = {
-  title: "SafeWork Pro - Seguridad sin Papeleo",
-  description: "Plataforma de gestión de Seguridad y Salud Laboral para obras de construcción",
+  title: {
+    default: "Easysecure — Prevención de riesgos, sin papeleo",
+    template: "%s · Easysecure",
+  },
+  description: "Hallazgos, documentación, planos y cumplimiento de cada obra en un solo lugar. Asistido por IA, listo para terreno.",
   generator: "v0.app",
   icons: {
     icon: [
@@ -29,7 +48,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="es" suppressHydrationWarning>
-      <body className={`${geist.className} ${geistMono.className} font-sans antialiased`} suppressHydrationWarning>
+      <body
+        className={`${spaceGrotesk.variable} ${ibmPlexSans.variable} ${ibmPlexMono.variable} font-sans antialiased`}
+        suppressHydrationWarning
+      >
         {children}
         <Toaster />
       </body>

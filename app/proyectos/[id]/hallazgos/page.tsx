@@ -6,6 +6,8 @@ import { getSession } from "@/lib/auth"
 import { notFound, redirect } from "next/navigation"
 import { parseIntId } from "@/lib/route"
 
+export const metadata = { title: "Hallazgos" }
+
 export default async function ProjectFindingsPage({ params }: { params: Promise<{ id: string }> }) {
   const p = await params
   const parsed = parseIntId(p.id)

@@ -4,6 +4,8 @@ import { getWorkers } from "@/app/actions/workers"
 import { getSession } from "@/lib/auth"
 import { redirect } from "next/navigation"
 
+export const metadata = { title: "Personal" }
+
 export default async function PersonnelPage() {
   const session = await getSession()
   if (!session) redirect("/auth/login")

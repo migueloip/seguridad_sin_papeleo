@@ -1,10 +1,12 @@
 import { DashboardLayout } from "@/components/dashboard-layout"
-import ReportsContentClient from "@/components/reports-content-client"
+import { ReportsLanding } from "@/components/reports-landing"
 import { getProjectById } from "@/app/actions/projects"
 import { getGeneratedReports } from "@/app/actions/reports"
 import { getSession } from "@/lib/auth"
 import { notFound, redirect } from "next/navigation"
 import { parseIntId } from "@/lib/route"
+
+export const metadata = { title: "Informes" }
 
 export default async function ProjectReportsPage({ params }: { params: Promise<{ id: string }> }) {
   const p = await params
@@ -19,9 +21,9 @@ export default async function ProjectReportsPage({ params }: { params: Promise<{
 
   return (
     <DashboardLayout
-      user={session ? { email: String(session.email), name: session.name ?? null, role: session.role ?? null } : undefined}
+      user={{ email: String(session.email), name: session.name ?? null, role: session.role ?? null }}
     >
-      <ReportsContentClient initialReports={reports} projectId={id} />
+      <ReportsLanding reports={reports} editorHref={`/proyectos/${id}/informes/editor`} />
     </DashboardLayout>
   )
 }

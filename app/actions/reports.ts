@@ -250,7 +250,7 @@ export async function generateAIReport(
       `Se recomienda mantener la vigilancia sobre los indicadores y ejecutar acciones correctivas oportunas.`
     const inserted = await sql<{ id: number }>`
       INSERT INTO reports (report_type, title, date_from, date_to, content, generated_by, project_id)
-      VALUES (${reportType}, ${title}, ${new Date(data.dateFrom)}, ${new Date(data.dateTo)}, ${JSON.stringify({ markdown: content })}::jsonb, 'Sistema (sin IA)', ${projectId || null})
+      VALUES (${reportType}, ${title}, ${new Date(data.dateFrom)}, ${new Date(data.dateTo)}, ${sql.json({ markdown: content })}, 'Sistema (sin IA)', ${projectId || null})
       RETURNING id
     `
     const idNum = Number(inserted[0].id)
@@ -318,7 +318,7 @@ El informe debe ser profesional, conciso y orientado a la accion. Usa formato Ma
 
     const inserted = await sql<{ id: number }>`
       INSERT INTO reports (report_type, title, date_from, date_to, content, generated_by, project_id)
-      VALUES (${reportType}, ${title}, ${new Date(data.dateFrom)}, ${new Date(data.dateTo)}, ${JSON.stringify({ markdown: text })}::jsonb, 'Sistema', ${projectId || null})
+      VALUES (${reportType}, ${title}, ${new Date(data.dateFrom)}, ${new Date(data.dateTo)}, ${sql.json({ markdown: text })}, 'Sistema', ${projectId || null})
       RETURNING id
     `
     const idNum = Number(inserted[0].id)
@@ -805,6 +805,13 @@ export async function getReportById(id: number) {
   return result[0]
 }
 
+export async function deleteReport(id: number): Promise<boolean> {
+  const userId = await getCurrentUserId()
+  if (!userId) return false
+  const res = await sql`DELETE FROM reports WHERE id = ${id} AND user_id = ${userId}`
+  return res.count > 0
+}
+
 export async function createManualReport(
   title: string,
   dateFrom: string,
@@ -816,7 +823,7 @@ export async function createManualReport(
   if (!userId) return null
   const inserted = await sql<{ id: number }>`
     INSERT INTO reports (report_type, title, date_from, date_to, content, generated_by, project_id, user_id)
-    VALUES ('manual', ${title}, ${new Date(dateFrom)}, ${new Date(dateTo)}, ${JSON.stringify({ markdown })}::jsonb, 'Usuario', ${projectId || null}, ${userId})
+    VALUES ('manual', ${title}, ${new Date(dateFrom)}, ${new Date(dateTo)}, ${sql.json({ markdown })}, 'Usuario', ${projectId || null}, ${userId})
     RETURNING id
   `
   return inserted[0]?.id ?? null
@@ -833,12 +840,71 @@ export async function updateReport(
   const nextTitle = fields.title ?? current[0].title
   const nextContent =
     fields.markdown !== undefined
-      ? JSON.stringify({ markdown: fields.markdown })
-      : JSON.stringify(current[0].content || { markdown: "" })
+      ? { markdown: fields.markdown }
+      : (current[0].content ?? { markdown: "" })
   await sql`
     UPDATE reports
-    SET title = ${nextTitle}, content = ${nextContent}::jsonb
+    SET title = ${nextTitle}, content = ${sql.json(nextContent)}
     WHERE id = ${id} AND user_id = ${userId}
   `
   return true
+}
+
+/** Estado del diseñador que el editor persiste dentro de reports.content.designer. */
+export interface DesignerSnapshot {
+  elements: DesignerElement[]
+  coverTitle: string
+  coverSubtitle: string
+  pageSize: string
+  pageMarginMm: number
+  numberSections: boolean
+}
+
+/**
+ * Guarda el informe del editor visual como un registro de `reports` (crea o
+ * actualiza). El estado completo del diseñador va en content.designer, de modo
+ * que al reabrir el informe se restauran los bloques tal cual; se conserva el
+ * markdown existente (informes generados por IA) si lo hubiera.
+ */
+export async function saveDesignerReport(args: {
+  id?: number | null
+  title: string
+  projectId?: number
+  designer: DesignerSnapshot
+}): Promise<number | null> {
+  const userId = await getCurrentUserId()
+  if (!userId) return null
+  const title = args.title.trim() || "Informe de Seguridad"
+
+  if (args.id) {
+    const current = await sql<DbReport>`
+      SELECT * FROM reports WHERE id = ${args.id} AND user_id = ${userId} LIMIT 1
+    `
+    if (!current[0]) return null
+    // Tolera contenido antiguo doble-serializado (jsonb string) al mezclar.
+    let prevContent: Record<string, unknown> = {}
+    const raw = current[0].content
+    if (raw && typeof raw === "object") prevContent = raw as Record<string, unknown>
+    else if (typeof raw === "string") {
+      try {
+        const parsed = JSON.parse(raw)
+        if (parsed && typeof parsed === "object") prevContent = parsed
+      } catch {}
+    }
+    const nextContent = { ...prevContent, designer: args.designer }
+    await sql`
+      UPDATE reports
+      SET title = ${title}, content = ${sql.json(nextContent)}
+      WHERE id = ${args.id} AND user_id = ${userId}
+    `
+    return args.id
+  }
+
+  const today = new Date()
+  const inserted = await sql<{ id: number }>`
+    INSERT INTO reports (report_type, title, date_from, date_to, content, generated_by, project_id, user_id)
+    VALUES ('manual', ${title}, ${today}, ${today}, ${sql.json({ designer: args.designer })}, 'Editor', ${args.projectId || null}, ${userId})
+    RETURNING id
+  `
+  return inserted[0]?.id ?? null
 }

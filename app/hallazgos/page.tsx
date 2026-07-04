@@ -4,6 +4,8 @@ import { getFindings } from "@/app/actions/findings"
 import { getSession } from "@/lib/auth"
 import { redirect } from "next/navigation"
 
+export const metadata = { title: "Hallazgos" }
+
 export default async function FindingsPage() {
   const session = await getSession()
   if (!session) redirect("/auth/login")

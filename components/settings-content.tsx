@@ -10,8 +10,34 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
-import { Key, Sparkles, Building, Save, Loader2, CheckCircle, Eye, EyeOff, ScanText } from "lucide-react"
+import { Key, Sparkles, Building, Save, Loader2, CheckCircle, Eye, EyeOff, ScanText, LayoutGrid, PenLine } from "lucide-react"
 import { updateSettings, type Setting } from "@/app/actions/settings"
+
+const NAV_SECTIONS = [
+  { key: "hallazgos", label: "Hallazgos", desc: "Reporte y seguimiento de hallazgos" },
+  { key: "documentos", label: "Documentos", desc: "Control documental y vencimientos" },
+  { key: "informes", label: "Informes", desc: "Generación de reportes y actas" },
+  { key: "personal", label: "Personal", desc: "Gestión de trabajadores de la obra" },
+  { key: "planos", label: "Planos · Riesgos", desc: "Mapa de riesgos sobre planos" },
+  { key: "checklists", label: "Checklists", desc: "Inspecciones y listas de verificación" },
+]
+
+function Toggle({ on, onClick }: { on: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={on}
+      className="relative h-6 w-[42px] shrink-0 rounded-full transition-colors"
+      style={{ background: on ? "var(--primary)" : "#d9d4c9" }}
+    >
+      <span
+        className="absolute top-[3px] h-[18px] w-[18px] rounded-full bg-white shadow transition-all"
+        style={{ left: on ? "21px" : "3px" }}
+      />
+    </button>
+  )
+}
 
 interface SettingsContentProps {
   initialSettings: Setting[]
@@ -46,28 +72,70 @@ export function SettingsContent({ initialSettings }: SettingsContentProps) {
     setSaved(false)
   }
 
+  const navDisabled: string[] = (() => {
+    try {
+      const arr = JSON.parse(settings.nav_disabled || "[]")
+      return Array.isArray(arr) ? arr.map(String) : []
+    } catch {
+      return []
+    }
+  })()
+  const toggleNav = (key: string) => {
+    const set = new Set(navDisabled)
+    if (set.has(key)) set.delete(key)
+    else set.add(key)
+    updateSetting("nav_disabled", JSON.stringify([...set]))
+  }
+
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-foreground">Configuracion</h1>
-        <p className="text-muted-foreground">Administra la configuracion del sistema y las integraciones</p>
+        <h1 className="font-display text-[27px] font-bold tracking-[-0.02em]">Configuración</h1>
+        <p className="text-sm text-muted-foreground">
+          Adapta el panel, la IA y los datos de tu empresa
+        </p>
       </div>
 
-      <Tabs defaultValue="ai" className="space-y-6">
-        <TabsList>
-          <TabsTrigger value="ai" className="flex items-center gap-2">
+      <Tabs defaultValue="ai" className="grid gap-5 lg:grid-cols-[210px_1fr] lg:items-start">
+        <TabsList className="flex h-auto w-full flex-col gap-1 rounded-2xl border border-border bg-card p-2">
+          <TabsTrigger
+            value="ai"
+            className="w-full justify-start gap-2.5 rounded-lg px-3 py-2.5 text-[13px] font-medium data-[state=active]:bg-primary data-[state=active]:text-sidebar-foreground"
+          >
             <Sparkles className="h-4 w-4" />
             Inteligencia Artificial
           </TabsTrigger>
-          <TabsTrigger value="ocr" className="flex items-center gap-2">
+          <TabsTrigger
+            value="ocr"
+            className="w-full justify-start gap-2.5 rounded-lg px-3 py-2.5 text-[13px] font-medium data-[state=active]:bg-primary data-[state=active]:text-sidebar-foreground"
+          >
             <ScanText className="h-4 w-4" />
             OCR
           </TabsTrigger>
-          <TabsTrigger value="company" className="flex items-center gap-2">
+          <TabsTrigger
+            value="company"
+            className="w-full justify-start gap-2.5 rounded-lg px-3 py-2.5 text-[13px] font-medium data-[state=active]:bg-primary data-[state=active]:text-sidebar-foreground"
+          >
             <Building className="h-4 w-4" />
             Empresa
           </TabsTrigger>
+          <TabsTrigger
+            value="nav"
+            className="w-full justify-start gap-2.5 rounded-lg px-3 py-2.5 text-[13px] font-medium data-[state=active]:bg-primary data-[state=active]:text-sidebar-foreground"
+          >
+            <LayoutGrid className="h-4 w-4" />
+            Navegación
+          </TabsTrigger>
+          <TabsTrigger
+            value="firma"
+            className="w-full justify-start gap-2.5 rounded-lg px-3 py-2.5 text-[13px] font-medium data-[state=active]:bg-primary data-[state=active]:text-sidebar-foreground"
+          >
+            <PenLine className="h-4 w-4" />
+            Firma
+          </TabsTrigger>
         </TabsList>
+
+        <div className="min-w-0 space-y-6">
 
         <TabsContent value="ai" className="space-y-6">
           <Card>
@@ -249,6 +317,73 @@ export function SettingsContent({ initialSettings }: SettingsContentProps) {
             </CardContent>
           </Card>
         </TabsContent>
+
+        <TabsContent value="nav" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <LayoutGrid className="h-5 w-5" />
+                Navegación
+              </CardTitle>
+              <CardDescription>Activa u oculta secciones del menú lateral</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {NAV_SECTIONS.map((s) => (
+                <div key={s.key} className="flex items-center justify-between rounded-lg border p-3">
+                  <div>
+                    <div className="font-medium">{s.label}</div>
+                    <div className="text-sm text-muted-foreground">{s.desc}</div>
+                  </div>
+                  <Toggle on={!navDisabled.includes(s.key)} onClick={() => toggleNav(s.key)} />
+                </div>
+              ))}
+              <p className="text-xs text-muted-foreground">
+                Guarda los cambios para aplicarlos al menú lateral.
+              </p>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="firma" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <PenLine className="h-5 w-5" />
+                Firma del responsable
+              </CardTitle>
+              <CardDescription>Datos del responsable que firma los informes</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between rounded-lg border p-3">
+                <div>
+                  <div className="font-medium">Requerir firma en informes</div>
+                  <div className="text-sm text-muted-foreground">
+                    Exige la firma del responsable al exportar el PDF
+                  </div>
+                </div>
+                <Toggle
+                  on={settings.require_signature !== "off"}
+                  onClick={() =>
+                    updateSetting(
+                      "require_signature",
+                      settings.require_signature === "off" ? "on" : "off",
+                    )
+                  }
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="responsible_name">Nombre del responsable</Label>
+                <Input
+                  id="responsible_name"
+                  value={settings.responsible_name || ""}
+                  onChange={(e) => updateSetting("responsible_name", e.target.value)}
+                  placeholder="Nombre y apellido"
+                />
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+        </div>
       </Tabs>
 
       <div className="flex items-center gap-4">

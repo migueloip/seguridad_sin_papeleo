@@ -2,50 +2,12 @@
 
 import { sql } from "@/lib/db"
 import { getCurrentUserId } from "@/lib/auth"
-import { PlanData } from "@/components/plans-3d/types"
 import { Plan, PlanFloor, PlanZone, PlanType } from "@/lib/db"
 import { revalidatePath } from "next/cache"
-
-// --- NEW 3D AI Action ---
-
-export async function processPlanWithAI(fileUrl: string): Promise<PlanData> {
-  // Simulator for AI processing delay
-  await new Promise((resolve) => setTimeout(resolve, 2000))
-
-  return {
-    width: 20,
-    height: 15,
-    scale: 100,
-    walls: [
-      { id: "w1", start: { x: 0, y: 0 }, end: { x: 20, y: 0 }, height: 3, thickness: 0.2 },
-      { id: "w2", start: { x: 20, y: 0 }, end: { x: 20, y: 15 }, height: 3, thickness: 0.2 },
-      { id: "w3", start: { x: 20, y: 15 }, end: { x: 0, y: 15 }, height: 3, thickness: 0.2 },
-      { id: "w4", start: { x: 0, y: 15 }, end: { x: 0, y: 0 }, height: 3, thickness: 0.2 },
-      { id: "w5", start: { x: 0, y: 5 }, end: { x: 10, y: 5 }, height: 3, thickness: 0.15 },
-      { id: "w6", start: { x: 10, y: 5 }, end: { x: 10, y: 0 }, height: 3, thickness: 0.15 },
-    ],
-    layers: [
-      { id: "l1", name: "Estructura", type: "infrastructure", visible: true, color: "#94a3b8", elements: [] },
-      { id: "l2", name: "Electricidad", type: "infrastructure", visible: false, color: "#fbbf24", elements: [] }
-    ],
-    zones: [
-      {
-        id: "z1",
-        name: "Zona Alta Tensión",
-        riskLevel: "critical",
-        score: 95,
-        polygon: [{ x: 15, y: 2 }, { x: 19, y: 2 }, { x: 19, y: 6 }, { x: 15, y: 6 }]
-      },
-      {
-        id: "z2",
-        name: "Pasillo Principal",
-        riskLevel: "low",
-        score: 10,
-        polygon: [{ x: 2, y: 6 }, { x: 18, y: 6 }, { x: 18, y: 9 }, { x: 2, y: 9 }]
-      }
-    ]
-  }
-}
+import { generateText } from "ai"
+import type { LanguageModel } from "ai"
+import { getSetting } from "./settings"
+import { getModel } from "@/lib/ai"
 
 export async function getPlans(projectId?: number) {
   const userId = await getCurrentUserId();
@@ -62,17 +24,40 @@ export async function getPlans(projectId?: number) {
 // --- Legacy Actions (Restored) ---
 
 export async function extractZonesFromPlan(base64: string, mime: string) {
-  // Mock implementation consistent with previous functionality expectation
-  await new Promise(resolve => setTimeout(resolve, 1000));
-  return {
-    floors: [
-      {
-        name: "General",
-        zones: [],
-        frame: { x: 0, y: 0, width: 1, height: 1 }
-      }
-    ]
+  const apiKey =
+    (await getSetting("ai_api_key")) || process.env.AI_API_KEY || process.env.GOOGLE_API_KEY || ""
+  if (!apiKey) {
+    throw new Error("Configura la API Key de IA en Configuración para usar el escáner de planos.")
   }
+  const model = (await getSetting("ai_model")) || "gemini-2.5-flash"
+  const prompt =
+    `Eres un experto en prevención de riesgos laborales. Analiza este plano de obra/edificio y detecta las ZONAS DE RIESGO. ` +
+    `Devuelve SOLO un JSON con esta estructura exacta:\n` +
+    `{"floors":[{"name":"<piso o 'General'>","zones":[{"name":"<nombre de la zona>","code":"<Alto|Medio|Bajo>","x":<0..1>,"y":<0..1>,"width":<0..1>,"height":<0..1>}]}]}\n` +
+    `x, y, width y height son fracciones normalizadas (0 a 1) del rectángulo que delimita la zona sobre la imagen ` +
+    `(x,y = esquina superior izquierda). "code" es el nivel de riesgo. Identifica entre 2 y 8 zonas relevantes ` +
+    `(trabajo en altura, riesgo eléctrico, circulación, almacenamiento de inflamables, maquinaria, etc.). ` +
+    `No incluyas texto fuera del JSON.`
+  const { text } = await generateText({
+    model: getModel("google", model, apiKey) as unknown as LanguageModel,
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: prompt },
+          { type: "image", image: `data:${mime};base64,${base64}` },
+        ],
+      },
+    ],
+  })
+  const cleaned = text.replace(/```json\n?|\n?```/g, "").trim()
+  try {
+    return JSON.parse(cleaned)
+  } catch {
+    const m = cleaned.match(/\{[\s\S]*\}/)
+    if (m) return JSON.parse(m[0])
+  }
+  return { floors: [] }
 }
 
 export async function createPlan(data: Partial<Plan>) {
@@ -84,7 +69,7 @@ export async function createPlan(data: Partial<Plan>) {
       user_id, project_id, name, plan_type, file_name, file_url, mime_type, extracted, created_at, updated_at
     ) VALUES (
       ${userId}, ${data.project_id || null}, ${data.name || "Sin nombre"}, ${data.plan_type || "General"}, 
-      ${data.file_name || ""}, ${data.file_url || null}, ${data.mime_type || null}, ${data.extracted ? sql.json(data.extracted as any) : null},
+      ${data.file_name || ""}, ${data.file_url || null}, ${data.mime_type || null}, ${data.extracted ? sql.json(data.extracted as Record<string, unknown>) : null},
       NOW(), NOW()
     )
     RETURNING *
@@ -92,7 +77,10 @@ export async function createPlan(data: Partial<Plan>) {
   return newPlan;
 }
 
-export async function savePlanFloorsAndZones(planId: number, floors: any[]) {
+export async function savePlanFloorsAndZones(
+  planId: number,
+  floors: Array<{ name?: string; level?: number; zones?: Array<{ name?: string; code?: string; type?: string }> }>,
+) {
   const userId = await getCurrentUserId();
   if (!userId) throw new Error("No autenticado");
 
@@ -151,8 +139,9 @@ export async function getPlanDetail(planId: number) {
   }));
 
   // If no relational data, check JSON
-  if (resultFloors.length === 0 && plan.extracted && (plan.extracted as any).floors) {
-    return { plan, floors: (plan.extracted as any).floors };
+  const extracted = plan.extracted as { floors?: unknown } | null
+  if (resultFloors.length === 0 && extracted && extracted.floors) {
+    return { plan, floors: extracted.floors };
   }
 
   return { plan, floors: resultFloors };
@@ -234,7 +223,7 @@ export async function getPlanZonesByProject(projectId?: number) {
   }
 }
 
-export async function updatePlanData(planId: number, data: any) {
+export async function updatePlanData(planId: number, data: Record<string, unknown>) {
   const userId = await getCurrentUserId();
   if (!userId) throw new Error("No autenticado");
 

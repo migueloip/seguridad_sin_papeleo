@@ -1,316 +1,331 @@
 "use client"
 
 import Link from "next/link"
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import {
-    FileText,
-    AlertTriangle,
-    Users,
-    FolderKanban,
-    FileBarChart,
-    Settings,
-    Clock,
-    CheckCircle2,
-    XCircle,
-    TrendingUp,
-    ImageIcon,
-    ArrowRight,
-} from "lucide-react"
+import { ShieldCheck, TriangleAlert, Clock, Plus, FileText, TrendingUp } from "lucide-react"
 import type { DashboardStats } from "@/app/actions/dashboard"
 import { FindingsChart } from "./findings-chart"
-import { RiskHeatmap } from "./risk-heatmap"
 
 interface DashboardContentProps {
-    stats: DashboardStats
-    userName?: string | null
+  stats: DashboardStats
+  userName?: string | null
+  projectName?: string | null
 }
 
-const quickAccessItems = [
-    {
-        title: "Proyectos",
-        description: "Gestionar proyectos activos",
-        href: "/",
-        icon: FolderKanban,
-        color: "from-blue-500 to-blue-600",
-    },
-    {
-        title: "Documentos",
-        description: "Control de documentación",
-        href: "/documentos",
-        icon: FileText,
-        color: "from-emerald-500 to-emerald-600",
-    },
-    {
-        title: "Hallazgos",
-        description: "Seguimiento de incidencias",
-        href: "/hallazgos",
-        icon: AlertTriangle,
-        color: "from-amber-500 to-amber-600",
-    },
-    {
-        title: "Personal",
-        description: "Gestión de trabajadores",
-        href: "/personal",
-        icon: Users,
-        color: "from-violet-500 to-violet-600",
-    },
-    {
-        title: "Informes",
-        description: "Generar reportes",
-        href: "/informes",
-        icon: FileBarChart,
-        color: "from-pink-500 to-pink-600",
-    },
-    {
-        title: "Planos",
-        description: "Visualizar planos",
-        href: "/planos",
-        icon: ImageIcon,
-        color: "from-cyan-500 to-cyan-600",
-    },
-]
+const SEV: Record<string, { label: string; color: string; tint: string }> = {
+  critical: { label: "Crítico", color: "var(--sev-critical)", tint: "var(--sev-critical-tint)" },
+  high: { label: "Alto", color: "var(--sev-high)", tint: "var(--sev-high-tint)" },
+  medium: { label: "Medio", color: "var(--sev-medium)", tint: "var(--sev-medium-tint)" },
+  low: { label: "Bajo", color: "var(--sev-low)", tint: "var(--sev-low-tint)" },
+}
 
-export function DashboardContent({ stats, userName }: DashboardContentProps) {
-    const greeting = getGreeting()
-    const totalOpenFindings = stats.findings.open + stats.findings.in_progress
+function greeting(): string {
+  const h = new Date().getHours()
+  return h < 12 ? "Buenos días" : h < 19 ? "Buenas tardes" : "Buenas noches"
+}
 
-    return (
-        <div className="space-y-6">
-            {/* Header */}
-            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                <div>
-                    <h1 className="text-2xl font-bold md:text-3xl">
-                        {greeting}, {userName || "Usuario"}
-                    </h1>
-                    <p className="text-muted-foreground">
-                        Resumen general de seguridad y gestión documental
-                    </p>
-                </div>
-                <div className="flex gap-2">
-                    <Link href="/configuracion">
-                        <Button variant="outline" size="sm">
-                            <Settings className="mr-2 h-4 w-4" />
-                            Configuración
-                        </Button>
-                    </Link>
-                </div>
-            </div>
+function fmtDate(s: string): string {
+  const d = new Date(s)
+  if (isNaN(d.getTime())) return s
+  return d.toLocaleDateString("es-CL", { day: "2-digit", month: "short" })
+}
 
-            {/* KPI Cards */}
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <KpiCard
-                    title="Proyectos"
-                    value={stats.projects.total}
-                    subtitle={`${stats.projects.active} activos`}
-                    icon={FolderKanban}
-                    trend={stats.projects.active > 0 ? "up" : undefined}
-                    color="text-blue-500"
-                />
-                <KpiCard
-                    title="Personal Activo"
-                    value={stats.workers.active}
-                    subtitle={`${stats.workers.total} registrados`}
-                    icon={Users}
-                    color="text-violet-500"
-                />
-                <KpiCard
-                    title="Documentos Vigentes"
-                    value={stats.documents.valid}
-                    subtitle={`${stats.documents.expiring} por vencer`}
-                    icon={FileText}
-                    trend={stats.documents.expired > 0 ? "warning" : "up"}
-                    color={stats.documents.expired > 0 ? "text-amber-500" : "text-emerald-500"}
-                />
-                <KpiCard
-                    title="Hallazgos Abiertos"
-                    value={totalOpenFindings}
-                    subtitle={`${stats.findings.critical} críticos`}
-                    icon={AlertTriangle}
-                    trend={stats.findings.critical > 0 ? "critical" : totalOpenFindings > 0 ? "warning" : "up"}
-                    color={stats.findings.critical > 0 ? "text-red-500" : "text-amber-500"}
-                />
-            </div>
+export function DashboardContent({ stats, userName, projectName }: DashboardContentProps) {
+  const openFindings = stats.findings.open + stats.findings.in_progress
+  const compliance =
+    stats.documents.total > 0
+      ? Math.round((stats.documents.valid / stats.documents.total) * 100)
+      : 100
+  const maxRisk = Math.max(...stats.riskByLocation.map((r) => r.score), 1)
 
-            {/* Quick Access Grid */}
+  return (
+    <div className="space-y-[18px]">
+      {/* Header */}
+      <div className="flex flex-wrap items-end justify-between gap-3.5">
+        <div>
+          <h1 className="font-display text-[27px] font-bold tracking-[-0.02em]">
+            {greeting()}, {userName || "Usuario"}
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Estado general de seguridad{projectName ? ` · ${projectName}` : ""}
+          </p>
+        </div>
+        <div className="flex gap-2.5">
+          <Link
+            href="/hallazgos"
+            className="flex h-10 items-center gap-2 rounded-[11px] border border-border bg-card px-[15px] text-[13px] font-semibold transition-colors hover:bg-secondary"
+          >
+            <Plus className="h-4 w-4" />
+            Nuevo hallazgo
+          </Link>
+          <Link
+            href="/informes"
+            className="flex h-10 items-center gap-2 rounded-[11px] bg-primary px-[15px] text-[13px] font-semibold text-white transition-colors hover:bg-[#241f17]"
+          >
+            <FileText className="h-4 w-4 text-brand" />
+            Generar informe
+          </Link>
+        </div>
+      </div>
+
+      {/* KPIs */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <KpiCard
+          title="Índice de cumplimiento"
+          icon={<ShieldCheck className="h-[18px] w-[18px]" style={{ color: "var(--success)" }} />}
+          value={compliance}
+          suffix="%"
+          accent="var(--success)"
+          footer={
+            <span className="flex items-center gap-1.5 text-[var(--success)]">
+              <TrendingUp className="h-3 w-3" />
+              {stats.documents.valid}/{stats.documents.total} documentos vigentes
+            </span>
+          }
+        />
+        <KpiCard
+          title="Hallazgos abiertos"
+          icon={<TriangleAlert className="h-[18px] w-[18px]" style={{ color: "var(--danger)" }} />}
+          value={openFindings}
+          accent="var(--danger)"
+          footer={
+            <span className="flex items-center gap-1.5 text-[var(--danger)]">
+              <span className="h-[7px] w-[7px] rounded-full bg-danger" />
+              {stats.findings.critical} crítico{stats.findings.critical === 1 ? "" : "s"}
+            </span>
+          }
+        />
+        <KpiCard
+          title="Documentos por vencer"
+          icon={<Clock className="h-[18px] w-[18px]" style={{ color: "var(--warning)" }} />}
+          value={stats.documents.expiring}
+          accent="var(--warning)"
+          footer={
+            <span className="flex items-center gap-1.5 text-[var(--warning)]">
+              <span className="h-[7px] w-[7px] rounded-full bg-warning" />
+              {stats.documents.expired} vencido{stats.documents.expired === 1 ? "" : "s"}
+            </span>
+          }
+        />
+        {/* Días sin accidentes — tarjeta oscura */}
+        <div className="relative overflow-hidden rounded-2xl bg-primary p-[18px] text-sidebar-foreground">
+          <div
+            className="absolute inset-0"
+            style={{
+              backgroundImage:
+                "repeating-linear-gradient(135deg,rgba(243,164,10,.08) 0 16px,transparent 16px 32px)",
+            }}
+          />
+          <div className="relative mb-3.5 flex items-center justify-between">
+            <span className="text-[13px] font-medium text-sidebar-foreground/60">
+              Días sin accidentes
+            </span>
+            <ShieldCheck className="h-[18px] w-[18px] text-brand" />
+          </div>
+          <div className="relative font-display text-[32px] font-bold tracking-[-0.02em]">
+            {stats.daysWithoutAccidents ?? "—"}
+          </div>
+          <div className="relative mt-0.5 text-xs text-sidebar-foreground/55">
+            {stats.daysWithoutAccidents != null
+              ? "desde el último hallazgo crítico"
+              : "Sin críticos registrados"}
+          </div>
+        </div>
+      </div>
+
+      {/* Charts */}
+      <div className="grid gap-4 lg:grid-cols-[1.6fr_1fr]">
+        <Panel>
+          <div className="mb-4 flex items-center justify-between">
             <div>
-                <h2 className="mb-4 text-lg font-semibold">Acceso Rápido</h2>
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                    {quickAccessItems.map((item) => (
-                        <Link key={item.href} href={item.href}>
-                            <Card className="group cursor-pointer transition-all duration-200 hover:shadow-lg hover:scale-[1.02] hover:border-primary/50">
-                                <CardContent className="flex items-center gap-4 p-4">
-                                    <div className={`flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br ${item.color} shadow-lg`}>
-                                        <item.icon className="h-6 w-6 text-white" />
-                                    </div>
-                                    <div className="flex-1">
-                                        <h3 className="font-semibold group-hover:text-primary">{item.title}</h3>
-                                        <p className="text-sm text-muted-foreground">{item.description}</p>
-                                    </div>
-                                    <ArrowRight className="h-5 w-5 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
-                                </CardContent>
-                            </Card>
-                        </Link>
-                    ))}
-                </div>
+              <div className="font-display text-base font-semibold">Evolución de hallazgos</div>
+              <div className="text-xs text-muted-foreground">
+                Creados vs. resueltos · últimas 8 semanas
+              </div>
             </div>
-
-            {/* Charts Row */}
-            <div className="grid gap-6 lg:grid-cols-2">
-                <FindingsChart data={stats.findingsWeekly} />
-                <RiskHeatmap data={stats.riskByLocation} />
+            <div className="flex gap-3.5 text-xs text-[#6f6a60]">
+              <LegendDot color="var(--chart-2)" label="Creados" />
+              <LegendDot color="var(--chart-1)" label="Resueltos" />
             </div>
+          </div>
+          <FindingsChart data={stats.findingsWeekly} />
+        </Panel>
 
-            {/* Bottom Row */}
-            <div className="grid gap-6 lg:grid-cols-2">
-                {/* Document Status Summary */}
-                <Card>
-                    <CardHeader>
-                        <CardTitle className="flex items-center gap-2">
-                            <FileText className="h-5 w-5" />
-                            Estado de Documentación
-                        </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="space-y-4">
-                            <StatusRow
-                                label="Vigentes"
-                                value={stats.documents.valid}
-                                total={stats.documents.total}
-                                color="bg-emerald-500"
-                                icon={CheckCircle2}
-                            />
-                            <StatusRow
-                                label="Por vencer (30 días)"
-                                value={stats.documents.expiring}
-                                total={stats.documents.total}
-                                color="bg-amber-500"
-                                icon={Clock}
-                            />
-                            <StatusRow
-                                label="Vencidos"
-                                value={stats.documents.expired}
-                                total={stats.documents.total}
-                                color="bg-red-500"
-                                icon={XCircle}
-                            />
-                        </div>
-                        <div className="mt-4 pt-4 border-t">
-                            <Link href="/documentos">
-                                <Button variant="outline" className="w-full">
-                                    Ver todos los documentos
-                                    <ArrowRight className="ml-2 h-4 w-4" />
-                                </Button>
-                            </Link>
-                        </div>
-                    </CardContent>
-                </Card>
+        <Panel>
+          <div className="font-display text-base font-semibold">Riesgo por zona</div>
+          <div className="mb-4 text-xs text-muted-foreground">Nivel de exposición actual</div>
+          <div className="flex flex-col gap-3.5">
+            {stats.riskByLocation.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Sin hallazgos abiertos</p>
+            ) : (
+              stats.riskByLocation.map((z) => {
+                const pct = Math.round((z.score / maxRisk) * 100)
+                const level =
+                  z.critical > 0 || pct >= 66
+                    ? { label: "Alto", color: "var(--danger)" }
+                    : pct >= 33
+                      ? { label: "Medio", color: "var(--warning)" }
+                      : { label: "Bajo", color: "var(--success)" }
+                return (
+                  <Link key={z.location} href="/mapa-riesgos" className="group block">
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <span className="text-[13px] font-medium">{z.location}</span>
+                      <span className="text-xs font-semibold" style={{ color: level.color }}>
+                        {level.label}
+                      </span>
+                    </div>
+                    <div className="h-[7px] overflow-hidden rounded-md bg-secondary">
+                      <div
+                        className="h-full rounded-md transition-all"
+                        style={{ width: `${pct}%`, background: level.color }}
+                      />
+                    </div>
+                  </Link>
+                )
+              })
+            )}
+          </div>
+        </Panel>
+      </div>
 
-                {/* Upcoming Expirations */}
-                <Card>
-                    <CardHeader>
-                        <CardTitle className="flex items-center gap-2">
-                            <Clock className="h-5 w-5" />
-                            Próximos Vencimientos
-                        </CardTitle>
-                        <CardDescription>Documentos que vencen en los próximos 30 días</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                        {stats.upcomingExpirations.length === 0 ? (
-                            <p className="text-sm text-muted-foreground py-4 text-center">
-                                No hay documentos por vencer próximamente
-                            </p>
-                        ) : (
-                            <div className="space-y-3">
-                                {stats.upcomingExpirations.map((doc) => (
-                                    <div key={doc.id} className="flex items-center justify-between gap-2 rounded-lg border p-3">
-                                        <div className="min-w-0 flex-1">
-                                            <p className="font-medium truncate">{doc.worker_name}</p>
-                                            <p className="text-sm text-muted-foreground truncate">{doc.document_type}</p>
-                                        </div>
-                                        <Badge variant={doc.days_until <= 7 ? "destructive" : doc.days_until <= 14 ? "default" : "secondary"}>
-                                            {doc.days_until === 0 ? "Hoy" : doc.days_until === 1 ? "Mañana" : `${doc.days_until} días`}
-                                        </Badge>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </CardContent>
-                </Card>
-            </div>
-        </div>
-    )
+      {/* Bottom */}
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Panel>
+          <div className="mb-4 flex items-center justify-between">
+            <div className="font-display text-base font-semibold">Próximos vencimientos</div>
+            <Link href="/documentos" className="text-[13px] font-semibold text-[#b8841a]">
+              Ver todos
+            </Link>
+          </div>
+          <div className="flex flex-col gap-2.5">
+            {stats.upcomingExpirations.length === 0 ? (
+              <p className="py-4 text-center text-sm text-muted-foreground">
+                No hay documentos por vencer próximamente
+              </p>
+            ) : (
+              stats.upcomingExpirations.map((d) => {
+                const urgent = d.days_until <= 7
+                const color = urgent ? "var(--danger)" : "var(--warning)"
+                const tint = urgent ? "var(--danger-tint)" : "var(--warning-tint)"
+                return (
+                  <div
+                    key={d.id}
+                    className="flex items-center gap-3 rounded-[11px] border border-secondary p-2.5"
+                  >
+                    <span
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[9px]"
+                      style={{ background: tint }}
+                    >
+                      <FileText className="h-[18px] w-[18px]" style={{ color }} />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium">{d.worker_name}</div>
+                      <div className="truncate text-xs text-muted-foreground">{d.document_type}</div>
+                    </div>
+                    <span
+                      className="shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold"
+                      style={{ background: tint, color }}
+                    >
+                      {d.days_until === 0
+                        ? "Hoy"
+                        : d.days_until === 1
+                          ? "Mañana"
+                          : `${d.days_until} días`}
+                    </span>
+                  </div>
+                )
+              })
+            )}
+          </div>
+        </Panel>
+
+        <Panel>
+          <div className="mb-4 flex items-center justify-between">
+            <div className="font-display text-base font-semibold">Hallazgos recientes</div>
+            <Link href="/hallazgos" className="text-[13px] font-semibold text-[#b8841a]">
+              Ver todos
+            </Link>
+          </div>
+          <div className="flex flex-col gap-2.5">
+            {stats.recentFindings.length === 0 ? (
+              <p className="py-4 text-center text-sm text-muted-foreground">
+                No hay hallazgos registrados
+              </p>
+            ) : (
+              stats.recentFindings.map((f) => {
+                const sev = SEV[f.severity] || SEV.low
+                return (
+                  <div
+                    key={f.id}
+                    className="flex items-start gap-3 rounded-[11px] border border-secondary p-2.5"
+                  >
+                    <span
+                      className="mt-0.5 h-2 w-2 shrink-0 rounded-full"
+                      style={{ background: sev.color }}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium">{f.title}</div>
+                      <div className="truncate text-xs text-muted-foreground">
+                        #{f.id} · {f.location || "Sin ubicación"}
+                        {f.responsible_person ? ` · ${f.responsible_person}` : ""} · {fmtDate(f.created_at)}
+                      </div>
+                    </div>
+                    <span
+                      className="shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold"
+                      style={{ background: sev.tint, color: sev.color }}
+                    >
+                      {sev.label}
+                    </span>
+                  </div>
+                )
+              })
+            )}
+          </div>
+        </Panel>
+      </div>
+    </div>
+  )
 }
 
-// Helper components
-
-interface KpiCardProps {
-    title: string
-    value: number
-    subtitle: string
-    icon: React.ComponentType<{ className?: string }>
-    color?: string
-    trend?: "up" | "warning" | "critical"
+function Panel({ children }: { children: React.ReactNode }) {
+  return <div className="rounded-2xl border border-border bg-card p-5">{children}</div>
 }
 
-function KpiCard({ title, value, subtitle, icon: Icon, color = "text-primary", trend }: KpiCardProps) {
-    return (
-        <Card className="relative overflow-hidden">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">{title}</CardTitle>
-                <Icon className={`h-5 w-5 ${color}`} />
-            </CardHeader>
-            <CardContent>
-                <div className="text-3xl font-bold">{value}</div>
-                <div className="flex items-center gap-2">
-                    <p className="text-xs text-muted-foreground">{subtitle}</p>
-                    {trend === "up" && <TrendingUp className="h-3 w-3 text-emerald-500" />}
-                    {trend === "warning" && <Clock className="h-3 w-3 text-amber-500" />}
-                    {trend === "critical" && <AlertTriangle className="h-3 w-3 text-red-500" />}
-                </div>
-            </CardContent>
-            {/* Decorative gradient */}
-            <div className={`absolute inset-x-0 bottom-0 h-1 bg-gradient-to-r ${trend === "critical" ? "from-red-500 to-red-600" :
-                    trend === "warning" ? "from-amber-500 to-amber-600" :
-                        "from-primary to-primary/80"
-                }`} />
-        </Card>
-    )
+function LegendDot({ color, label }: { color: string; label: string }) {
+  return (
+    <span className="flex items-center gap-1.5">
+      <span className="h-2.5 w-2.5 rounded-[3px]" style={{ background: color }} />
+      {label}
+    </span>
+  )
 }
 
-interface StatusRowProps {
-    label: string
-    value: number
-    total: number
-    color: string
-    icon: React.ComponentType<{ className?: string }>
-}
-
-function StatusRow({ label, value, total, color, icon: Icon }: StatusRowProps) {
-    const percentage = total > 0 ? Math.round((value / total) * 100) : 0
-    return (
-        <div className="space-y-1">
-            <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                    <Icon className={`h-4 w-4 ${color.replace("bg-", "text-")}`} />
-                    <span className="text-sm font-medium">{label}</span>
-                </div>
-                <span className="text-sm font-semibold">{value}</span>
-            </div>
-            <div className="h-2 w-full rounded-full bg-muted">
-                <div
-                    className={`h-2 rounded-full ${color}`}
-                    style={{ width: `${percentage}%`, transition: "width 0.5s ease" }}
-                />
-            </div>
-        </div>
-    )
-}
-
-function getGreeting(): string {
-    const hour = new Date().getHours()
-    if (hour < 12) return "Buenos días"
-    if (hour < 19) return "Buenas tardes"
-    return "Buenas noches"
+function KpiCard({
+  title,
+  icon,
+  value,
+  suffix,
+  accent,
+  footer,
+}: {
+  title: string
+  icon: React.ReactNode
+  value: number | string
+  suffix?: string
+  accent: string
+  footer: React.ReactNode
+}) {
+  return (
+    <div className="relative overflow-hidden rounded-2xl border border-border bg-card p-[18px]">
+      <div className="mb-3.5 flex items-center justify-between">
+        <span className="text-[13px] font-medium text-muted-foreground">{title}</span>
+        {icon}
+      </div>
+      <div className="font-display text-[32px] font-bold tracking-[-0.02em]">
+        {value}
+        {suffix ? <span className="text-[18px] text-muted-foreground">{suffix}</span> : null}
+      </div>
+      <div className="mt-0.5 text-xs">{footer}</div>
+      <div className="absolute inset-x-0 bottom-0 h-[3px]" style={{ background: accent }} />
+    </div>
+  )
 }

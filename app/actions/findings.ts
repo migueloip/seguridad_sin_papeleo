@@ -1005,7 +1005,7 @@ export async function createFinding(data: {
         VALUES (${userId}, ${data.project_id || null}, ${data.checklist_id || null}, ${data.title}, ${data.description || null},
                 ${data.severity}, ${data.location || null}, ${data.responsible_person || null},
                 ${data.responsible_worker_id || null}, ${data.plan_zone_id || null},
-                ${JSON.stringify((data.related_document_type_ids || []).map((n) => Number(n)).filter((n) => Number.isFinite(n)))}::jsonb,
+                ${(data.related_document_type_ids || []).map((n) => Number(n)).filter((n) => Number.isFinite(n))}::jsonb,
                 ${data.due_date || null}, NULL)
         RETURNING id
       `
@@ -1033,7 +1033,7 @@ export async function createFinding(data: {
         out.push(p)
       }
     }
-    await sql`UPDATE findings SET photos = ${JSON.stringify(out)}::jsonb WHERE id = ${findingId}`
+    await sql`UPDATE findings SET photos = ${out}::jsonb WHERE id = ${findingId}`
   }
   revalidatePath("/hallazgos")
   if (data.project_id) {
@@ -1557,7 +1557,7 @@ export async function updateFinding(
           responsible_person = COALESCE(${data.responsible_person || null}, responsible_person),
           responsible_worker_id = COALESCE(${data.responsible_worker_id ?? null}, responsible_worker_id),
           plan_zone_id = COALESCE(${data.plan_zone_id ?? null}, plan_zone_id),
-          related_document_type_ids = COALESCE(${data.related_document_type_ids ? JSON.stringify(data.related_document_type_ids) : null}::jsonb, related_document_type_ids),
+          related_document_type_ids = COALESCE(${data.related_document_type_ids ?? null}::jsonb, related_document_type_ids),
           due_date = COALESCE(${data.due_date || null}, due_date),
           status = COALESCE(${data.status || null}, status),
           resolution_notes = COALESCE(${data.resolution_notes || null}, resolution_notes),

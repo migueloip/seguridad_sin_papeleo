@@ -18,6 +18,7 @@ export type ProjectRow = {
   updated_at: string
   worker_count: number
   open_findings: number
+  expiring_docs: number
 }
 
 export async function getProjects(): Promise<ProjectRow[]> {
@@ -26,7 +27,12 @@ export async function getProjects(): Promise<ProjectRow[]> {
   return sql<ProjectRow>`
     SELECT p.*,
       (SELECT COUNT(*)::int FROM workers w WHERE w.project_id = p.id AND w.status = 'active' AND w.user_id = ${userId}) as worker_count,
-      (SELECT COUNT(*)::int FROM findings f WHERE f.project_id = p.id AND f.status = 'open' AND f.user_id = ${userId}) as open_findings
+      (SELECT COUNT(*)::int FROM findings f WHERE f.project_id = p.id AND f.status = 'open' AND f.user_id = ${userId}) as open_findings,
+      (SELECT COUNT(*)::int FROM documents d
+         JOIN workers w2 ON d.worker_id = w2.id
+        WHERE w2.project_id = p.id AND d.user_id = ${userId}
+          AND d.expiry_date IS NOT NULL
+          AND d.expiry_date <= CURRENT_DATE + INTERVAL '30 days') as expiring_docs
     FROM projects p
     WHERE p.user_id = ${userId}
     ORDER BY p.name

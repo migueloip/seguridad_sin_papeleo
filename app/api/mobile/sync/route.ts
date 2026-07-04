@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server"
 import { sql } from "@/lib/db"
 import { getMobileSessionFromRequest } from "@/lib/mobile-auth"
+import { MOBILE_CORS_HEADERS, mobileOptions } from "@/lib/mobile-api"
+
+export function OPTIONS() {
+  return mobileOptions()
+}
 
 type EntityName = "projects" | "workers" | "findings" | "mobile_documents"
 type OutboxOp = "create" | "update" | "delete"
@@ -76,11 +81,11 @@ function toDateOrNull(v: unknown): Date | null {
 
 export async function POST(req: Request) {
   const session = await getMobileSessionFromRequest(req)
-  if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401 })
+  if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401, headers: MOBILE_CORS_HEADERS })
 
   const userId = session.user_id
   const body = (await req.json().catch(() => null)) as SyncRequestBody | null
-  if (!body || !Array.isArray(body.outbox)) return NextResponse.json({ error: "bad request" }, { status: 400 })
+  if (!body || !Array.isArray(body.outbox)) return NextResponse.json({ error: "bad request" }, { status: 400, headers: MOBILE_CORS_HEADERS })
 
   const now = new Date().toISOString()
   const appliedOutboxIds: number[] = []
@@ -266,12 +271,12 @@ export async function POST(req: Request) {
           const dueDate = toDateOrNull(data.due_date)
           const resolutionNotes = asNullableString(data.resolution_notes)
           const photosRaw = (data as Record<string, unknown>).photos
-          let photosJson: string | null = null
+          let photosJson: string[] | null = null
           if (Array.isArray(photosRaw)) {
             const arr = photosRaw.filter((p): p is string => typeof p === "string")
-            if (arr.length > 0) photosJson = JSON.stringify(arr)
+            if (arr.length > 0) photosJson = arr
           } else if (typeof photosRaw === "string" && photosRaw) {
-            photosJson = JSON.stringify([photosRaw])
+            photosJson = [photosRaw]
           }
           const rows = await sql<{ id: number }>`
             INSERT INTO findings (
@@ -321,12 +326,12 @@ export async function POST(req: Request) {
           const dueDate = toDateOrNull(data.due_date)
           const resolutionNotes = asNullableString(data.resolution_notes)
           const photosRaw = (data as Record<string, unknown>).photos
-          let photosJson: string | null = null
+          let photosJson: string[] | null = null
           if (Array.isArray(photosRaw)) {
             const arr = photosRaw.filter((p): p is string => typeof p === "string")
-            if (arr.length > 0) photosJson = JSON.stringify(arr)
+            if (arr.length > 0) photosJson = arr
           } else if (typeof photosRaw === "string" && photosRaw) {
-            photosJson = JSON.stringify([photosRaw])
+            photosJson = [photosRaw]
           }
           await sql`
             UPDATE findings
@@ -366,12 +371,12 @@ export async function POST(req: Request) {
           const title = asString(data.title, "")
           const description = asNullableString(data.description)
           const photosRaw = (data as Record<string, unknown>).photos
-          let photosJson: string | null = null
+          let photosJson: string[] | null = null
           if (Array.isArray(photosRaw)) {
             const arr = photosRaw.filter((p): p is string => typeof p === "string")
-            if (arr.length > 0) photosJson = JSON.stringify(arr)
+            if (arr.length > 0) photosJson = arr
           } else if (typeof photosRaw === "string" && photosRaw) {
-            photosJson = JSON.stringify([photosRaw])
+            photosJson = [photosRaw]
           }
           const rows = await sql<{ id: number }>`
             INSERT INTO mobile_documents (
@@ -409,12 +414,12 @@ export async function POST(req: Request) {
           const title = asString(data.title, "")
           const description = asNullableString(data.description)
           const photosRaw = (data as Record<string, unknown>).photos
-          let photosJson: string | null = null
+          let photosJson: string[] | null = null
           if (Array.isArray(photosRaw)) {
             const arr = photosRaw.filter((p): p is string => typeof p === "string")
-            if (arr.length > 0) photosJson = JSON.stringify(arr)
+            if (arr.length > 0) photosJson = arr
           } else if (typeof photosRaw === "string" && photosRaw) {
-            photosJson = JSON.stringify([photosRaw])
+            photosJson = [photosRaw]
           }
           await sql`
             UPDATE mobile_documents
@@ -598,12 +603,15 @@ export async function POST(req: Request) {
       AND deleted_at > ${lastSyncDate}
   `
 
-  return NextResponse.json({
-    now,
-    appliedOutboxIds,
-    idMap,
-    changes: { projects, workers, findings, mobile_documents: mobileDocuments, admonitions },
-    tombstones,
-    conflicts,
-  })
+  return NextResponse.json(
+    {
+      now,
+      appliedOutboxIds,
+      idMap,
+      changes: { projects, workers, findings, mobile_documents: mobileDocuments, admonitions },
+      tombstones,
+      conflicts,
+    },
+    { headers: MOBILE_CORS_HEADERS },
+  )
 }

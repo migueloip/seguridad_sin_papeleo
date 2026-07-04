@@ -1,5 +1,6 @@
 "use client"
 import { useState, useCallback, useEffect } from "react"
+import { toast } from "sonner"
 import { useDropzone } from "react-dropzone"
 import {
   Upload,
@@ -515,7 +516,7 @@ export function UploadContent({ projectId }: { projectId?: number }) {
   const saveDocument = async (fileData: UploadedFile) => {
     const data = fileData.editedData || fileData.extractedData
     if (!fileData.selectedWorkerId && (!data?.rut || !data?.nombre)) {
-      alert("Seleccione un trabajador o proporcione RUT y nombre")
+      toast.error("Seleccione un trabajador o proporcione RUT y nombre")
       return
     }
 
@@ -542,7 +543,7 @@ export function UploadContent({ projectId }: { projectId?: number }) {
       } else {
         const rut = normalizeRut((data!.rut as string))
         if (!isValidRut(rut)) {
-          alert("RUT inválido")
+          toast.error("RUT inválido")
           setFiles((prev) => prev.map((f) => (f.id === fileData.id ? { ...f, status: "completed" } : f)))
           return
         }
@@ -584,7 +585,7 @@ export function UploadContent({ projectId }: { projectId?: number }) {
     } catch (error) {
       console.error("Error saving document:", error)
       setFiles((prev) => prev.map((f) => (f.id === fileData.id ? { ...f, status: "completed" } : f)))
-      alert("Error al guardar el documento")
+      toast.error("Error al guardar el documento")
     }
   }
 
@@ -617,7 +618,7 @@ export function UploadContent({ projectId }: { projectId?: number }) {
     } catch (error) {
       console.error("Error creating finding:", error)
       setFiles((prev) => prev.map((f) => (f.id === fileData.id ? { ...f, status: "completed" } : f)))
-      alert("Error al crear el hallazgo")
+      toast.error("Error al crear el hallazgo")
     }
   }
 
@@ -646,7 +647,7 @@ export function UploadContent({ projectId }: { projectId?: number }) {
     } catch (error) {
       console.error("Error creating checklist:", error)
       setFiles((prev) => prev.map((f) => (f.id === fileData.id ? { ...f, status: "completed" } : f)))
-      alert("Error al crear el checklist")
+      toast.error("Error al crear el checklist")
     }
   }
 

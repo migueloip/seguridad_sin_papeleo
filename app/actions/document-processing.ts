@@ -16,6 +16,45 @@ interface ExtractedData {
   cargo: string | null
 }
 
+/**
+ * Editor de documento con IA: interpreta una descripción en lenguaje natural
+ * (p. ej. "curso de altura de María Soto, vigencia un año") y devuelve los
+ * campos para rellenar el formulario. Sin API key devuelve todo en null.
+ */
+export async function parseDocumentDescription(text: string): Promise<{
+  tipoDocumento: string | null
+  nombre: string | null
+  vigenciaMeses: number | null
+  notas: string | null
+}> {
+  const empty = { tipoDocumento: null, nombre: null, vigenciaMeses: null, notas: null }
+  const apiKey =
+    (await getSetting("ai_api_key")) || process.env.AI_API_KEY || process.env.GOOGLE_API_KEY || ""
+  if (!apiKey || !text.trim()) return empty
+  const model = (await getSetting("ai_model")) || "gemini-2.5-flash"
+  const prompt =
+    `Eres un asistente que rellena un formulario de documento de seguridad laboral. ` +
+    `A partir de la descripción del usuario, responde SOLO con un JSON:\n` +
+    `{"tipoDocumento": "<tipo de documento o null>", "nombre": "<nombre del trabajador o null>", "vigenciaMeses": <meses de vigencia como número o null>, "notas": "<observaciones o null>"}\n` +
+    `Descripción: "${text}"`
+  const { text: out } = await generateText({
+    model: getModel("google", model, apiKey) as unknown as LanguageModel,
+    messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+  })
+  const cleaned = out.replace(/```json\n?|\n?```/g, "").trim()
+  try {
+    const p = JSON.parse(cleaned.match(/\{[\s\S]*\}/)?.[0] ?? cleaned) as Record<string, unknown>
+    return {
+      tipoDocumento: typeof p.tipoDocumento === "string" ? p.tipoDocumento : null,
+      nombre: typeof p.nombre === "string" ? p.nombre : null,
+      vigenciaMeses: Number.isFinite(Number(p.vigenciaMeses)) ? Number(p.vigenciaMeses) : null,
+      notas: typeof p.notas === "string" ? p.notas : null,
+    }
+  } catch {
+    return empty
+  }
+}
+
 export async function extractDocumentData(base64Image: string, mimeType: string): Promise<ExtractedData> {
   const apiKey =
     (await getSetting("ai_api_key")) || process.env.AI_API_KEY || process.env.GOOGLE_API_KEY || ""

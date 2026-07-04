@@ -4,6 +4,8 @@ import { getSettings } from "@/app/actions/settings"
 import { getSession } from "@/lib/auth"
 import { redirect } from "next/navigation"
 
+export const metadata = { title: "Configuración" }
+
 export default async function ConfiguracionPage() {
   const session = await getSession()
   if (!session) redirect("/auth/login")
