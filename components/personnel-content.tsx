@@ -5,9 +5,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Badge } from "@/components/ui/badge"
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"
-import { Progress } from "@/components/ui/progress"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -26,6 +23,7 @@ import { getDocuments, createDocument, findDocumentTypeByName, getDocumentTypes 
 import { createAdmonition, getAdmonitions, deleteAdmonition } from "@/app/actions/admonitions"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
+import { confirmToast } from "@/lib/confirm"
 import { isValidRut, normalizeRut } from "@/lib/utils"
 
 interface Worker {
@@ -224,34 +222,6 @@ export function PersonnelContent({ initialWorkers, projectId }: { initialWorkers
     return "completo"
   }
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "completo":
-        return (
-          <Badge className="bg-success text-success-foreground">
-            <CheckCircle className="mr-1 h-3 w-3" />
-            Completo
-          </Badge>
-        )
-      case "incompleto":
-        return (
-          <Badge className="bg-warning text-warning-foreground">
-            <AlertCircle className="mr-1 h-3 w-3" />
-            Incompleto
-          </Badge>
-        )
-      case "critico":
-        return (
-          <Badge variant="destructive">
-            <AlertCircle className="mr-1 h-3 w-3" />
-            Critico
-          </Badge>
-        )
-      default:
-        return <Badge variant="secondary">Sin docs</Badge>
-    }
-  }
-
   const getInitials = (firstName: string, lastName: string) => {
     return `${firstName[0] || ""}${lastName[0] || ""}`.toUpperCase()
   }
@@ -382,14 +352,12 @@ export function PersonnelContent({ initialWorkers, projectId }: { initialWorkers
   }
 
   const handleDeleteWorker = (worker: Worker) => {
-    if (!confirm(`¿Estas seguro de eliminar a ${worker.first_name} ${worker.last_name}?`)) {
-      return
-    }
-
-    startTransition(async () => {
-      await deleteWorker(worker.id)
-      setWorkers((prev) => prev.filter((w) => w.id !== worker.id))
-      router.refresh()
+    confirmToast(`¿Eliminar a ${worker.first_name} ${worker.last_name}?`, () => {
+      startTransition(async () => {
+        await deleteWorker(worker.id)
+        setWorkers((prev) => prev.filter((w) => w.id !== worker.id))
+        router.refresh()
+      })
     })
   }
 
@@ -406,8 +374,10 @@ export function PersonnelContent({ initialWorkers, projectId }: { initialWorkers
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Personal</h1>
-          <p className="text-muted-foreground">Gestiona el personal y su documentacion</p>
+          <h1 className="font-display text-[27px] font-bold tracking-[-0.02em]">Personal</h1>
+          <p className="text-sm text-muted-foreground">
+            {stats.total} trabajadores en obra · {stats.completos} con documentación al día
+          </p>
         </div>
         <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
           <DialogTrigger asChild>
@@ -798,78 +768,73 @@ export function PersonnelContent({ initialWorkers, projectId }: { initialWorkers
             const totalDocs = Number(person.valid_docs) + Number(person.expiring_docs) + Number(person.expired_docs)
             const docStatus = getDocStatus(person)
 
+            const statusMeta =
+              docStatus === "completo"
+                ? { c: "var(--success)", t: "var(--success-tint)", l: "Al día" }
+                : docStatus === "incompleto"
+                  ? { c: "var(--warning)", t: "var(--warning-tint)", l: "Requiere atención" }
+                  : docStatus === "critico"
+                    ? { c: "var(--danger)", t: "var(--danger-tint)", l: "Documentación crítica" }
+                    : { c: "var(--muted-foreground)", t: "var(--secondary)", l: "Sin documentos" }
+
             return (
-              <Card key={person.id}>
-                <CardContent className="p-6">
-                  <div className="mb-4 flex items-start justify-between">
-                    <div className="flex items-center gap-3">
-                      <Avatar className="h-12 w-12">
-                        <AvatarFallback className="bg-primary text-primary-foreground">
-                          {getInitials(person.first_name, person.last_name)}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div>
-                        <p className="font-semibold">
-                          {person.first_name} {person.last_name}
-                        </p>
-                        <p className="text-sm text-muted-foreground">{person.role || "Sin cargo"}</p>
-                      </div>
+              <div key={person.id} className="rounded-2xl border border-border bg-card p-[18px]">
+                <div className="mb-4 flex items-start gap-3">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary text-[15px] font-semibold text-brand">
+                    {getInitials(person.first_name, person.last_name)}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-display text-[15px] font-semibold">
+                      {person.first_name} {person.last_name}
                     </div>
-                    <div className="flex gap-1">
-                      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleOpenEdit(person)}>
-                        <Edit2 className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-destructive hover:text-destructive"
-                        onClick={() => handleDeleteWorker(person)}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                    <div className="truncate text-[13px] text-muted-foreground">
+                      {person.role || "Sin cargo"}
                     </div>
                   </div>
-
-                  <div className="mb-4 space-y-1">
-                    <p className="text-sm text-muted-foreground">RUT: {person.rut}</p>
-                    {person.company && <p className="text-sm text-muted-foreground">Empresa: {person.company}</p>}
-                    {person.email && <p className="text-sm text-muted-foreground">Email: {person.email}</p>}
-                    {person.phone && <p className="text-sm text-muted-foreground">Tel: {person.phone}</p>}
+                  <div className="flex shrink-0 gap-0.5">
+                    <button
+                      onClick={() => handleOpenEdit(person)}
+                      className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary"
+                      aria-label="Editar"
+                    >
+                      <Edit2 className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      onClick={() => handleDeleteWorker(person)}
+                      className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-[var(--danger)]"
+                      aria-label="Eliminar"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
                   </div>
+                </div>
 
-                  <div className="mb-4">
-                    <div className="mb-2 flex items-center justify-between text-sm">
-                      <span className="text-muted-foreground">Documentacion</span>
-                      <span className="font-medium">
-                        {person.valid_docs}/{totalDocs}
-                      </span>
-                    </div>
-                    <Progress value={getDocProgress(person)} className="h-2" />
-                  </div>
+                <div className="mb-3.5 font-mono text-xs text-muted-foreground">RUT {person.rut}</div>
 
-                  <div className="mb-4 flex flex-wrap gap-2 text-xs">
-                    <div className="flex items-center gap-1">
-                      <div className="h-2 w-2 rounded-full bg-success" />
-                      <span>{person.valid_docs} vigentes</span>
-                    </div>
-                    {Number(person.expiring_docs) > 0 && (
-                      <div className="flex items-center gap-1">
-                        <div className="h-2 w-2 rounded-full bg-warning" />
-                        <span>{person.expiring_docs} por vencer</span>
-                      </div>
-                    )}
-                    {Number(person.expired_docs) > 0 && (
-                      <div className="flex items-center gap-1">
-                        <div className="h-2 w-2 rounded-full bg-destructive" />
-                        <span>{person.expired_docs} vencidos</span>
-                      </div>
-                    )}
-                  </div>
+                <div className="mb-1.5 flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground">Documentación</span>
+                  <span className="text-xs font-semibold">
+                    {person.valid_docs}/{totalDocs}
+                  </span>
+                </div>
+                <div className="mb-3.5 h-1.5 overflow-hidden rounded-md bg-secondary">
+                  <div
+                    className="h-full rounded-md transition-all"
+                    style={{ width: `${getDocProgress(person)}%`, background: statusMeta.c }}
+                  />
+                </div>
 
-                  <div className="flex items-center justify-between">
-                    {getStatusBadge(docStatus)}
-                    <div className="flex gap-2">
-                      <Button variant="outline" size="sm" onClick={() => {
+                <div className="flex items-center justify-between gap-2">
+                  <span
+                    className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold"
+                    style={{ color: statusMeta.c, background: statusMeta.t }}
+                  >
+                    <span className="h-1.5 w-1.5 rounded-full" style={{ background: statusMeta.c }} />
+                    {statusMeta.l}
+                  </span>
+                  <div className="flex gap-1.5">
+                    <button
+                      onClick={() => {
                         setActiveWorkerId(person.id)
                         setIsAdmonitionOpen(true)
                         setAdmonitionTab("create")
@@ -880,17 +845,18 @@ export function PersonnelContent({ initialWorkers, projectId }: { initialWorkers
                             setAdmonitionForm((f) => ({ ...f, worker_id: String(person.id) }))
                           } catch {}
                         })
-                      }}>
-                        Registrar Amonestación
-                      </Button>
-                      <Button variant="outline" size="sm">
-                      <FileText className="mr-2 h-4 w-4" />
-                      Ver Docs
-                      </Button>
-                    </div>
+                      }}
+                      className="h-8 rounded-lg border border-border px-2.5 text-xs font-semibold transition-colors hover:bg-secondary"
+                    >
+                      Amonestación
+                    </button>
+                    <button className="flex h-8 items-center gap-1.5 rounded-lg border border-border px-2.5 text-xs font-semibold transition-colors hover:bg-secondary">
+                      <FileText className="h-3.5 w-3.5" />
+                      Docs
+                    </button>
                   </div>
-                </CardContent>
-              </Card>
+                </div>
+              </div>
             )
           })
         )}
@@ -1282,14 +1248,14 @@ export function PersonnelContent({ initialWorkers, projectId }: { initialWorkers
                                 variant="destructive"
                                 size="sm"
                                 onClick={() => {
-                                  startTransition(async () => {
-                                    try {
-                                      const ok = window.confirm(`Eliminar amonestación #${a.id}?`)
-                                      if (!ok) return
-                                      await deleteAdmonition(a.id)
-                                      setAdmonitions((prev) => prev.filter((row) => row.id !== a.id))
-                                      toast.success("Amonestación eliminada")
-                                    } catch {}
+                                  confirmToast(`¿Eliminar amonestación #${a.id}?`, () => {
+                                    startTransition(async () => {
+                                      try {
+                                        await deleteAdmonition(a.id)
+                                        setAdmonitions((prev) => prev.filter((row) => row.id !== a.id))
+                                        toast.success("Amonestación eliminada")
+                                      } catch {}
+                                    })
                                   })
                                 }}
                               >

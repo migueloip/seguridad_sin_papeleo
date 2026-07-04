@@ -20,12 +20,18 @@ try {
   dbUrl = u.toString()
 } catch { }
 
+// El pooler de Supabase (puerto 6543, modo transacción/pgbouncer) NO soporta
+// prepared statements: sin `prepare:false` aparecen errores intermitentes
+// "prepared statement ... does not exist" (26000) al rotar de backend.
+const isTransactionPooler = dbUrl.includes(".pooler.supabase.com") || dbUrl.includes(":6543")
+
 // Create postgres connection with connection pooling
 const sql = postgres(dbUrl, {
   max: 10,
   idle_timeout: 20,
   connect_timeout: 10,
   ssl: dbUrl.includes("supabase") ? "require" : undefined,
+  prepare: isTransactionPooler ? false : undefined,
 })
 
 export { sql }

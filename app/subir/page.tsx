@@ -3,6 +3,8 @@ import { UploadContent } from "@/components/upload-content"
 import { getSession } from "@/lib/auth"
 import { redirect } from "next/navigation"
 
+export const metadata = { title: "Subir documentos" }
+
 export default async function UploadPage() {
   const session = await getSession()
   if (!session) redirect("/auth/login")

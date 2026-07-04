@@ -42,3 +42,6 @@ next-env.d.ts
 
 # external third-party components (local-only deps)
 /external_component/architect3d-master/node_modules
+
+# Configuración local de Claude Code
+.claude/

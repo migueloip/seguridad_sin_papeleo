@@ -5,6 +5,8 @@ import { getProjectById } from "@/app/actions/projects"
 import { notFound, redirect } from "next/navigation"
 import { parseIntId } from "@/lib/route"
 
+export const metadata = { title: "Planos y riesgos" }
+
 export default async function ProjectPlanosPage({ params }: { params: Promise<{ id: string }> }) {
   const p = await params
   const parsed = parseIntId(p.id)

@@ -54,6 +54,16 @@ export interface DashboardStats {
     medium: number
     low: number
   }>
+  recentFindings: Array<{
+    id: number
+    title: string
+    location: string | null
+    responsible_person: string | null
+    severity: string
+    status: string
+    created_at: string
+  }>
+  daysWithoutAccidents: number | null
 }
 
 export async function getDashboardStats(): Promise<DashboardStats> {
@@ -68,6 +78,8 @@ export async function getDashboardStats(): Promise<DashboardStats> {
       upcomingExpirations: [],
       findingsWeekly: [],
       riskByLocation: [],
+      recentFindings: [],
+      daysWithoutAccidents: null,
     }
   }
 
@@ -80,6 +92,8 @@ export async function getDashboardStats(): Promise<DashboardStats> {
     upcomingExpirations,
     findingsWeekly,
     riskByLocation,
+    recentFindings,
+    accidentRow,
   ] = await Promise.all([
     // Project stats
     sql<{ total: number; active: number }[]>`
@@ -174,6 +188,20 @@ export async function getDashboardStats(): Promise<DashboardStats> {
       ORDER BY score DESC
       LIMIT 5
     `,
+    // Recent findings (latest 5)
+    sql<{ id: number; title: string; location: string | null; responsible_person: string | null; severity: string; status: string; created_at: string }[]>`
+      SELECT id, title, location, responsible_person, severity, status, created_at::text
+      FROM findings
+      WHERE user_id = ${userId}
+      ORDER BY created_at DESC
+      LIMIT 5
+    `,
+    // Días sin accidentes: días desde el último hallazgo crítico
+    sql<{ days: number | null }[]>`
+      SELECT (CURRENT_DATE - MAX(created_at)::date)::int as days
+      FROM findings
+      WHERE user_id = ${userId} AND severity = 'critical'
+    `,
   ])
 
   return {
@@ -200,5 +228,15 @@ export async function getDashboardStats(): Promise<DashboardStats> {
       medium: Number(r.medium),
       low: Number(r.low),
     })),
+    recentFindings: recentFindings.map((f) => ({
+      id: Number(f.id),
+      title: f.title,
+      location: f.location,
+      responsible_person: f.responsible_person,
+      severity: f.severity,
+      status: f.status,
+      created_at: f.created_at,
+    })),
+    daysWithoutAccidents: accidentRow[0]?.days != null ? Number(accidentRow[0].days) : null,
   }
 }

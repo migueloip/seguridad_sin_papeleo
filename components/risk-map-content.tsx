@@ -103,8 +103,8 @@ export function RiskMapContent({ findings }: RiskMapContentProps) {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Mapa de riesgos</h1>
-          <p className="text-muted-foreground">
+          <h1 className="font-display text-[27px] font-bold tracking-[-0.02em]">Mapa de riesgos</h1>
+          <p className="text-sm text-muted-foreground">
             Visualiza los hallazgos abiertos como pins sobre el plano
           </p>
         </div>

@@ -1,5 +1,4 @@
 "use server"
-
 import { sql } from "@/lib/db"
 import type { Admonition, AdmonitionAttachment } from "@/lib/db"
 import { getCurrentUserId } from "@/lib/auth"
@@ -82,9 +81,7 @@ async function ensureAdmonitionsSchema() {
 
 async function getProjectIdForWorker(workerId: number): Promise<number | null> {
   try {
-    const rows = await sql<{ project_id: number | null }>`
-      SELECT project_id FROM workers WHERE id = ${workerId} LIMIT 1
-    `
+    const rows = await sql`SELECT project_id FROM workers WHERE id = ${workerId} LIMIT 1` as { project_id: number | null }[]
     return rows[0]?.project_id ?? null
   } catch {
     return null
@@ -93,13 +90,7 @@ async function getProjectIdForWorker(workerId: number): Promise<number | null> {
 
 async function getProjectIdForAdmonition(id: number, userId: number): Promise<number | null> {
   try {
-    const rows = await sql<{ project_id: number | null }>`
-      SELECT w.project_id
-      FROM admonitions a
-      JOIN workers w ON a.worker_id = w.id
-      WHERE a.id = ${id} AND a.user_id = ${userId}
-      LIMIT 1
-    `
+    const rows = await sql`SELECT w.project_id FROM admonitions a JOIN workers w ON a.worker_id = w.id WHERE a.id = ${id} AND a.user_id = ${userId} LIMIT 1` as { project_id: number | null }[]
     return rows[0]?.project_id ?? null
   } catch {
     return null
@@ -158,9 +149,8 @@ export async function getAdmonitions(filters?: {
   const approvalParam =
     filters?.approval_status && filters.approval_status !== "todos" ? filters.approval_status : null
 
-  const rows = await sql<
-    Admonition & { first_name: string; last_name: string; company: string | null; role: string | null }
-  >`
+// @ts-expect-error - postgres v3 template literal type recursion issue
+const rows = await sql<[Admonition & { first_name: string; last_name: string; company: string | null; role: string | null }]>`
     SELECT a.*, w.first_name, w.last_name, w.company, w.role
     FROM admonitions a
     JOIN workers w ON a.worker_id = w.id
@@ -250,7 +240,7 @@ export async function createAdmonition(data: CreateAdmonitionInput): Promise<Adm
     INSERT INTO admonitions (user_id, worker_id, admonition_date, admonition_type, reason, supervisor_signature, attachments, status, approval_status, created_at, updated_at)
     VALUES (${userId}, ${data.worker_id}, ${new Date(data.admonition_date)}, ${data.admonition_type}, ${data.reason},
             ${data.supervisor_signature || null},
-            ${data.attachments ? JSON.stringify(data.attachments) : null}::jsonb,
+            ${data.attachments ?? null}::jsonb,
             'active', 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     RETURNING *
   `
@@ -284,7 +274,7 @@ export async function updateAdmonition(id: number, data: UpdateAdmonitionInput):
       admonition_type = COALESCE(${data.admonition_type || null}, admonition_type),
       reason = COALESCE(${data.reason || null}, reason),
       supervisor_signature = COALESCE(${data.supervisor_signature || null}, supervisor_signature),
-      attachments = COALESCE(${data.attachments ? JSON.stringify(data.attachments) : null}::jsonb, attachments),
+      attachments = COALESCE(${data.attachments ?? null}::jsonb, attachments),
       status = COALESCE(${status}, status),
       approval_status = COALESCE(${approval}, approval_status),
       approved_at = CASE WHEN ${approval} = 'approved' THEN CURRENT_TIMESTAMP ELSE approved_at END,

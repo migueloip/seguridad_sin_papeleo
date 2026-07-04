@@ -1,6 +1,8 @@
 "use client"
 
 import { useState, useTransition, useEffect } from "react"
+import { toast } from "sonner"
+import { confirmToast } from "@/lib/confirm"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -16,7 +18,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { AlertTriangle, Plus, Clock, CheckCircle, MapPin, User, Calendar, Edit2, Trash2 } from "lucide-react"
+import { AlertTriangle, Plus, Clock, CheckCircle, MapPin, User, Calendar, Edit2, Trash2, Camera, Sparkles } from "lucide-react"
 import {
   updateFinding,
   createFinding,
@@ -29,6 +31,19 @@ import {
 import { getPlanZonesByProject } from "@/app/actions/plans"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts"
 import { useRouter } from "next/navigation"
+
+const SEV: Record<string, { label: string; color: string; tint: string }> = {
+  critical: { label: "Crítico", color: "var(--sev-critical)", tint: "var(--sev-critical-tint)" },
+  high: { label: "Alto", color: "var(--sev-high)", tint: "var(--sev-high-tint)" },
+  medium: { label: "Medio", color: "var(--sev-medium)", tint: "var(--sev-medium-tint)" },
+  low: { label: "Bajo", color: "var(--sev-low)", tint: "var(--sev-low-tint)" },
+}
+const ST: Record<string, { label: string; color: string; tint: string }> = {
+  open: { label: "Abierto", color: "var(--danger)", tint: "var(--danger-tint)" },
+  in_progress: { label: "En proceso", color: "var(--warning)", tint: "var(--warning-tint)" },
+  resolved: { label: "Resuelto", color: "var(--success)", tint: "var(--success-tint)" },
+  closed: { label: "Cerrado", color: "var(--success)", tint: "var(--success-tint)" },
+}
 
 interface Finding {
   id: number
@@ -358,7 +373,7 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
 
   const handleCreateFinding = () => {
     if (!newFinding.title) {
-      alert("El titulo es requerido")
+      toast.error("El titulo es requerido")
       return
     }
 
@@ -401,27 +416,32 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="space-y-[18px]">
+      <div className="flex flex-wrap items-end justify-between gap-3.5">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Hallazgos</h1>
-          <p className="text-muted-foreground">Gestiona los hallazgos de seguridad reportados</p>
+          <h1 className="font-display text-[27px] font-bold tracking-[-0.02em]">Hallazgos</h1>
+          <p className="text-sm text-muted-foreground">
+            Reporte y seguimiento de condiciones de riesgo
+          </p>
         </div>
         <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
           <DialogTrigger asChild>
-            <Button>
-              <Plus className="mr-2 h-4 w-4" />
-              Insertar Hallazgo
-            </Button>
+            <button
+              type="button"
+              className="flex h-[42px] items-center gap-2 rounded-[11px] bg-primary px-[17px] text-sm font-semibold text-white transition-colors hover:bg-[#241f17]"
+            >
+              <Plus className="h-[17px] w-[17px] text-brand" />
+              Reportar hallazgo
+            </button>
           </DialogTrigger>
           <DialogContent className="sm:max-w-[500px] max-h-[85vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>Insertar Hallazgo</DialogTitle>
-              <DialogDescription>Ingresa los datos completos del nuevo hallazgo</DialogDescription>
+              <DialogTitle>Reportar hallazgo</DialogTitle>
+              <DialogDescription>Ingresa los datos del nuevo hallazgo</DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
               <div>
-                <Label htmlFor="title">Titulo *</Label>
+                <Label htmlFor="title">Título *</Label>
                 <Input
                   id="title"
                   value={newFinding.title}
@@ -430,7 +450,7 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
                 />
               </div>
               <div>
-                <Label htmlFor="description">Descripcion</Label>
+                <Label htmlFor="description">Descripción</Label>
                 <Textarea
                   id="description"
                   value={newFinding.description}
@@ -460,7 +480,7 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
                   </Select>
                 </div>
                 <div>
-                  <Label htmlFor="due_date">Fecha Limite</Label>
+                  <Label htmlFor="due_date">Fecha límite</Label>
                   <Input
                     id="due_date"
                     type="date"
@@ -489,6 +509,7 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
                 />
                     {imageDataUrl && (
                       <div className="flex items-center gap-2">
+                        {/* eslint-disable-next-line @next/next/no-img-element -- data URL en cliente */}
                         <img src={imageDataUrl} alt="hallazgo" className="h-16 w-16 rounded object-cover" />
                         <Button
                           type="button"
@@ -512,7 +533,7 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
                         } catch (e) {
                           const msg =
                             e instanceof Error ? e.message : "No se pudo escanear con IA. Intenta con otra imagen."
-                          alert(msg)
+                          toast.error(msg)
                         } finally {
                           setIsScanning(false)
                         }
@@ -553,7 +574,7 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
                 </div>
               )}
               <div>
-                <Label htmlFor="location">Ubicacion</Label>
+                <Label htmlFor="location">Ubicación</Label>
                 <Input
                   id="location"
                   value={newFinding.location}
@@ -583,51 +604,64 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
         </Dialog>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-4">
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-muted-foreground">Total</p>
-                <p className="text-2xl font-bold">{stats.total}</p>
-              </div>
-              <AlertTriangle className="h-8 w-8 text-muted-foreground" />
+      {/* Banner de captura por IA */}
+      <div className="relative flex flex-wrap items-center gap-4 overflow-hidden rounded-2xl bg-primary p-[18px] px-5 text-sidebar-foreground">
+        <div
+          className="absolute inset-0"
+          style={{
+            backgroundImage:
+              "repeating-linear-gradient(135deg,rgba(243,164,10,.07) 0 18px,transparent 18px 36px)",
+          }}
+        />
+        <div className="relative flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-xl bg-brand">
+          <Sparkles className="h-6 w-6 text-primary" />
+        </div>
+        <div className="relative min-w-[200px] flex-1">
+          <div className="font-display text-base font-semibold">Detección por foto con IA</div>
+          <div className="text-[13px] text-sidebar-foreground/60">
+            Toma una foto desde terreno y la IA identifica el riesgo, sugiere categoría, severidad y
+            acciones correctivas.
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setIsCreateOpen(true)}
+          className="relative flex h-10 shrink-0 items-center gap-2 rounded-[11px] border border-brand/40 bg-brand/10 px-4 text-[13px] font-semibold text-brand transition-colors hover:bg-brand/20"
+        >
+          <Camera className="h-4 w-4" />
+          Escanear ahora
+        </button>
+      </div>
+
+      {/* Filtros con conteo */}
+      <div className="flex flex-wrap gap-2.5">
+        {(
+          [
+            { key: "todos", label: "Todos", value: stats.total, color: undefined },
+            { key: "open", label: "Abiertos", value: stats.abiertos, color: "var(--danger)" },
+            { key: "in_progress", label: "En proceso", value: stats.enProceso, color: "var(--warning)" },
+            { key: "resolved", label: "Resueltos", value: stats.cerrados, color: "var(--success)" },
+          ] as const
+        ).map((s) => (
+          <button
+            key={s.key}
+            type="button"
+            onClick={() => setFilter(s.key)}
+            className={`min-w-[150px] flex-1 rounded-[13px] border p-4 text-left transition-colors ${
+              filter === s.key
+                ? "border-foreground/30 bg-secondary"
+                : "border-border bg-card hover:border-foreground/15"
+            }`}
+          >
+            <div
+              className="font-display text-2xl font-bold"
+              style={s.color ? { color: s.color } : undefined}
+            >
+              {s.value}
             </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-muted-foreground">Abiertos</p>
-                <p className="text-2xl font-bold text-destructive">{stats.abiertos}</p>
-              </div>
-              <AlertTriangle className="h-8 w-8 text-destructive" />
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-muted-foreground">En Proceso</p>
-                <p className="text-2xl font-bold text-warning">{stats.enProceso}</p>
-              </div>
-              <Clock className="h-8 w-8 text-warning" />
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-muted-foreground">Completados</p>
-                <p className="text-2xl font-bold text-success">{stats.cerrados}</p>
-              </div>
-              <CheckCircle className="h-8 w-8 text-success" />
-            </div>
-          </CardContent>
-        </Card>
+            <div className="text-[13px] text-muted-foreground">{s.label}</div>
+          </button>
+        ))}
       </div>
 
       <Card>
@@ -829,7 +863,7 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
       </div>
 
       {/* Findings List */}
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className="flex flex-col gap-3">
         {filteredFindings.length === 0 ? (
           <Card className="col-span-full">
             <CardContent className="p-8 text-center text-muted-foreground">No se encontraron hallazgos</CardContent>
@@ -839,56 +873,80 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
             const daysOpen = getDaysOpen(finding.created_at, finding.status)
             const isOpen = finding.status === "open" || finding.status === "in_progress"
 
+            const sevMeta = SEV[finding.severity] || SEV.medium
+            const stMeta = ST[finding.status] || ST.open
+            const hasPhoto = Array.isArray(finding.photos) && finding.photos.length > 0
             return (
-              <Card key={finding.id}>
-                <CardHeader className="pb-3">
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-muted-foreground">#{finding.id}</span>
-                      {getPriorityBadge(finding.severity)}
-                    </div>
-                    {getStatusBadge(finding.status)}
-                  </div>
-                  <CardTitle className="text-lg">{finding.title}</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {finding.description && <p className="mb-4 text-sm text-muted-foreground">{finding.description}</p>}
-
-                  <div className="mb-4 space-y-2 text-sm">
-                    {finding.location && (
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <MapPin className="h-4 w-4" />
-                    {finding.location}
-                  </div>
+              <div key={finding.id} className="flex gap-4 rounded-2xl border border-border bg-card p-[18px]">
+                {hasPhoto && (
+                  <a
+                    href={finding.photos![0]}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="hidden h-[88px] w-[88px] shrink-0 overflow-hidden rounded-xl bg-[#262017] sm:block"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element -- URL externa de Supabase Storage */}
+                    <img src={finding.photos![0]} alt="" className="h-full w-full object-cover" />
+                  </a>
                 )}
-                {finding.plan_zone_name && (
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <MapPin className="h-4 w-4" />
-                    {finding.plan_zone_name}
-                    {finding.plan_floor_name ? ` · ${finding.plan_floor_name}` : ""}
-                  </div>
-                )}
-                    {finding.responsible_person && (
-                      <div className="flex items-center gap-2 text-muted-foreground">
-                        <User className="h-4 w-4" />
-                        {finding.responsible_person}
-                      </div>
+                <div className="min-w-0 flex-1">
+                  <div className="mb-2 flex flex-wrap items-center gap-2.5">
+                    <span className="font-mono text-xs text-muted-foreground">#{finding.id}</span>
+                    <span
+                      className="rounded-md px-2.5 py-1 text-[11px] font-semibold"
+                      style={{ color: sevMeta.color, background: sevMeta.tint }}
+                    >
+                      {sevMeta.label}
+                    </span>
+                    <span
+                      className="rounded-md px-2.5 py-1 text-[11px] font-semibold"
+                      style={{ color: stMeta.color, background: stMeta.tint }}
+                    >
+                      {stMeta.label}
+                    </span>
+                    {isOpen && daysOpen > 0 && (
+                      <span className="text-[11px] font-medium text-[var(--danger)]">
+                        · Abierto hace {daysOpen} días
+                      </span>
                     )}
-                    <div className="flex items-center gap-2 text-muted-foreground">
-                      <Calendar className="h-4 w-4" />
+                  </div>
+                  <div className="mb-1.5 font-display text-base font-semibold tracking-[-0.01em]">
+                    {finding.title}
+                  </div>
+                  {finding.description && (
+                    <p className="mb-3 text-[13px] leading-relaxed text-[#6f6a60]">{finding.description}</p>
+                  )}
+                  <div className="mb-3.5 flex flex-wrap gap-4 text-xs text-muted-foreground">
+                    {finding.location && (
+                      <span className="flex items-center gap-1.5">
+                        <MapPin className="h-3.5 w-3.5" />
+                        {finding.location}
+                      </span>
+                    )}
+                    {finding.plan_zone_name && (
+                      <span className="flex items-center gap-1.5">
+                        <MapPin className="h-3.5 w-3.5" />
+                        {finding.plan_zone_name}
+                        {finding.plan_floor_name ? ` · ${finding.plan_floor_name}` : ""}
+                      </span>
+                    )}
+                    {finding.responsible_person && (
+                      <span className="flex items-center gap-1.5">
+                        <User className="h-3.5 w-3.5" />
+                        {finding.responsible_person}
+                      </span>
+                    )}
+                    <span className="flex items-center gap-1.5">
+                      <Calendar className="h-3.5 w-3.5" />
                       {formatDate(finding.created_at)}
-                    </div>
+                    </span>
                   </div>
 
-                  {isOpen && daysOpen > 0 && (
-                    <p className="mb-4 text-sm text-destructive">Abierto hace {daysOpen} dias</p>
-                  )}
-
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <Dialog>
                       <DialogTrigger asChild>
-                        <Button variant="outline" className="flex-1 bg-transparent">
-                          Ver Detalles
+                        <Button variant="outline" className="flex-1">
+                          Ver ficha
                         </Button>
                       </DialogTrigger>
                       <DialogContent className="max-h-[85vh] overflow-y-auto">
@@ -898,12 +956,12 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
                         </DialogHeader>
                         <div className="space-y-4 py-4">
                           <div>
-                            <p className="mb-1 text-sm font-medium">Descripcion</p>
+                            <p className="mb-1 text-sm font-medium">Descripción</p>
                             <p className="text-sm text-muted-foreground">{finding.description || "Sin descripcion"}</p>
                           </div>
                         <div className="grid grid-cols-2 gap-4">
                           <div>
-                            <p className="mb-1 text-sm font-medium">Ubicacion</p>
+                            <p className="mb-1 text-sm font-medium">Ubicación</p>
                             <p className="text-sm text-muted-foreground">{finding.location || "-"}</p>
                           </div>
                           <div>
@@ -925,6 +983,7 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
                             <div className="grid grid-cols-3 gap-2">
                               {finding.photos.map((url, idx) => (
                                 <a key={idx} href={url} target="_blank" rel="noreferrer">
+                                  {/* eslint-disable-next-line @next/next/no-img-element -- URL externa de Supabase Storage, evita configurar remotePatterns */}
                                   <img
                                     src={url}
                                     alt={`Foto ${idx + 1}`}
@@ -1031,11 +1090,12 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
                       variant="outline"
                       className="flex-1 bg-transparent text-destructive hover:text-destructive"
                       onClick={() => {
-                        if (!confirm("¿Eliminar hallazgo? Esta accion no se puede deshacer.")) return
-                        startTransition(async () => {
-                          await deleteFinding(finding.id)
-                          setFindings((prev) => prev.filter((f) => f.id !== finding.id))
-                          router.refresh()
+                        confirmToast("¿Eliminar hallazgo? Esta acción no se puede deshacer.", () => {
+                          startTransition(async () => {
+                            await deleteFinding(finding.id)
+                            setFindings((prev) => prev.filter((f) => f.id !== finding.id))
+                            router.refresh()
+                          })
                         })
                       }}
                     >
@@ -1063,8 +1123,8 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
                       </Button>
                     )}
                   </div>
-                </CardContent>
-              </Card>
+                </div>
+              </div>
             )
           })
         )}
@@ -1078,7 +1138,7 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
           </DialogHeader>
           <div className="grid gap-4 py-4">
             <div>
-              <Label htmlFor="edit_title">Titulo</Label>
+              <Label htmlFor="edit_title">Título</Label>
               <Input
                 id="edit_title"
                 value={editForm.title}
@@ -1086,7 +1146,7 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
               />
             </div>
             <div>
-              <Label htmlFor="edit_description">Descripcion</Label>
+              <Label htmlFor="edit_description">Descripción</Label>
               <Textarea
                 id="edit_description"
                 value={editForm.description}
@@ -1115,7 +1175,7 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
                 </Select>
               </div>
               <div>
-                <Label htmlFor="edit_due">Fecha Limite</Label>
+                <Label htmlFor="edit_due">Fecha límite</Label>
                 <Input
                   id="edit_due"
                   type="date"
@@ -1125,7 +1185,7 @@ export function FindingsContent({ initialFindings, projectId }: { initialFinding
               </div>
             </div>
             <div>
-              <Label htmlFor="edit_location">Ubicacion</Label>
+              <Label htmlFor="edit_location">Ubicación</Label>
               <Input
                 id="edit_location"
                 value={editForm.location}

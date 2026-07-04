@@ -2,12 +2,13 @@ import { DashboardContent } from "@/components/dashboard-content"
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { getSession } from "@/lib/auth"
 import { getDashboardStats } from "@/app/actions/dashboard"
-import { logout } from "@/app/actions/auth"
 import { redirect } from "next/navigation"
-import { Button } from "@/components/ui/button"
 import { AnimatedPage } from "@/components/animated-page"
 
-export const dynamic = "force-dynamic"
+// Next.js detecta automáticamente que la página es dinámica al usar cookies()
+// vía getSession(); el `force-dynamic` explícito es redundante.
+
+export const metadata = { title: "Principal · Easysecure" }
 
 export default async function Home() {
   const session = await getSession()
@@ -22,9 +23,11 @@ export default async function Home() {
     role: session.role
   }
 
+  const openFindings = stats.findings.open + stats.findings.in_progress
+
   return (
     <AnimatedPage duration={400}>
-      <DashboardLayout user={layoutUser}>
+      <DashboardLayout user={layoutUser} openFindings={openFindings}>
         <DashboardContent
           stats={stats}
           userName={session.name || session.email.split("@")[0]}

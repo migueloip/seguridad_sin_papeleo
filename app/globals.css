@@ -3,89 +3,119 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* New theme for SSL platform - professional blue/teal color scheme */
+/* ============================================================
+   Easysecure design system — cream + dark olive + amber.
+   Light is the default theme (the app is light-only); the dark
+   surface lives in the sidebar tokens. Values are the exact hex
+   from the Easysecure design (design-reference/desktop.markup.html).
+   ============================================================ */
 :root {
-  --background: oklch(0.98 0.005 240);
-  --foreground: oklch(0.15 0.02 240);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.15 0.02 240);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.15 0.02 240);
-  --primary: oklch(0.45 0.15 240);
-  --primary-foreground: oklch(0.98 0 0);
-  --secondary: oklch(0.95 0.02 240);
-  --secondary-foreground: oklch(0.25 0.02 240);
-  --muted: oklch(0.95 0.01 240);
-  --muted-foreground: oklch(0.45 0.02 240);
-  --accent: oklch(0.55 0.18 175);
-  --accent-foreground: oklch(0.98 0 0);
-  --destructive: oklch(0.55 0.22 25);
-  --destructive-foreground: oklch(0.98 0 0);
-  --border: oklch(0.9 0.01 240);
-  --input: oklch(0.9 0.01 240);
-  --ring: oklch(0.45 0.15 240);
-  --chart-1: oklch(0.55 0.18 175);
-  --chart-2: oklch(0.45 0.15 240);
-  --chart-3: oklch(0.65 0.15 140);
-  --chart-4: oklch(0.7 0.18 80);
-  --chart-5: oklch(0.55 0.22 25);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.18 0.03 240);
-  --sidebar-foreground: oklch(0.95 0 0);
-  --sidebar-primary: oklch(0.55 0.18 175);
-  --sidebar-primary-foreground: oklch(0.98 0 0);
-  --sidebar-accent: oklch(0.25 0.03 240);
-  --sidebar-accent-foreground: oklch(0.95 0 0);
-  --sidebar-border: oklch(0.28 0.03 240);
-  --sidebar-ring: oklch(0.55 0.18 175);
-  --success: oklch(0.65 0.18 145);
-  --success-foreground: oklch(0.98 0 0);
-  --warning: oklch(0.75 0.18 80);
-  --warning-foreground: oklch(0.2 0.02 80);
+  --background: #f6f4ee; /* crema */
+  --foreground: #26221c; /* texto principal */
+  --card: #ffffff;
+  --card-foreground: #26221c;
+  --popover: #ffffff;
+  --popover-foreground: #26221c;
+
+  --primary: #16130e; /* oscuro (CTA principal) */
+  --primary-foreground: #f3a40a; /* texto ámbar sobre oscuro */
+
+  --secondary: #f0ece3; /* superficie alterna */
+  --secondary-foreground: #26221c;
+  --muted: #f0ece3;
+  --muted-foreground: #8a8378;
+
+  --accent: #f0ece3; /* hover/superficie neutra (menús, ghost) */
+  --accent-foreground: #26221c;
+
+  --destructive: #d8443a;
+  --destructive-foreground: #ffffff;
+
+  --border: #e7e2d7;
+  --input: #e7e2d7;
+  --ring: #f3a40a; /* foco ámbar */
+
+  --radius: 0.75rem;
+
+  /* Marca / semánticos Easysecure */
+  --brand: #f3a40a; /* ámbar */
+  --brand-foreground: #16130e;
+  --success: #1f9d68;
+  --success-foreground: #ffffff;
+  --success-tint: #e6f4ec;
+  --warning: #e8960b;
+  --warning-foreground: #16130e;
+  --warning-tint: #fbf0d9;
+  --danger: #d8443a;
+  --danger-foreground: #ffffff;
+  --danger-tint: #fbe9e7;
+
+  /* Severidad de hallazgos */
+  --sev-critical: #d8443a;
+  --sev-critical-tint: #fbe9e7;
+  --sev-high: #e8960b;
+  --sev-high-tint: #fbf0d9;
+  --sev-medium: #b8841a;
+  --sev-medium-tint: #f7efdc;
+  --sev-low: #6f6a60;
+  --sev-low-tint: #f0ece3;
+
+  /* Charts */
+  --chart-1: #f3a40a; /* ámbar */
+  --chart-2: #16130e; /* oscuro */
+  --chart-3: #1f9d68; /* verde */
+  --chart-4: #e8960b; /* alto */
+  --chart-5: #d8443a; /* crítico */
+
+  /* Sidebar oscuro */
+  --sidebar: #16130e;
+  --sidebar-foreground: #f6f4ee;
+  --sidebar-primary: #f3a40a;
+  --sidebar-primary-foreground: #16130e;
+  --sidebar-accent: rgba(247, 245, 240, 0.07);
+  --sidebar-accent-foreground: #f6f4ee;
+  --sidebar-border: rgba(247, 245, 240, 0.08);
+  --sidebar-ring: #f3a40a;
 }
 
+/* Variante oscura: la app es light-only, pero mantenemos un dark
+   coherente con la marca por si algo activa la clase .dark. */
 .dark {
-  --background: oklch(0.12 0.02 240);
-  --foreground: oklch(0.95 0 0);
-  --card: oklch(0.18 0.02 240);
-  --card-foreground: oklch(0.95 0 0);
-  --popover: oklch(0.18 0.02 240);
-  --popover-foreground: oklch(0.95 0 0);
-  --primary: oklch(0.55 0.18 175);
-  --primary-foreground: oklch(0.98 0 0);
-  --secondary: oklch(0.25 0.02 240);
-  --secondary-foreground: oklch(0.95 0 0);
-  --muted: oklch(0.25 0.02 240);
-  --muted-foreground: oklch(0.65 0.01 240);
-  --accent: oklch(0.55 0.18 175);
-  --accent-foreground: oklch(0.98 0 0);
-  --destructive: oklch(0.55 0.22 25);
-  --destructive-foreground: oklch(0.98 0 0);
-  --border: oklch(0.28 0.02 240);
-  --input: oklch(0.28 0.02 240);
-  --ring: oklch(0.55 0.18 175);
-  --chart-1: oklch(0.55 0.18 175);
-  --chart-2: oklch(0.55 0.15 240);
-  --chart-3: oklch(0.65 0.15 140);
-  --chart-4: oklch(0.7 0.18 80);
-  --chart-5: oklch(0.55 0.22 25);
-  --sidebar: oklch(0.12 0.02 240);
-  --sidebar-foreground: oklch(0.95 0 0);
-  --sidebar-primary: oklch(0.55 0.18 175);
-  --sidebar-primary-foreground: oklch(0.98 0 0);
-  --sidebar-accent: oklch(0.22 0.02 240);
-  --sidebar-accent-foreground: oklch(0.95 0 0);
-  --sidebar-border: oklch(0.28 0.02 240);
-  --sidebar-ring: oklch(0.55 0.18 175);
-  --success: oklch(0.65 0.18 145);
-  --success-foreground: oklch(0.98 0 0);
-  --warning: oklch(0.75 0.18 80);
-  --warning-foreground: oklch(0.2 0.02 80);
+  --background: #16130e;
+  --foreground: #f6f4ee;
+  --card: #211c14;
+  --card-foreground: #f6f4ee;
+  --popover: #211c14;
+  --popover-foreground: #f6f4ee;
+  --primary: #f3a40a;
+  --primary-foreground: #16130e;
+  --secondary: #2a2418;
+  --secondary-foreground: #f6f4ee;
+  --muted: #2a2418;
+  --muted-foreground: #a59f93;
+  --accent: #2a2418;
+  --accent-foreground: #f6f4ee;
+  --destructive: #d8443a;
+  --destructive-foreground: #ffffff;
+  --border: rgba(247, 245, 240, 0.12);
+  --input: rgba(247, 245, 240, 0.14);
+  --ring: #f3a40a;
+  --sidebar: #16130e;
+  --sidebar-foreground: #f6f4ee;
+  --sidebar-primary: #f3a40a;
+  --sidebar-primary-foreground: #16130e;
+  --sidebar-accent: rgba(247, 245, 240, 0.07);
+  --sidebar-accent-foreground: #f6f4ee;
+  --sidebar-border: rgba(247, 245, 240, 0.08);
+  --sidebar-ring: #f3a40a;
 }
 
 @theme inline {
-  --font-sans: "Geist", "Geist Fallback";
-  --font-mono: "Geist Mono", "Geist Mono Fallback";
+  /* Fuentes (las variables las inyecta next/font en app/layout.tsx) */
+  --font-sans: var(--font-ibm-plex-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-ibm-plex-mono), ui-monospace, monospace;
+  --font-display: var(--font-space-grotesk), var(--font-ibm-plex-sans), sans-serif;
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -105,6 +135,29 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+
+  /* Marca / semánticos */
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-success-tint: var(--success-tint);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-warning-tint: var(--warning-tint);
+  --color-danger: var(--danger);
+  --color-danger-foreground: var(--danger-foreground);
+  --color-danger-tint: var(--danger-tint);
+
+  --color-sev-critical: var(--sev-critical);
+  --color-sev-critical-tint: var(--sev-critical-tint);
+  --color-sev-high: var(--sev-high);
+  --color-sev-high-tint: var(--sev-high-tint);
+  --color-sev-medium: var(--sev-medium);
+  --color-sev-medium-tint: var(--sev-medium-tint);
+  --color-sev-low: var(--sev-low);
+  --color-sev-low-tint: var(--sev-low-tint);
+
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
@@ -118,10 +171,7 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
-  --color-success: var(--success);
-  --color-success-foreground: var(--success-foreground);
-  --color-warning: var(--warning);
-  --color-warning-foreground: var(--warning-foreground);
+
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -134,5 +184,19 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-family: var(--font-sans);
+  }
+  /* Display font para títulos de marca; usar la utilidad `font-display`
+     en componentes para encabezados Easysecure. */
+}
+
+/* Animación del escáner de planos con IA (Planos · Riesgos). */
+@keyframes ez-scanline {
+  0%,
+  100% {
+    top: 4%;
+  }
+  50% {
+    top: 92%;
   }
 }

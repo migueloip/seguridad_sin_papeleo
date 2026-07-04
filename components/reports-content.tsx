@@ -8,25 +8,91 @@ import { Textarea } from "@/components/ui/textarea"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { AlertTriangle, GripVertical, Trash2, History, Loader2, Sparkles, FileText, ArrowUp, ArrowDown } from "lucide-react"
+import {
+  AlertTriangle,
+  GripVertical,
+  Trash2,
+  History,
+  Loader2,
+  Sparkles,
+  FileText,
+  ArrowLeft,
+  Plus,
+  ChevronUp,
+  ChevronDown,
+  Download,
+  Save,
+  Image as ImageIcon,
+  Copy,
+  Undo2,
+  Redo2,
+  Minus,
+  Wand2,
+  Archive,
+  Check,
+} from "lucide-react"
 import type { DesignerElement, EditorState, MatrixRow, PageSize, Severity, Status } from "@/lib/pdf-editor"
 import { buildDesignerHtmlFromState, buildEditorHtmlFromState, validateEditorState } from "@/lib/pdf-editor"
-import { fillPdfDesignerWithAI, fillMatrixWithAI } from "@/app/actions/reports"
+import {
+  fillPdfDesignerWithAI,
+  fillMatrixWithAI,
+  getReportById,
+  rewriteTextWithAI,
+  saveDesignerReport,
+  type DesignerSnapshot,
+} from "@/app/actions/reports"
 import { getWorkers } from "@/app/actions/workers"
 import { createDocument, getDocumentTypes } from "@/app/actions/documents"
 import { toast } from "sonner"
 import { useRouter } from "next/navigation"
 
-import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels"
-import { AiReportChat } from "@/components/ai-report-chat"
-
 interface ReportsContentProps {
   initialReports?: unknown[]
   projectId?: number
+  reportId?: number
 }
 
 const todayIso = () => new Date().toISOString().slice(0, 10)
+
+// Plantilla estándar de informe de seguridad (estructura profesional consistente).
+const standardTemplate = (title: string): DesignerElement[] => {
+  const t = Date.now()
+  const sec = (id: string, sTitle: string, body: string): DesignerElement =>
+    ({
+      id: `${id}-${t}`,
+      type: "simple_section",
+      title: sTitle,
+      subtitle: null,
+      body,
+      bullets: [],
+      chips: [],
+      align: "left",
+    }) as DesignerElement
+  return [
+    { id: `h-${t}`, type: "heading", text: title || "Informe de Seguridad", level: 1, align: "center" } as DesignerElement,
+    {
+      id: `st-${t}`,
+      type: "plain_text",
+      text: `Prevención de riesgos · ${new Date().toLocaleDateString("es-CL", { day: "2-digit", month: "long", year: "numeric" })}`,
+      align: "center",
+    } as DesignerElement,
+    {
+      id: `fld-${t}`,
+      type: "table",
+      rows: [
+        ["Período", "—"],
+        ["Cumplimiento", "—"],
+        ["Hallazgos abiertos", "—"],
+        ["Elaboró", "—"],
+      ],
+    } as DesignerElement,
+    sec("s1", "1. Resumen ejecutivo", "Síntesis del estado de seguridad y prevención del proyecto durante el periodo."),
+    sec("s2", "2. Hallazgos de seguridad", "Detalle de los hallazgos detectados: severidad, ubicación, responsable y estado."),
+    sec("s3", "3. Cumplimiento documental", "Estado de la documentación del personal: vigentes, por vencer y vencidos."),
+    sec("s4", "4. Plan de acción", "Acciones correctivas, responsables y plazos de cumplimiento."),
+    sec("s5", "5. Conclusiones y recomendaciones", "Conclusiones del periodo y recomendaciones para el siguiente."),
+  ]
+}
 
 const defaultRow = (): MatrixRow => ({
   description: "",
@@ -37,11 +103,96 @@ const defaultRow = (): MatrixRow => ({
   date: todayIso(),
 })
 
-export function ReportsContent({ initialReports, projectId }: ReportsContentProps) {
+const ELEMENT_LABEL: Record<DesignerElement["type"], string> = {
+  heading: "Encabezado",
+  text: "HTML",
+  plain_text: "Texto",
+  simple_section: "Sección",
+  list: "Lista",
+  image: "Imagen",
+  table: "Tabla",
+  matrix: "Matriz",
+  quote: "Firma",
+  kpis: "Indicadores",
+  toc: "Tabla de contenido",
+  chart: "Gráfico",
+  cover: "Portada",
+  signers: "Firmantes",
+  docs: "Documentos",
+  divider: "Separador",
+  page_break: "Salto de página",
+}
+
+const blockLabel = (el: DesignerElement): string => {
+  if (el.type === "table" && el.rows.every((r) => r.length === 2)) return "Campos"
+  return ELEMENT_LABEL[el.type] ?? "Bloque"
+}
+
+// Etiquetas de la lista AGREGAR (para el filtro) y normalizador sin tildes.
+const ADD_LABELS = [
+  "Encabezado H1",
+  "Encabezado H2",
+  "Texto",
+  "Sección",
+  "Lista",
+  "Tabla",
+  "Matriz de hallazgos",
+  "Campos (clave-valor)",
+  "Firma",
+  "Separador",
+  "Imagen",
+  "Indicadores",
+  "Gráfico",
+  "Portada",
+  "Firmantes",
+  "Tabla de contenido",
+  "Salto de página",
+]
+const normalizeLabel = (s: string): string =>
+  s
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .trim()
+
+// Validación por bloque: devuelve un aviso si algo falta, o null si está OK.
+const validateBlock = (el: DesignerElement): string | null => {
+  switch (el.type) {
+    case "heading":
+      return el.text.trim() ? null : "Encabezado vacío"
+    case "plain_text":
+      return el.text.trim() ? null : "Texto vacío"
+    case "simple_section":
+      return el.title.trim() ? null : "Sección sin título"
+    case "list":
+      return el.items.length ? null : "Lista vacía"
+    case "image":
+      return el.src ? null : "Imagen sin archivo ni URL"
+    case "matrix":
+      if (!el.rows.length) return "Matriz sin filas"
+      if (el.rows.some((r) => !r.description.trim())) return "Hay hallazgos sin descripción"
+      if (el.rows.some((r) => !(r.owner || "").trim())) return "Hay hallazgos sin responsable"
+      return null
+    case "table":
+      return el.rows.length ? null : "Tabla vacía"
+    case "kpis":
+      return el.items.length ? null : "Sin indicadores"
+    case "chart":
+      return el.bars.length ? null : "Gráfico sin datos"
+    case "cover":
+      return el.title.trim() ? null : "Portada sin título"
+    case "signers":
+      return el.signers.length ? null : "Sin firmantes"
+    default:
+      return null
+  }
+}
+
+export function ReportsContent({ initialReports, projectId, reportId }: ReportsContentProps) {
   void initialReports
 
   const router = useRouter()
-  const [mode, setMode] = useState<"designer" | "ai-chat">("designer")
+  const mode = "designer" as const
   const [brandLogo, setBrandLogo] = useState<string>("")
   const [responsibleName, setResponsibleName] = useState<string>("")
   const [responsibleSignatureDataUrl, setResponsibleSignatureDataUrl] = useState<string | null>(null)
@@ -81,12 +232,122 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
 
   const [pageSize, setPageSize] = useState<PageSize>("A4")
   const [pageMarginMm, setPageMarginMm] = useState<number>(20)
+  const [numberSections, setNumberSections] = useState(false)
+  const [zoom, setZoom] = useState(1)
+  const [isBlockAiPending, startBlockAiTransition] = useTransition()
+  const [aiBlockDraft, setAiBlockDraft] = useState<{ id: string; field: "text" | "body"; original: string; proposed: string } | null>(null)
   const [elements, setElements] = useState<DesignerElement[]>([])
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null)
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [isBoardCollapsed, setIsBoardCollapsed] = useState(false)
+  const [addFilter, setAddFilter] = useState("")
+
+  // Persistencia del informe como registro de `reports` (crear/actualizar).
+  const [savedReportId, setSavedReportId] = useState<number | null>(reportId ?? null)
+  const [isReportSavePending, startReportSaveTransition] = useTransition()
+  const [draftSavedAt, setDraftSavedAt] = useState<Date | null>(null)
 
   const [isSignatureOpen, setIsSignatureOpen] = useState(false)
   const signatureCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const previewIframeRef = useRef<HTMLIFrameElement | null>(null)
+
+  // Historial para deshacer/rehacer (snapshots de elementos + título/subtítulo).
+  type HistSnap = { elements: DesignerElement[]; coverTitle: string; coverSubtitle: string }
+  const histRef = useRef<{ stack: HistSnap[]; idx: number; skip: boolean }>({ stack: [], idx: -1, skip: false })
+  const [canUndo, setCanUndo] = useState(false)
+  const [canRedo, setCanRedo] = useState(false)
+
+  // Clave de autoguardado del borrador en localStorage (por proyecto + informe).
+  const draftKey = `ssp-report-draft-${projectId ?? "g"}-${reportId ?? "new"}`
+
+  // Carga un informe guardado por id (al abrirlo desde la lista), o aplica una
+  // plantilla estándar cuando se crea un informe nuevo.
+  useEffect(() => {
+    // Instrucción escrita en el hero de Informes → precarga el prompt de IA.
+    const promptParam =
+      typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("prompt") : null
+    if (promptParam) setAiPrompt(promptParam)
+    if (reportId) {
+      ;(async () => {
+        try {
+          const r = await getReportById(reportId)
+          if (!r) return
+          setCoverTitle(String(r.title || "Informe"))
+          // Tolera contenido antiguo doble-serializado (jsonb guardado como string).
+          let rawContent: unknown = r.content
+          if (typeof rawContent === "string") {
+            try {
+              rawContent = JSON.parse(rawContent)
+            } catch {
+              rawContent = null
+            }
+          }
+          const content = rawContent as { markdown?: string; designer?: DesignerSnapshot } | null
+          const designer = content?.designer
+          if (designer && Array.isArray(designer.elements) && designer.elements.length) {
+            // El informe se guardó desde el editor visual: restaurar tal cual.
+            setElements(designer.elements)
+            if (designer.coverTitle) setCoverTitle(designer.coverTitle)
+            setCoverSubtitle(designer.coverSubtitle || "")
+            if (designer.pageSize === "A4" || designer.pageSize === "Letter") setPageSize(designer.pageSize)
+            if (typeof designer.pageMarginMm === "number") setPageMarginMm(designer.pageMarginMm)
+            setNumberSections(Boolean(designer.numberSections))
+            return
+          }
+          const md = content?.markdown
+          const now = Date.now()
+          if (typeof md === "string" && md.trim()) {
+            setElements([
+              { id: `h-${now}`, type: "heading", text: String(r.title || "Informe"), level: 1, align: "center" } as DesignerElement,
+              { id: `b-${now}`, type: "plain_text", text: md, align: "left" } as DesignerElement,
+            ])
+          } else {
+            setElements((cur) => (cur.length ? cur : standardTemplate(String(r.title || "Informe"))))
+          }
+        } catch {}
+      })()
+    } else {
+      const tpl =
+        typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("template") : null
+      if (tpl) {
+        applyTemplateByKey(tpl)
+      } else {
+        let draft:
+          | { elements: DesignerElement[]; coverTitle?: string; coverSubtitle?: string; pageSize?: PageSize; pageMarginMm?: number }
+          | null = null
+        try {
+          const raw = typeof window !== "undefined" ? localStorage.getItem(draftKey) : null
+          if (raw) {
+            const d = JSON.parse(raw)
+            if (Array.isArray(d.elements) && d.elements.length) draft = d
+          }
+        } catch {}
+        if (draft) {
+          setElements(draft.elements)
+          setCoverTitle(draft.coverTitle || "Informe de Seguridad")
+          setCoverSubtitle(draft.coverSubtitle || "")
+          if (draft.pageSize) setPageSize(draft.pageSize)
+          if (typeof draft.pageMarginMm === "number") setPageMarginMm(draft.pageMarginMm)
+          toast("Borrador restaurado", {
+            description: "Recuperamos tu último borrador sin guardar.",
+            action: {
+              label: "Descartar",
+              onClick: () => {
+                try {
+                  localStorage.removeItem(draftKey)
+                } catch {}
+                setElements(standardTemplate("Informe de Seguridad"))
+                setCoverTitle("Informe de Seguridad")
+              },
+            },
+          })
+        } else {
+          setElements((cur) => (cur.length ? cur : standardTemplate("Informe de Seguridad")))
+        }
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     let mounted = true
@@ -168,10 +429,60 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
 
   useEffect(() => {
     const handler = (ev: MessageEvent) => {
-      const data = ev.data as { type?: string; elementId?: string }
-      if (!data || data.type !== "REPORT_DESIGNER_SELECT") return
-      if (!data.elementId) return
-      setSelectedElementId(data.elementId)
+      const data = ev.data as {
+        type?: string
+        elementId?: string
+        edit?: string
+        r?: string
+        c?: string
+        value?: string
+        targetId?: string
+        position?: string
+      }
+      if (!data || !data.elementId) return
+      if (data.type === "REPORT_DESIGNER_SELECT") {
+        setSelectedElementId(data.elementId)
+        return
+      }
+      if (
+        data.type === "REPORT_DESIGNER_MOVE" &&
+        data.targetId &&
+        (data.position === "before" || data.position === "after")
+      ) {
+        moveElementTo(data.elementId, data.targetId, data.position)
+        setSelectedElementId(data.elementId)
+        return
+      }
+      if (data.type === "REPORT_DESIGNER_EDIT") {
+        const { elementId, edit, value } = data
+        const v = value ?? ""
+        const r = Number(data.r)
+        const c = Number(data.c)
+        updateElement(elementId, (prev) => {
+          if (edit === "heading" && prev.type === "heading") return { ...prev, text: v }
+          if (edit === "text" && prev.type === "plain_text") return { ...prev, text: v }
+          if (edit === "stitle" && prev.type === "simple_section") return { ...prev, title: v }
+          if (edit === "sbody" && prev.type === "simple_section") return { ...prev, body: v }
+          if (edit === "ctitle" && prev.type === "cover") return { ...prev, title: v }
+          if (edit === "csub" && prev.type === "cover") return { ...prev, subtitle: v }
+          if (edit === "qname" && prev.type === "quote") return { ...prev, item: { ...prev.item, name: v } }
+          if (edit === "list" && prev.type === "list") {
+            const items = v.split("\n").map((x) => x.trim()).filter((x) => x.length > 0)
+            return { ...prev, items }
+          }
+          if (edit === "kpi" && prev.type === "kpis" && Number.isFinite(r)) {
+            const key = data.c === "value" ? "value" : "label"
+            const items = prev.items.map((it, i) => (i === r ? { ...it, [key]: v } : it))
+            return { ...prev, items }
+          }
+          if (edit === "cell" && prev.type === "table" && Number.isFinite(r) && Number.isFinite(c)) {
+            const rows = prev.rows.map((row, i) => (i === r ? row.map((cell, j) => (j === c ? v : cell)) : row))
+            return { ...prev, rows }
+          }
+          return prev
+        })
+        setSelectedElementId(elementId)
+      }
     }
     if (typeof window !== "undefined") {
       window.addEventListener("message", handler)
@@ -182,6 +493,123 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
       }
     }
   }, [])
+
+  // Marca visualmente el bloque seleccionado dentro de la previsualización (sin recargar el iframe).
+  const applyPreviewSelection = (
+    doc: Document | null | undefined,
+    selId: string | null,
+    scroll = false,
+    behavior: ScrollBehavior = "smooth",
+  ) => {
+    if (!doc) return
+    doc.querySelectorAll<HTMLElement>("[data-ssp-el-id]").forEach((node) => {
+      if (node.getAttribute("data-ssp-el-id") === selId) {
+        node.style.outline = "2px solid #f3a40a"
+        node.style.outlineOffset = "3px"
+        node.style.borderRadius = "8px"
+        node.style.background = "rgba(243,164,10,0.06)"
+        if (scroll) node.scrollIntoView({ block: "nearest", behavior })
+      } else {
+        node.style.outline = ""
+        node.style.outlineOffset = ""
+        node.style.background = ""
+      }
+    })
+  }
+
+  useEffect(() => {
+    applyPreviewSelection(previewIframeRef.current?.contentDocument, selectedElementId, true)
+  }, [selectedElementId])
+
+  // Registra un snapshot en el historial (con debounce) cuando cambia el contenido.
+  useEffect(() => {
+    const h = histRef.current
+    if (h.skip) {
+      h.skip = false
+      return
+    }
+    const t = setTimeout(() => {
+      h.stack = h.stack.slice(0, h.idx + 1)
+      h.stack.push({ elements, coverTitle, coverSubtitle })
+      if (h.stack.length > 100) h.stack.shift()
+      h.idx = h.stack.length - 1
+      setCanUndo(h.idx > 0)
+      setCanRedo(false)
+    }, 350)
+    return () => clearTimeout(t)
+  }, [elements, coverTitle, coverSubtitle])
+
+  const applySnap = (s: HistSnap) => {
+    histRef.current.skip = true
+    setElements(s.elements)
+    setCoverTitle(s.coverTitle)
+    setCoverSubtitle(s.coverSubtitle)
+  }
+  const undo = () => {
+    const h = histRef.current
+    if (h.idx <= 0) return
+    h.idx -= 1
+    applySnap(h.stack[h.idx])
+    setCanUndo(h.idx > 0)
+    setCanRedo(h.idx < h.stack.length - 1)
+  }
+  const redo = () => {
+    const h = histRef.current
+    if (h.idx >= h.stack.length - 1) return
+    h.idx += 1
+    applySnap(h.stack[h.idx])
+    setCanUndo(h.idx > 0)
+    setCanRedo(h.idx < h.stack.length - 1)
+  }
+
+  // Atajos de teclado. Se re-registra en cada render para que las closures
+  // (selección, guardado) estén siempre al día; el costo es despreciable.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const active = document.activeElement as HTMLElement | null
+      const tag = (active?.tagName || "").toLowerCase()
+      if (tag === "input" || tag === "textarea" || tag === "select" || active?.isContentEditable) return
+      const dialogOpen = Boolean(document.querySelector('[role="dialog"]'))
+      const mod = e.ctrlKey || e.metaKey
+      const k = e.key.toLowerCase()
+      if (!mod) {
+        if (e.key === "Delete" && selectedElementId && !dialogOpen) {
+          e.preventDefault()
+          deleteElement(selectedElementId)
+        }
+        return
+      }
+      if (k === "z" && !e.shiftKey) {
+        e.preventDefault()
+        undo()
+      } else if (k === "y" || (k === "z" && e.shiftKey)) {
+        e.preventDefault()
+        redo()
+      } else if (k === "s") {
+        e.preventDefault()
+        if (!isReportSavePending) saveReport()
+      } else if (k === "d" && selectedElementId && !dialogOpen) {
+        e.preventDefault()
+        duplicateElement(selectedElementId)
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  })
+
+  // Autoguardado del borrador en localStorage (con debounce) + hora para el indicador.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try {
+        localStorage.setItem(
+          draftKey,
+          JSON.stringify({ elements, coverTitle, coverSubtitle, pageSize, pageMarginMm, savedAt: Date.now() }),
+        )
+        setDraftSavedAt(new Date())
+      } catch {}
+    }, 600)
+    return () => clearTimeout(t)
+  }, [elements, coverTitle, coverSubtitle, pageSize, pageMarginMm, draftKey])
 
   const editorState = useMemo((): EditorState => {
     const recs = recsText
@@ -206,6 +634,7 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
       pageSize,
       pageMarginMm,
       elements,
+      numberSections,
     }
   }, [
     brandLogo,
@@ -216,6 +645,7 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
     mode,
     pageMarginMm,
     pageSize,
+    numberSections,
     recsText,
     responsibleName,
     responsibleSignatureDataUrl,
@@ -254,6 +684,41 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
       } catch (error) {
         console.error(error)
         setEditorAlerts((prev) => [...prev, "Error al rellenar el informe con IA. Revisa la configuración de IA."])
+      }
+    })
+  }
+
+  // Guarda el informe como registro de `reports` (crea la primera vez, luego actualiza).
+  // Distinto de "Archivar en Documentos": esto permite reabrirlo y seguir editándolo.
+  const saveReport = () => {
+    startReportSaveTransition(async () => {
+      try {
+        const id = await saveDesignerReport({
+          id: savedReportId,
+          title: coverTitle,
+          projectId,
+          designer: { elements, coverTitle, coverSubtitle, pageSize, pageMarginMm, numberSections },
+        })
+        if (!id) {
+          toast.error("No se pudo guardar el informe")
+          return
+        }
+        if (!savedReportId) {
+          setSavedReportId(id)
+          try {
+            const url = new URL(window.location.href)
+            url.searchParams.set("id", String(id))
+            window.history.replaceState(null, "", url.toString())
+          } catch {}
+        }
+        try {
+          localStorage.removeItem(draftKey)
+        } catch {}
+        toast.success("Informe guardado", {
+          description: "Puedes reabrirlo desde Informes → Documentos generados.",
+        })
+      } catch {
+        toast.error("No se pudo guardar el informe")
       }
     })
   }
@@ -411,8 +876,15 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
     return elements.find((e) => e.id === selectedElementId) || null
   }, [elements, selectedElementId])
 
+  // Inserta el bloque nuevo justo después del seleccionado (o al final si no hay selección).
   const addElement = (el: DesignerElement) => {
-    setElements((arr) => [...arr, el])
+    setElements((arr) => {
+      const idx = selectedElementId ? arr.findIndex((e) => e.id === selectedElementId) : -1
+      if (idx < 0) return [...arr, el]
+      const next = [...arr]
+      next.splice(idx + 1, 0, el)
+      return next
+    })
     setSelectedElementId(el.id)
   }
 
@@ -420,9 +892,98 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
     setElements((arr) => arr.map((e) => (e.id === id ? updater(e) : e)))
   }
 
+  // Edita la matriz de una tabla (celdas, filas, columnas) desde Propiedades.
+  const updateTable = (id: string, fn: (rows: string[][]) => string[][]) =>
+    updateElement(id, (prev) =>
+      prev.type === "table" ? { ...prev, rows: fn(prev.rows.map((r) => [...r])) } : prev,
+    )
+
+  // Edita la matriz de hallazgos (filas tipadas) desde Propiedades.
+  const updateMatrix = (id: string, fn: (rows: MatrixRow[]) => MatrixRow[]) =>
+    updateElement(id, (prev) =>
+      prev.type === "matrix" ? { ...prev, rows: fn(prev.rows.map((r) => ({ ...r }))) } : prev,
+    )
+
   const deleteElement = (id: string) => {
     setElements((arr) => arr.filter((e) => e.id !== id))
     setSelectedElementId((sel) => (sel === id ? null : sel))
+  }
+
+  // Duplica un bloque (copia profunda) justo debajo del original.
+  const duplicateElement = (id: string) => {
+    let newId: string | null = null
+    setElements((arr) => {
+      const idx = arr.findIndex((e) => e.id === id)
+      if (idx < 0) return arr
+      const clone = JSON.parse(JSON.stringify(arr[idx])) as DesignerElement
+      newId = `${clone.type}-${Date.now()}`
+      clone.id = newId
+      const next = [...arr]
+      next.splice(idx + 1, 0, clone)
+      return next
+    })
+    if (newId) setSelectedElementId(newId)
+  }
+
+  // "Mejorar con IA" un bloque de texto: propone una reescritura y deja aceptar/descartar (vista de diferencia).
+  const blockAiText = (el: DesignerElement): { field: "text" | "body"; value: string } | null => {
+    if (el.type === "heading") return { field: "text", value: el.text }
+    if (el.type === "plain_text") return { field: "text", value: el.text }
+    if (el.type === "simple_section") return { field: "body", value: el.body }
+    return null
+  }
+  const improveSelectedBlock = () => {
+    const el = elements.find((e) => e.id === selectedElementId)
+    if (!el) return
+    const t = blockAiText(el)
+    if (!t || !t.value.trim()) {
+      toast.error("Este bloque no tiene texto para mejorar")
+      return
+    }
+    startBlockAiTransition(async () => {
+      try {
+        const proposed = await rewriteTextWithAI(t.value)
+        if (proposed && proposed.trim() && proposed.trim() !== t.value.trim()) {
+          setAiBlockDraft({ id: el.id, field: t.field, original: t.value, proposed: proposed.trim() })
+        } else {
+          toast("La IA no sugirió cambios")
+        }
+      } catch {
+        toast.error("Error al mejorar con IA (revisa la API Key en Configuración)")
+      }
+    })
+  }
+  const acceptAiBlock = () => {
+    if (!aiBlockDraft) return
+    const { id, field, proposed } = aiBlockDraft
+    updateElement(id, (prev) => {
+      if (field === "text" && (prev.type === "heading" || prev.type === "plain_text")) return { ...prev, text: proposed }
+      if (field === "body" && prev.type === "simple_section") return { ...prev, body: proposed }
+      return prev
+    })
+    setAiBlockDraft(null)
+  }
+
+  // Acciones en lote para multi-selección (Ctrl/⌘ + clic en la pizarra).
+  const deleteMany = (ids: string[]) => {
+    setElements((arr) => arr.filter((e) => !ids.includes(e.id)))
+    setSelectedIds([])
+    setSelectedElementId((sel) => (sel && ids.includes(sel) ? null : sel))
+  }
+  const duplicateMany = (ids: string[]) => {
+    setElements((arr) => {
+      const out: DesignerElement[] = []
+      arr.forEach((e, i) => {
+        out.push(e)
+        if (ids.includes(e.id)) {
+          const clone = JSON.parse(JSON.stringify(e)) as DesignerElement
+          clone.id = `${clone.type}-${Date.now()}-${i}`
+          out.push(clone)
+        }
+      })
+      return out
+    })
+    setSelectedIds([])
   }
 
   const moveElement = (dragId: string, overId: string) => {
@@ -431,6 +992,33 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
       const from = arr.findIndex((e) => e.id === dragId)
       const to = arr.findIndex((e) => e.id === overId)
       if (from < 0 || to < 0) return arr
+      const copy = [...arr]
+      const [moved] = copy.splice(from, 1)
+      copy.splice(to, 0, moved)
+      return copy
+    })
+  }
+
+  // Mueve un bloque antes/después de otro (drag & drop dentro de la preview).
+  const moveElementTo = (id: string, targetId: string, position: "before" | "after") => {
+    if (id === targetId) return
+    setElements((arr) => {
+      const from = arr.findIndex((e) => e.id === id)
+      if (from < 0 || !arr.some((e) => e.id === targetId)) return arr
+      const copy = [...arr]
+      const [moved] = copy.splice(from, 1)
+      const to = copy.findIndex((e) => e.id === targetId) + (position === "after" ? 1 : 0)
+      copy.splice(to, 0, moved)
+      return copy
+    })
+  }
+
+  // Mueve un bloque una posición arriba/abajo (flechas de la pizarra).
+  const moveElementBy = (id: string, dir: -1 | 1) => {
+    setElements((arr) => {
+      const from = arr.findIndex((e) => e.id === id)
+      const to = from + dir
+      if (from < 0 || to < 0 || to >= arr.length) return arr
       const copy = [...arr]
       const [moved] = copy.splice(from, 1)
       copy.splice(to, 0, moved)
@@ -602,11 +1190,103 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
     setSelectedElementId(tpl[0]?.id || null)
   }
 
+  // Aplica una plantilla de prevención al abrir el editor desde la grilla de Informes (?template=).
+  const applyTemplateByKey = (key: string) => {
+    const titles: Record<string, string> = {
+      iper: "Matriz IPER",
+      pts: "PTS — Procedimiento de Trabajo Seguro",
+      ast: "AST / ATS — Análisis Seguro de Trabajo",
+      accident: "Investigación de Accidentes",
+      inspection: "Inspección Planeada",
+      altura: "Permiso de Trabajo en Altura",
+    }
+    const title = titles[key] || "Informe de Seguridad"
+    setCoverTitle(title)
+    if (["iper", "pts", "ast", "inspection", "accident"].includes(key)) setAiReportType(key)
+    if (key === "iper" || key === "pts" || key === "ast") applyIperPtsAstTemplate()
+    else if (key === "accident" || key === "inspection") applyAtsInspeccionAccidenteTemplate()
+    else setElements(standardTemplate(title))
+  }
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-foreground">Editor de PDF</h1>
-        <p className="text-muted-foreground">Crea informes manualmente o con ayuda de IA</p>
+      <div className="sticky top-16 z-20 -mx-4 -mt-4 flex flex-wrap items-center gap-3 border-b border-white/10 bg-primary px-4 py-3 text-sidebar-foreground md:-mx-6 md:-mt-6 md:px-6 lg:-mx-8 lg:-mt-8 lg:px-8">
+        <button
+          type="button"
+          onClick={() => router.push(projectId ? `/proyectos/${projectId}/informes` : "/informes")}
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[11px] border border-white/10 bg-white/5 text-sidebar-foreground transition-colors hover:bg-white/10"
+          aria-label="Volver a informes"
+        >
+          <ArrowLeft className="h-[18px] w-[18px]" />
+        </button>
+        <div className="min-w-0">
+          <h1 className="font-display text-[19px] font-bold leading-tight tracking-[-0.01em]">Editor de informe</h1>
+          <p className="text-[13px] text-sidebar-foreground/55">Diseña el informe y expórtalo en PDF</p>
+        </div>
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {draftSavedAt && (
+            <span
+              className="mr-1 hidden items-center gap-1.5 text-[11px] text-sidebar-foreground/45 xl:flex"
+              title="El borrador se guarda automáticamente en este navegador"
+            >
+              <Check className="h-3.5 w-3.5" />
+              Borrador{" "}
+              {draftSavedAt.toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" })}
+            </span>
+          )}
+          <div className="mr-1 flex items-center gap-1">
+            <button
+              type="button"
+              onClick={undo}
+              disabled={!canUndo}
+              title="Deshacer (Ctrl+Z)"
+              aria-label="Deshacer"
+              className="flex h-9 w-9 items-center justify-center rounded-[9px] border border-white/10 bg-white/5 text-sidebar-foreground transition-colors hover:bg-white/10 disabled:opacity-30"
+            >
+              <Undo2 className="h-[17px] w-[17px]" />
+            </button>
+            <button
+              type="button"
+              onClick={redo}
+              disabled={!canRedo}
+              title="Rehacer (Ctrl+Y)"
+              aria-label="Rehacer"
+              className="flex h-9 w-9 items-center justify-center rounded-[9px] border border-white/10 bg-white/5 text-sidebar-foreground transition-colors hover:bg-white/10 disabled:opacity-30"
+            >
+              <Redo2 className="h-[17px] w-[17px]" />
+            </button>
+          </div>
+          <Button onClick={exportPdf} className="gap-2 bg-brand text-brand-foreground hover:bg-brand/90">
+            <Download className="h-4 w-4" />
+            Exportar PDF
+          </Button>
+          <Button
+            onClick={exportWord}
+            variant="outline"
+            className="gap-2 border-white/15 bg-white/5 text-sidebar-foreground hover:bg-white/10 hover:text-sidebar-foreground"
+          >
+            <FileText className="h-4 w-4" />
+            Exportar Word
+          </Button>
+          <Button
+            onClick={handleOpenSaveDialog}
+            variant="outline"
+            title="Genera el PDF y lo archiva en Documentos asociado a un trabajador"
+            className="gap-2 border-white/15 bg-white/5 text-sidebar-foreground hover:bg-white/10 hover:text-sidebar-foreground"
+          >
+            <Archive className="h-4 w-4" />
+            Archivar en Documentos
+          </Button>
+          <Button
+            onClick={saveReport}
+            disabled={isReportSavePending}
+            title="Guardar el informe para seguir editándolo después (Ctrl+S)"
+            className="gap-2 bg-white text-primary hover:bg-white/90"
+          >
+            {isReportSavePending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            {isReportSavePending ? "Guardando…" : "Guardar"}
+          </Button>
+        </div>
       </div>
 
       {editorAlerts.length > 0 && (
@@ -698,22 +1378,10 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
           </DialogContent>
         </Dialog>
 
-        <Tabs value={mode} onValueChange={(v) => setMode(v as "designer" | "ai-chat")} className="space-y-6">
-          <TabsList>
-            <TabsTrigger value="designer">Diseñador</TabsTrigger>
-            <TabsTrigger value="ai-chat">Editor IA</TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="designer" className="space-y-6">
-            <div className="grid gap-5 lg:grid-cols-[280px_minmax(0,1.4fr)_310px]">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Componentes</CardTitle>
-                  <CardDescription>Agrega y arrastra para ordenar</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
+        <div className="space-y-6">
+            <div className="grid items-start gap-5 lg:grid-cols-[280px_minmax(0,1.4fr)_310px]">
+              <div className="space-y-5 rounded-2xl border border-border bg-card p-4 lg:sticky lg:top-32 lg:max-h-[calc(100vh-9rem)] lg:overflow-y-auto">
                   <div className="space-y-2">
-                    <div className="text-sm font-medium">Documento</div>
                     <div className="grid gap-2">
                       <div className="space-y-2">
                         <div className="text-xs text-muted-foreground">Título</div>
@@ -747,8 +1415,10 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
                           }}
                         />
                       </div>
-                      <div className="space-y-1">
-                        <div className="text-xs text-muted-foreground">Plantillas rápidas</div>
+                      <div className="space-y-1.5 pt-1">
+                        <div className="font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                          Plantillas rápidas
+                        </div>
                         <div className="grid gap-2">
                           <Button variant="outline" size="sm" className="w-full text-xs break-words" onClick={applyIperPtsAstTemplate}>
                             Matriz IPER / PTS / AST
@@ -766,133 +1436,180 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
                       <Button variant="outline" onClick={applyBasicTemplateToDesigner}>
                         Cargar plantilla básica
                       </Button>
+                      <label className="flex cursor-pointer items-center justify-between gap-2 pt-1 text-[13px] font-medium">
+                        Numerar secciones
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={numberSections}
+                          onClick={() => setNumberSections((v) => !v)}
+                          className="relative h-6 w-[42px] shrink-0 rounded-full transition-colors"
+                          style={{ background: numberSections ? "var(--primary)" : "#d9d4c9" }}
+                        >
+                          <span
+                            className="absolute top-[3px] h-[18px] w-[18px] rounded-full bg-white shadow transition-all"
+                            style={{ left: numberSections ? "21px" : "3px" }}
+                          />
+                        </button>
+                      </label>
                     </div>
                   </div>
 
                   <div className="space-y-2">
-                    <div className="text-sm font-medium">Agregar</div>
-                    <div className="grid gap-1 sm:grid-cols-1">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="text-xs break-words justify-start"
-                        onClick={() => addElement({ id: `h1-${Date.now()}`, type: "heading", level: 1, text: "Título", align: "left" })}
-                      >
-                        Encabezado H1
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="text-xs break-words justify-start"
-                        onClick={() => addElement({ id: `h2-${Date.now()}`, type: "heading", level: 2, text: "Subtítulo", align: "left" })}
-                      >
-                        Encabezado H2
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="text-xs break-words justify-start"
-                        onClick={() => addElement({ id: `pt-${Date.now()}`, type: "plain_text", text: "Texto", align: "left" })}
-                      >
-                        Texto
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="text-xs break-words justify-start"
-                        onClick={() =>
-                          addElement({
-                            id: `sec-${Date.now()}`,
-                            type: "simple_section",
-                            title: "Sección",
-                            subtitle: null,
-                            body: "",
-                            bullets: [],
-                            chips: [],
-                            align: "left",
-                          })
-                        }
-                      >
-                        Sección
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="text-xs break-words justify-start"
-                        onClick={() => addElement({ id: `ls-${Date.now()}`, type: "list", ordered: false, items: ["Item 1", "Item 2"], align: "left" })}
-                      >
-                        Lista
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="text-xs break-words justify-start"
-                        onClick={() => addElement({ id: `img-${Date.now()}`, type: "image", src: "", alt: "", widthPct: 100 })}
-                      >
-                        Imagen
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="text-xs break-words justify-start"
-                        onClick={() => addElement({ id: `mx-${Date.now()}`, type: "matrix", rows: matrixRows })}
-                      >
-                        Matriz (desde formulario)
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="text-xs break-words justify-start"
-                        onClick={() => {
-                          const items = recsText
-                            .split("\n")
-                            .map((r) => r.trim())
-                            .filter((r) => r.length > 0)
-                          addElement({ id: `rec-${Date.now()}`, type: "list", ordered: true, items, align: "left" })
-                        }}
-                      >
-                        Recomendaciones (desde formulario)
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="text-xs break-words justify-start"
-                        onClick={() => addElement({ id: `hr-${Date.now()}`, type: "divider" })}
-                      >
-                        Separador
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="text-xs break-words justify-start"
-                        onClick={() => addElement({ id: `pb-${Date.now()}`, type: "page_break" })}
-                      >
-                        Salto de página
-                      </Button>
+                    <div className="font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                      Agregar
                     </div>
+                    <input
+                      value={addFilter}
+                      onChange={(e) => setAddFilter(e.target.value)}
+                      placeholder="Filtrar bloques…"
+                      className="h-9 w-full rounded-[10px] border border-border bg-card px-3 text-[13px] outline-none placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
+                    />
+                    <div className="grid gap-1.5">
+                      {(
+                        [
+                          { label: "Encabezado H1", make: (): DesignerElement => ({ id: `h1-${Date.now()}`, type: "heading", level: 1, text: "Título", align: "left" }) },
+                          { label: "Encabezado H2", make: (): DesignerElement => ({ id: `h2-${Date.now()}`, type: "heading", level: 2, text: "Subtítulo", align: "left" }) },
+                          { label: "Texto", make: (): DesignerElement => ({ id: `pt-${Date.now()}`, type: "plain_text", text: "Texto", align: "left" }) },
+                          { label: "Sección", make: (): DesignerElement => ({ id: `sec-${Date.now()}`, type: "simple_section", title: "Sección", subtitle: null, body: "", bullets: [], chips: [], align: "left" }) },
+                          { label: "Lista", make: (): DesignerElement => ({ id: `ls-${Date.now()}`, type: "list", ordered: false, items: ["Item 1", "Item 2"], align: "left" }) },
+                          { label: "Tabla", make: (): DesignerElement => ({ id: `tb-${Date.now()}`, type: "table", rows: [["Columna A", "Columna B"], ["", ""]] }) },
+                          { label: "Matriz de hallazgos", make: (): DesignerElement => ({ id: `mx-${Date.now()}`, type: "matrix", rows: [defaultRow()] }) },
+                          { label: "Campos (clave-valor)", make: (): DesignerElement => ({ id: `cf-${Date.now()}`, type: "table", rows: [["Período", "—"], ["Cumplimiento", "—"]] }) },
+                          { label: "Firma", make: (): DesignerElement => ({ id: `sg-${Date.now()}`, type: "quote", item: { name: responsibleName || "Nombre del responsable", role: "Prevencionista de Riesgos", date: todayIso(), content: "", signatureDataUrl: responsibleSignatureDataUrl } }) },
+                          { label: "Separador", make: (): DesignerElement => ({ id: `hr-${Date.now()}`, type: "divider" }) },
+                          { label: "Imagen", make: (): DesignerElement => ({ id: `img-${Date.now()}`, type: "image", src: "", alt: "", widthPct: 100 }) },
+                          { label: "Indicadores", make: (): DesignerElement => ({ id: `kpi-${Date.now()}`, type: "kpis", items: [{ label: "Días sin accidentes", value: "0" }, { label: "Cumplimiento", value: "0%" }, { label: "Hallazgos abiertos", value: "0" }] }) },
+                          { label: "Gráfico", make: (): DesignerElement => ({ id: `ch-${Date.now()}`, type: "chart", title: "Hallazgos por severidad", bars: [{ label: "Crítico", value: 3, color: "#d8443a" }, { label: "Alto", value: 5, color: "#e8960b" }, { label: "Medio", value: 8, color: "#b8841a" }, { label: "Bajo", value: 2, color: "#6f6a60" }] }) },
+                          { label: "Portada", make: (): DesignerElement => ({ id: `cov-${Date.now()}`, type: "cover", title: coverTitle || "Informe de Seguridad", subtitle: coverSubtitle || "", meta: `${new Date().toLocaleDateString("es-CL", { day: "2-digit", month: "long", year: "numeric" })}` }) },
+                          { label: "Firmantes", make: (): DesignerElement => ({ id: `sgs-${Date.now()}`, type: "signers", signers: [{ name: responsibleName || "Nombre", role: "Prevencionista de Riesgos", status: "pendiente", signatureDataUrl: responsibleSignatureDataUrl }, { name: "Jefe de Terreno", role: "Jefe de Terreno", status: "pendiente" }] }) },
+                          { label: "Tabla de contenido", make: (): DesignerElement => ({ id: `toc-${Date.now()}`, type: "toc", title: "Tabla de contenido" }) },
+                          { label: "Salto de página", make: (): DesignerElement => ({ id: `pb-${Date.now()}`, type: "page_break" }) },
+                        ] as { label: string; make: () => DesignerElement }[]
+                      )
+                        .filter((it) => normalizeLabel(it.label).includes(normalizeLabel(addFilter)))
+                        .map((it) => (
+                          <button
+                            key={it.label}
+                            type="button"
+                            onClick={() => addElement(it.make())}
+                            className="flex w-full items-center gap-2 rounded-[10px] border border-border bg-card px-3 py-2 text-[13px] font-medium text-foreground transition-colors hover:border-brand hover:bg-secondary"
+                          >
+                            <Plus className="h-3.5 w-3.5 text-muted-foreground" />
+                            {it.label}
+                          </button>
+                        ))}
+                      {addFilter.trim() &&
+                        !ADD_LABELS.some((l) => normalizeLabel(l).includes(normalizeLabel(addFilter))) && (
+                          <div className="rounded-[10px] border border-dashed border-border px-3 py-2 text-center text-xs text-muted-foreground">
+                            Sin bloques para “{addFilter.trim()}”
+                          </div>
+                        )}
+                    </div>
+                  </div>
+              </div>
+
+              <Card className="rounded-2xl border-border shadow-none">
+                <CardHeader>
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <CardTitle className="font-display tracking-[-0.01em]">Previsualización</CardTitle>
+                      <CardDescription>
+                        Clic selecciona · doble clic edita · arrastra para reordenar · {elements.length}{" "}
+                        {elements.length === 1 ? "bloque" : "bloques"}
+                      </CardDescription>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1 rounded-lg border border-border p-0.5">
+                      <button
+                        type="button"
+                        onClick={() => setZoom((z) => Math.max(0.6, Math.round((z - 0.1) * 10) / 10))}
+                        className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary"
+                        aria-label="Alejar"
+                      >
+                        <Minus className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setZoom(1)}
+                        className="min-w-[42px] rounded-md px-1.5 text-center font-mono text-[11px] text-muted-foreground hover:bg-secondary"
+                        title="Restablecer zoom"
+                      >
+                        {Math.round(zoom * 100)}%
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setZoom((z) => Math.min(1.6, Math.round((z + 0.1) * 10) / 10))}
+                        className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary"
+                        aria-label="Acercar"
+                      >
+                        <Plus className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="overflow-auto rounded-xl border border-border bg-[#efece4]" style={{ height: "70vh" }}>
+                    <iframe
+                      ref={previewIframeRef}
+                      className="h-[70vh] w-full bg-[#efece4]"
+                      style={{ transform: `scale(${zoom})`, transformOrigin: "top center", border: 0 }}
+                      srcDoc={previewHtml}
+                      title="Previsualización del informe"
+                      onLoad={() =>
+                        applyPreviewSelection(previewIframeRef.current?.contentDocument, selectedElementId, true, "auto")
+                      }
+                    />
                   </div>
                 </CardContent>
               </Card>
 
-              <Card>
-                <CardHeader>
-                  <CardTitle>Previsualización</CardTitle>
-                  <CardDescription>Vista previa del HTML que se exporta</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <iframe className="h-[70vh] w-full rounded-md border" srcDoc={previewHtml} />
-                </CardContent>
-              </Card>
-
-              <div className="space-y-6">
-                <Card>
+              <div className="space-y-6 lg:sticky lg:top-32 lg:max-h-[calc(100vh-9rem)] lg:overflow-y-auto lg:pr-1">
+                <Card className="rounded-2xl border-border shadow-none">
                   <CardHeader>
-                    <CardTitle>Propiedades</CardTitle>
+                    <CardTitle className="font-display tracking-[-0.01em]">Propiedades</CardTitle>
                     <CardDescription>Edita el componente seleccionado</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4">
                     {selectedElement ? (
                       <>
+                        <div className="font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                          Bloque: {blockLabel(selectedElement)}
+                        </div>
+                        {(selectedElement.type === "heading" ||
+                          selectedElement.type === "plain_text" ||
+                          selectedElement.type === "simple_section") ? (
+                          <div className="space-y-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="w-full gap-2"
+                              onClick={improveSelectedBlock}
+                              disabled={isBlockAiPending}
+                            >
+                              {isBlockAiPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+                              Mejorar con IA
+                            </Button>
+                            {aiBlockDraft && aiBlockDraft.id === selectedElement.id ? (
+                              <div className="space-y-2 rounded-lg border border-brand bg-brand/5 p-2.5">
+                                <div className="font-mono text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                                  Propuesta de IA
+                                </div>
+                                <div className="max-h-24 overflow-auto rounded bg-card p-2 text-[12px] leading-snug">
+                                  {aiBlockDraft.proposed}
+                                </div>
+                                <div className="flex gap-2">
+                                  <Button size="sm" className="flex-1 bg-brand text-brand-foreground hover:bg-brand/90" onClick={acceptAiBlock}>
+                                    Aceptar
+                                  </Button>
+                                  <Button size="sm" variant="outline" className="flex-1" onClick={() => setAiBlockDraft(null)}>
+                                    Descartar
+                                  </Button>
+                                </div>
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
                         {selectedElement.type === "heading" ? (
                           <div className="space-y-2">
                             <div className="text-sm font-medium">Texto</div>
@@ -1059,9 +1776,33 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
 
                         {selectedElement.type === "image" ? (
                           <div className="space-y-2">
-                            <div className="text-sm font-medium">URL</div>
+                            <div className="text-sm font-medium">Imagen</div>
+                            <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-secondary/40 px-3 py-3 text-[13px] font-medium transition-colors hover:border-brand">
+                              <ImageIcon className="h-4 w-4" />
+                              Subir imagen
+                              <input
+                                type="file"
+                                accept="image/*"
+                                className="hidden"
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0]
+                                  if (!file) return
+                                  const reader = new FileReader()
+                                  reader.onload = () => {
+                                    const src = String(reader.result || "")
+                                    updateElement(selectedElement.id, (prev) => (prev.type === "image" ? { ...prev, src } : prev))
+                                  }
+                                  reader.readAsDataURL(file)
+                                  e.target.value = ""
+                                }}
+                              />
+                            </label>
+                            {selectedElement.src ? (
+                              <img src={selectedElement.src} alt="" className="max-h-28 rounded-md border border-border" />
+                            ) : null}
+                            <div className="text-sm font-medium">O pega una URL</div>
                             <Input
-                              value={selectedElement.src}
+                              value={selectedElement.src.startsWith("data:") ? "" : selectedElement.src}
                               onChange={(e) =>
                                 updateElement(selectedElement.id, (prev) =>
                                   prev.type === "image" ? { ...prev, src: e.target.value } : prev,
@@ -1084,29 +1825,507 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
                           </div>
                         ) : null}
 
-                        {selectedElement.type === "matrix" ? (
+                        {selectedElement.type === "kpis" ? (
+                          (() => {
+                            const id = selectedElement.id
+                            const items = selectedElement.items
+                            const setKpis = (fn: (it: { label: string; value: string }[]) => { label: string; value: string }[]) =>
+                              updateElement(id, (prev) => (prev.type === "kpis" ? { ...prev, items: fn(prev.items.map((x) => ({ ...x }))) } : prev))
+                            return (
+                              <div className="space-y-2">
+                                <div className="text-sm font-medium">Indicadores</div>
+                                <div className="space-y-2">
+                                  {items.map((it, i) => (
+                                    <div key={i} className="flex items-center gap-1.5">
+                                      <Input
+                                        value={it.value}
+                                        placeholder="0"
+                                        onChange={(e) => setKpis((arr) => arr.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))}
+                                        className="h-8 w-[60px] shrink-0 text-xs"
+                                      />
+                                      <Input
+                                        value={it.label}
+                                        placeholder="Etiqueta"
+                                        onChange={(e) => setKpis((arr) => arr.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)))}
+                                        className="h-8 flex-1 text-xs"
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={() => setKpis((arr) => (arr.length > 1 ? arr.filter((_, j) => j !== i) : arr))}
+                                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-[var(--danger)] hover:bg-danger-tint disabled:opacity-30"
+                                        aria-label={`Eliminar indicador ${i + 1}`}
+                                        disabled={items.length <= 1}
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="gap-1.5"
+                                  onClick={() => setKpis((arr) => [...arr, { label: "Indicador", value: "0" }])}
+                                >
+                                  <Plus className="h-3.5 w-3.5" /> Indicador
+                                </Button>
+                              </div>
+                            )
+                          })()
+                        ) : null}
+
+                        {selectedElement.type === "toc" ? (
                           <div className="space-y-2">
-                            <div className="text-sm font-medium">Matriz</div>
-                            <div className="text-sm text-muted-foreground">
-                              {selectedElement.rows.length} filas
-                            </div>
-                            <div className="flex flex-wrap gap-2">
-                              <Button
-                                variant="outline"
-                                onClick={() => {
-                                  setEditingMatrixElementId(selectedElement.id)
-                                  setMatrixElementDraftRows(selectedElement.rows || [])
-                                  setIsMatrixElementDialogOpen(true)
-                                }}
-                              >
-                                Editar matriz
-                              </Button>
-                            </div>
+                            <div className="text-sm font-medium">Título</div>
+                            <Input
+                              value={selectedElement.title || ""}
+                              onChange={(e) =>
+                                updateElement(selectedElement.id, (prev) => (prev.type === "toc" ? { ...prev, title: e.target.value } : prev))
+                              }
+                              placeholder="Tabla de contenido"
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              El índice se genera automáticamente a partir de los encabezados y secciones del informe.
+                            </p>
                           </div>
                         ) : null}
+
+                        {selectedElement.type === "cover" ? (
+                          <div className="space-y-2">
+                            <div className="text-sm font-medium">Título</div>
+                            <Input
+                              value={selectedElement.title}
+                              onChange={(e) =>
+                                updateElement(selectedElement.id, (prev) => (prev.type === "cover" ? { ...prev, title: e.target.value } : prev))
+                              }
+                            />
+                            <div className="text-sm font-medium">Subtítulo</div>
+                            <Input
+                              value={selectedElement.subtitle || ""}
+                              onChange={(e) =>
+                                updateElement(selectedElement.id, (prev) => (prev.type === "cover" ? { ...prev, subtitle: e.target.value } : prev))
+                              }
+                            />
+                            <div className="text-sm font-medium">Datos (fecha, obra…)</div>
+                            <Input
+                              value={selectedElement.meta || ""}
+                              onChange={(e) =>
+                                updateElement(selectedElement.id, (prev) => (prev.type === "cover" ? { ...prev, meta: e.target.value } : prev))
+                              }
+                            />
+                          </div>
+                        ) : null}
+
+                        {selectedElement.type === "chart" ? (
+                          (() => {
+                            const id = selectedElement.id
+                            const bars = selectedElement.bars
+                            const setBars = (fn: (b: { label: string; value: number; color?: string }[]) => { label: string; value: number; color?: string }[]) =>
+                              updateElement(id, (prev) => (prev.type === "chart" ? { ...prev, bars: fn(prev.bars.map((x) => ({ ...x }))) } : prev))
+                            return (
+                              <div className="space-y-2">
+                                <div className="text-sm font-medium">Título</div>
+                                <Input
+                                  value={selectedElement.title || ""}
+                                  onChange={(e) =>
+                                    updateElement(id, (prev) => (prev.type === "chart" ? { ...prev, title: e.target.value } : prev))
+                                  }
+                                />
+                                <div className="text-sm font-medium">Barras</div>
+                                <div className="space-y-1.5">
+                                  {bars.map((b, i) => (
+                                    <div key={i} className="flex items-center gap-1.5">
+                                      <input
+                                        type="color"
+                                        value={b.color || "#16130e"}
+                                        onChange={(e) => setBars((arr) => arr.map((x, j) => (j === i ? { ...x, color: e.target.value } : x)))}
+                                        className="h-8 w-8 shrink-0 cursor-pointer rounded border border-border"
+                                        aria-label="Color"
+                                      />
+                                      <Input
+                                        value={b.label}
+                                        placeholder="Etiqueta"
+                                        onChange={(e) => setBars((arr) => arr.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)))}
+                                        className="h-8 flex-1 text-xs"
+                                      />
+                                      <Input
+                                        type="number"
+                                        value={String(b.value)}
+                                        onChange={(e) => setBars((arr) => arr.map((x, j) => (j === i ? { ...x, value: Number(e.target.value) || 0 } : x)))}
+                                        className="h-8 w-[58px] shrink-0 text-xs"
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={() => setBars((arr) => (arr.length > 1 ? arr.filter((_, j) => j !== i) : arr))}
+                                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-[var(--danger)] hover:bg-danger-tint disabled:opacity-30"
+                                        aria-label={`Eliminar barra ${i + 1}`}
+                                        disabled={bars.length <= 1}
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                                <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setBars((arr) => [...arr, { label: "Barra", value: 1 }])}>
+                                  <Plus className="h-3.5 w-3.5" /> Barra
+                                </Button>
+                              </div>
+                            )
+                          })()
+                        ) : null}
+
+                        {selectedElement.type === "signers" ? (
+                          (() => {
+                            const id = selectedElement.id
+                            const signers = selectedElement.signers
+                            const setSigners = (
+                              fn: (s: { name: string; role: string; status: "pendiente" | "firmado"; signatureDataUrl?: string | null }[]) => { name: string; role: string; status: "pendiente" | "firmado"; signatureDataUrl?: string | null }[],
+                            ) => updateElement(id, (prev) => (prev.type === "signers" ? { ...prev, signers: fn(prev.signers.map((x) => ({ ...x }))) } : prev))
+                            return (
+                              <div className="space-y-2">
+                                <div className="text-sm font-medium">Firmantes</div>
+                                <div className="space-y-2">
+                                  {signers.map((sg, i) => (
+                                    <div key={i} className="space-y-1.5 rounded-lg border border-border p-2">
+                                      <div className="flex items-center justify-between">
+                                        <span className="font-mono text-[11px] text-muted-foreground">Firmante {i + 1}</span>
+                                        <button
+                                          type="button"
+                                          onClick={() => setSigners((arr) => (arr.length > 1 ? arr.filter((_, j) => j !== i) : arr))}
+                                          className="flex h-6 w-6 items-center justify-center rounded text-[var(--danger)] hover:bg-danger-tint"
+                                          aria-label={`Eliminar firmante ${i + 1}`}
+                                        >
+                                          <Trash2 className="h-3.5 w-3.5" />
+                                        </button>
+                                      </div>
+                                      <Input
+                                        value={sg.name}
+                                        placeholder="Nombre"
+                                        onChange={(e) => setSigners((arr) => arr.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))}
+                                        className="h-8 text-xs"
+                                      />
+                                      <Input
+                                        value={sg.role}
+                                        placeholder="Cargo"
+                                        onChange={(e) => setSigners((arr) => arr.map((x, j) => (j === i ? { ...x, role: e.target.value } : x)))}
+                                        className="h-8 text-xs"
+                                      />
+                                      <Select
+                                        value={sg.status}
+                                        onValueChange={(v) => setSigners((arr) => arr.map((x, j) => (j === i ? { ...x, status: v as "pendiente" | "firmado" } : x)))}
+                                      >
+                                        <SelectTrigger className="h-8 text-xs">
+                                          <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          <SelectItem value="pendiente">Pendiente</SelectItem>
+                                          <SelectItem value="firmado">Firmado</SelectItem>
+                                        </SelectContent>
+                                      </Select>
+                                    </div>
+                                  ))}
+                                </div>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="gap-1.5"
+                                  onClick={() => setSigners((arr) => [...arr, { name: "Nombre", role: "Cargo", status: "pendiente" }])}
+                                >
+                                  <Plus className="h-3.5 w-3.5" /> Firmante
+                                </Button>
+                              </div>
+                            )
+                          })()
+                        ) : null}
+
+                        {selectedElement.type === "table" ? (
+                          (() => {
+                            const rows = selectedElement.rows
+                            const id = selectedElement.id
+                            const colCount = Math.max(1, ...rows.map((r) => r.length))
+                            const isFields = rows.every((r) => r.length === 2)
+                            return (
+                              <div className="space-y-2">
+                                <div className="flex items-center justify-between">
+                                  <div className="text-sm font-medium">{isFields ? "Campos" : "Tabla"}</div>
+                                  <div className="text-xs text-muted-foreground">
+                                    {rows.length} × {colCount}
+                                  </div>
+                                </div>
+                                <div className="overflow-x-auto">
+                                  <div className="w-max min-w-full space-y-1">
+                                    {colCount > 1 ? (
+                                      <div className="flex items-center gap-1">
+                                        {Array.from({ length: colCount }).map((_, ci) => (
+                                          <button
+                                            key={ci}
+                                            type="button"
+                                            onClick={() =>
+                                              updateTable(id, (rs) =>
+                                                colCount > 1 ? rs.map((r) => r.filter((_, j) => j !== ci)) : rs,
+                                              )
+                                            }
+                                            className="flex h-5 w-[70px] shrink-0 items-center justify-center rounded text-[10px] text-muted-foreground transition-colors hover:bg-danger-tint hover:text-[var(--danger)]"
+                                            aria-label={`Eliminar columna ${ci + 1}`}
+                                          >
+                                            ✕ col {ci + 1}
+                                          </button>
+                                        ))}
+                                        <span className="w-6 shrink-0" />
+                                      </div>
+                                    ) : null}
+                                    {rows.map((row, ri) => (
+                                      <div key={ri} className="flex items-center gap-1">
+                                        {Array.from({ length: colCount }).map((_, ci) => (
+                                          <Input
+                                            key={ci}
+                                            value={row[ci] ?? ""}
+                                            placeholder={ri === 0 ? "Encabezado" : isFields && ci === 0 ? "Clave" : isFields ? "Valor" : ""}
+                                            onChange={(e) =>
+                                              updateTable(id, (rs) => {
+                                                const rr = [...(rs[ri] || [])]
+                                                while (rr.length < colCount) rr.push("")
+                                                rr[ci] = e.target.value
+                                                rs[ri] = rr
+                                                return rs
+                                              })
+                                            }
+                                            className="h-8 w-[70px] shrink-0 text-xs"
+                                          />
+                                        ))}
+                                        <button
+                                          type="button"
+                                          onClick={() => updateTable(id, (rs) => (rs.length > 1 ? rs.filter((_, i) => i !== ri) : rs))}
+                                          className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-[var(--danger)] transition-colors hover:bg-danger-tint disabled:opacity-30"
+                                          aria-label={`Eliminar fila ${ri + 1}`}
+                                          disabled={rows.length <= 1}
+                                        >
+                                          <Trash2 className="h-3.5 w-3.5" />
+                                        </button>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="gap-1.5"
+                                    onClick={() =>
+                                      updateTable(id, (rs) => {
+                                        const cols = Math.max(1, ...rs.map((r) => r.length))
+                                        return [...rs, new Array(cols).fill("")]
+                                      })
+                                    }
+                                  >
+                                    <Plus className="h-3.5 w-3.5" /> Fila
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="gap-1.5"
+                                    onClick={() => updateTable(id, (rs) => (rs.length ? rs.map((r) => [...r, ""]) : [[""]]))}
+                                  >
+                                    <Plus className="h-3.5 w-3.5" /> Columna
+                                  </Button>
+                                </div>
+                                <p className="text-xs text-muted-foreground">
+                                  Edita cada celda directamente. La primera fila es el encabezado.
+                                </p>
+                              </div>
+                            )
+                          })()
+                        ) : null}
+
+                        {selectedElement.type === "quote" ? (
+                          <div className="space-y-2">
+                            <div className="text-sm font-medium">Nombre</div>
+                            <Input
+                              value={selectedElement.item.name}
+                              onChange={(e) =>
+                                updateElement(selectedElement.id, (prev) =>
+                                  prev.type === "quote" ? { ...prev, item: { ...prev.item, name: e.target.value } } : prev,
+                                )
+                              }
+                            />
+                            <div className="text-sm font-medium">Cargo</div>
+                            <Input
+                              value={selectedElement.item.role}
+                              onChange={(e) =>
+                                updateElement(selectedElement.id, (prev) =>
+                                  prev.type === "quote" ? { ...prev, item: { ...prev.item, role: e.target.value } } : prev,
+                                )
+                              }
+                            />
+                            <div className="text-sm font-medium">Fecha</div>
+                            <Input
+                              type="date"
+                              value={selectedElement.item.date}
+                              onChange={(e) =>
+                                updateElement(selectedElement.id, (prev) =>
+                                  prev.type === "quote" ? { ...prev, item: { ...prev.item, date: e.target.value } } : prev,
+                                )
+                              }
+                            />
+                            <div className="text-sm font-medium">Nota / leyenda</div>
+                            <Textarea
+                              rows={3}
+                              value={selectedElement.item.content}
+                              onChange={(e) =>
+                                updateElement(selectedElement.id, (prev) =>
+                                  prev.type === "quote" ? { ...prev, item: { ...prev.item, content: e.target.value } } : prev,
+                                )
+                              }
+                            />
+                            <Button variant="outline" className="w-full gap-2" onClick={() => setIsSignatureOpen(true)}>
+                              <FileText className="h-4 w-4" />
+                              Firmar bloque
+                            </Button>
+                          </div>
+                        ) : null}
+
+                        {selectedElement.type === "matrix" ? (
+                          (() => {
+                            const id = selectedElement.id
+                            const rows = selectedElement.rows
+                            return (
+                              <div className="space-y-2">
+                                <div className="flex items-center justify-between">
+                                  <div className="text-sm font-medium">Matriz de hallazgos</div>
+                                  <div className="text-xs text-muted-foreground">{rows.length} filas</div>
+                                </div>
+                                <div className="space-y-2">
+                                  {rows.map((row, ri) => (
+                                    <div key={ri} className="space-y-1.5 rounded-lg border border-border p-2">
+                                      <div className="flex items-center justify-between">
+                                        <span className="font-mono text-[11px] text-muted-foreground">Fila {ri + 1}</span>
+                                        <button
+                                          type="button"
+                                          onClick={() => updateMatrix(id, (rs) => rs.filter((_, i) => i !== ri))}
+                                          className="flex h-6 w-6 items-center justify-center rounded text-[var(--danger)] transition-colors hover:bg-danger-tint"
+                                          aria-label={`Eliminar fila ${ri + 1}`}
+                                        >
+                                          <Trash2 className="h-3.5 w-3.5" />
+                                        </button>
+                                      </div>
+                                      <Input
+                                        placeholder="Descripción del hallazgo"
+                                        value={row.description}
+                                        onChange={(e) =>
+                                          updateMatrix(id, (rs) => rs.map((r, i) => (i === ri ? { ...r, description: e.target.value } : r)))
+                                        }
+                                        className="h-8 text-xs"
+                                      />
+                                      <div className="grid grid-cols-2 gap-1.5">
+                                        <Input
+                                          placeholder="Categoría"
+                                          value={row.category || ""}
+                                          onChange={(e) =>
+                                            updateMatrix(id, (rs) => rs.map((r, i) => (i === ri ? { ...r, category: e.target.value } : r)))
+                                          }
+                                          className="h-8 text-xs"
+                                        />
+                                        <Input
+                                          placeholder="Responsable"
+                                          value={row.owner || ""}
+                                          onChange={(e) =>
+                                            updateMatrix(id, (rs) => rs.map((r, i) => (i === ri ? { ...r, owner: e.target.value } : r)))
+                                          }
+                                          className="h-8 text-xs"
+                                        />
+                                      </div>
+                                      <div className="grid grid-cols-2 gap-1.5">
+                                        <Select
+                                          value={row.severity}
+                                          onValueChange={(v) =>
+                                            updateMatrix(id, (rs) => rs.map((r, i) => (i === ri ? { ...r, severity: v as Severity } : r)))
+                                          }
+                                        >
+                                          <SelectTrigger className="h-8 text-xs">
+                                            <SelectValue />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            <SelectItem value="alta">Alta</SelectItem>
+                                            <SelectItem value="medio">Medio</SelectItem>
+                                            <SelectItem value="bajo">Bajo</SelectItem>
+                                          </SelectContent>
+                                        </Select>
+                                        <Select
+                                          value={row.status}
+                                          onValueChange={(v) =>
+                                            updateMatrix(id, (rs) => rs.map((r, i) => (i === ri ? { ...r, status: v as Status } : r)))
+                                          }
+                                        >
+                                          <SelectTrigger className="h-8 text-xs">
+                                            <SelectValue />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            <SelectItem value="pendiente">Pendiente</SelectItem>
+                                            <SelectItem value="en progreso">En progreso</SelectItem>
+                                            <SelectItem value="resuelto">Resuelto</SelectItem>
+                                          </SelectContent>
+                                        </Select>
+                                      </div>
+                                      <Input
+                                        type="date"
+                                        value={row.date}
+                                        onChange={(e) =>
+                                          updateMatrix(id, (rs) => rs.map((r, i) => (i === ri ? { ...r, date: e.target.value } : r)))
+                                        }
+                                        className="h-8 text-xs"
+                                      />
+                                    </div>
+                                  ))}
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="gap-1.5"
+                                    onClick={() => updateMatrix(id, (rs) => [...rs, defaultRow()])}
+                                  >
+                                    <Plus className="h-3.5 w-3.5" /> Fila
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => {
+                                      setEditingMatrixElementId(id)
+                                      setMatrixElementDraftRows(rows || [])
+                                      setIsMatrixElementDialogOpen(true)
+                                    }}
+                                  >
+                                    Editar en tabla grande
+                                  </Button>
+                                </div>
+                              </div>
+                            )
+                          })()
+                        ) : null}
+
+                        <div className="flex gap-2">
+                          <Button
+                            variant="outline"
+                            className="flex-1 gap-2"
+                            onClick={() => duplicateElement(selectedElement.id)}
+                          >
+                            <Copy className="h-4 w-4" />
+                            Duplicar
+                          </Button>
+                          <Button
+                            variant="outline"
+                            className="flex-1 gap-2 border-danger/30 text-[var(--danger)] hover:bg-danger-tint hover:text-[var(--danger)]"
+                            onClick={() => deleteElement(selectedElement.id)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            Eliminar
+                          </Button>
+                        </div>
                       </>
                     ) : (
-                      <div className="text-sm text-muted-foreground">Selecciona un componente en la pizarra.</div>
+                      <div className="rounded-xl border border-dashed border-border bg-secondary/40 p-4 text-[13px] text-muted-foreground">
+                        Selecciona un bloque en la previsualización para editarlo.
+                      </div>
                     )}
 
                     <div className="space-y-2">
@@ -1133,11 +2352,13 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
                       </div>
                     </div>
 
-                    <div className="space-y-3">
+                    <div className="space-y-3 rounded-xl border border-border bg-secondary/50 p-3">
                       <div className="space-y-2">
-                        <div className="flex items-center gap-2 text-sm font-medium">
-                          <Sparkles className="h-4 w-4" />
-                          <span>IA del informe</span>
+                        <div className="flex items-center gap-2 text-sm font-semibold">
+                          <span className="flex h-6 w-6 items-center justify-center rounded-md bg-brand">
+                            <Sparkles className="h-3.5 w-3.5 text-primary" />
+                          </span>
+                          <span className="font-display">IA del informe</span>
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
                           <Select value={aiPeriod} onValueChange={(v) => setAiPeriod(v)}>
@@ -1209,11 +2430,10 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
                       <div className="flex flex-wrap justify-end gap-2">
                         <Button
                           type="button"
-                          variant="secondary"
                           size="sm"
                           onClick={handleFillWithAI}
                           disabled={isAiPending}
-                          className="flex items-center gap-2"
+                          className="flex items-center gap-2 bg-brand text-brand-foreground hover:bg-brand/90"
                         >
                           {isAiPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
                           Rellenar con IA
@@ -1250,60 +2470,79 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
                         </div>
                       </div>
                     )}
-
-                    <div className="flex flex-wrap justify-end gap-2">
-                      <Button onClick={exportPdf}>Exportar PDF</Button>
-                      <Button variant="secondary" onClick={exportWord}>
-                        Exportar Word
-                      </Button>
-                      <Button variant="outline" onClick={handleOpenSaveDialog} className="flex items-center gap-2">
-                        <FileText className="h-4 w-4" />
-                        Guardar en Documentos
-                      </Button>
-                    </div>
                   </CardContent>
                 </Card>
 
-                <Card>
+                <Card className="rounded-2xl border-border shadow-none">
                   <CardHeader>
-                    <CardTitle>Pizarra</CardTitle>
-                    <CardDescription>Arrastra para reordenar el contenido</CardDescription>
+                    <CardTitle className="font-display tracking-[-0.01em]">Pizarra</CardTitle>
+                    <CardDescription>Arrastra o usa las flechas · Ctrl/⌘ + clic para multiseleccionar</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-3">
+                    {selectedIds.length > 0 ? (
+                      <div className="flex items-center justify-between gap-2 rounded-lg border border-brand bg-brand/5 px-2.5 py-1.5">
+                        <span className="text-[12px] font-semibold">{selectedIds.length} seleccionados</span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => duplicateMany(selectedIds)}
+                            className="flex h-7 items-center gap-1 rounded-md px-2 text-[12px] font-medium hover:bg-secondary"
+                          >
+                            <Copy className="h-3.5 w-3.5" /> Duplicar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => deleteMany(selectedIds)}
+                            className="flex h-7 items-center gap-1 rounded-md px-2 text-[12px] font-medium text-[var(--danger)] hover:bg-danger-tint"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" /> Eliminar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedIds([])}
+                            className="flex h-7 items-center rounded-md px-2 text-[12px] font-medium text-muted-foreground hover:bg-secondary"
+                          >
+                            Cancelar
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
                     {elements.length === 0 ? (
                       <div className="rounded-md border p-4 text-sm text-muted-foreground">
                         Agrega un componente o usa “Cargar plantilla básica”.
                       </div>
                     ) : (
                       <div className="space-y-2">
-                        {elements.map((el) => {
+                        {elements.map((el, idx) => {
                           const isSelected = el.id === selectedElementId
-                          const label =
+                          const isMulti = selectedIds.includes(el.id)
+                          const issue = validateBlock(el)
+                          const sub =
                             el.type === "heading"
-                              ? `Heading H${el.level}`
+                              ? el.text
                               : el.type === "plain_text"
-                                ? "Texto"
-                                : el.type === "text"
-                                  ? "HTML"
-                                  : el.type === "simple_section"
-                                    ? "Sección"
-                                    : el.type === "list"
-                                      ? "Lista"
-                                      : el.type === "image"
-                                        ? "Imagen"
-                                        : el.type === "matrix"
-                                          ? "Matriz"
-                                          : el.type === "divider"
-                                            ? "Separador"
-                                            : el.type === "page_break"
-                                              ? "Salto de página"
-                                              : el.type === "quote"
-                                                ? "Cita"
-                                                : "Documento"
+                                ? el.text
+                                : el.type === "simple_section"
+                                  ? el.title
+                                  : el.type === "list"
+                                    ? `${el.items.length} items`
+                                    : el.type === "table"
+                                      ? `${el.rows.length} filas`
+                                      : el.type === "quote"
+                                        ? el.item.name
+                                        : el.type === "image"
+                                          ? el.src || "(sin URL)"
+                                          : ""
                           return (
                             <div
                               key={el.id}
-                              className={`flex items-center justify-between gap-3 rounded-md border p-3 ${isSelected ? "border-primary" : ""}`}
+                              className={`flex items-center gap-1.5 rounded-[10px] border p-2.5 transition-colors ${
+                                isMulti
+                                  ? "border-brand bg-brand/10"
+                                  : isSelected
+                                    ? "border-brand bg-brand/5"
+                                    : "border-border hover:bg-secondary"
+                              }`}
                               draggable
                               onDragStart={(e) => {
                                 e.dataTransfer.setData("text/plain", el.id)
@@ -1319,37 +2558,72 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
                                 if (!dragId) return
                                 moveElement(dragId, el.id)
                               }}
-                              onClick={() => setSelectedElementId(el.id)}
+                              onClick={(e) => {
+                                if (e.ctrlKey || e.metaKey) {
+                                  setSelectedIds((cur) => (cur.includes(el.id) ? cur.filter((x) => x !== el.id) : [...cur, el.id]))
+                                } else {
+                                  setSelectedIds([])
+                                  setSelectedElementId(el.id)
+                                }
+                              }}
                             >
-                              <div className="flex min-w-0 items-center gap-2">
-                                <GripVertical className="h-4 w-4 text-muted-foreground" />
-                                <div className="min-w-0">
-                                  <div className="truncate text-sm font-medium">{label}</div>
-                                  <div className="truncate text-xs text-muted-foreground">
-                                    {el.type === "heading"
-                                      ? el.text
-                                      : el.type === "plain_text"
-                                        ? el.text
-                                        : el.type === "simple_section"
-                                          ? el.title
-                                          : el.type === "list"
-                                            ? `${el.items.length} items`
-                                            : el.type === "image"
-                                              ? el.src || "(sin URL)"
-                                              : ""}
-                                  </div>
-                                </div>
+                              <GripVertical className="h-4 w-4 shrink-0 cursor-grab text-muted-foreground" />
+                              {issue ? (
+                                <span title={issue} className="shrink-0 text-[var(--warning)]">
+                                  <AlertTriangle className="h-3.5 w-3.5" />
+                                </span>
+                              ) : null}
+                              <div className="min-w-0 flex-1">
+                                <div className="truncate text-[13px] font-semibold">{blockLabel(el)}</div>
+                                {sub ? <div className="truncate text-[11px] text-muted-foreground">{sub}</div> : null}
                               </div>
-                              <Button
-                                variant="destructive"
-                                size="icon-sm"
+                              <button
+                                type="button"
+                                disabled={idx === 0}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  moveElementBy(el.id, -1)
+                                }}
+                                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background hover:text-foreground disabled:opacity-30"
+                                aria-label="Subir bloque"
+                              >
+                                <ChevronUp className="h-4 w-4" />
+                              </button>
+                              <button
+                                type="button"
+                                disabled={idx === elements.length - 1}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  moveElementBy(el.id, 1)
+                                }}
+                                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background hover:text-foreground disabled:opacity-30"
+                                aria-label="Bajar bloque"
+                              >
+                                <ChevronDown className="h-4 w-4" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  duplicateElement(el.id)
+                                }}
+                                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
+                                aria-label="Duplicar bloque"
+                                title="Duplicar bloque"
+                              >
+                                <Copy className="h-[13px] w-[13px]" />
+                              </button>
+                              <button
+                                type="button"
                                 onClick={(e) => {
                                   e.stopPropagation()
                                   deleteElement(el.id)
                                 }}
+                                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--danger)] transition-colors hover:bg-danger-tint"
+                                aria-label="Eliminar bloque"
                               >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
                             </div>
                           )
                         })}
@@ -1359,32 +2633,12 @@ export function ReportsContent({ initialReports, projectId }: ReportsContentProp
                 </Card>
               </div>
             </div>
-          </TabsContent>
-          <TabsContent value="ai-chat">
-            <div className="h-[calc(100vh-12rem)] overflow-hidden rounded-lg border">
-              <PanelGroup direction="horizontal">
-                <Panel defaultSize={30} minSize={20}>
-                  <div className="h-full overflow-hidden">
-                    <AiReportChat projectId={projectId} onAddElement={addElement} />
-                  </div>
-                </Panel>
-                <PanelResizeHandle className="w-1 bg-border" />
-                <Panel defaultSize={70}>
-                  <div className="h-full overflow-auto bg-muted/20 p-8">
-                    <div className="mx-auto bg-white shadow-sm" style={{ width: "210mm", minHeight: "297mm", padding: "20mm" }}>
-                      <div dangerouslySetInnerHTML={{ __html: previewHtml }} />
-                    </div>
-                  </div>
-                </Panel>
-              </PanelGroup>
-            </div>
-          </TabsContent>
-        </Tabs>
+        </div>
 
         <Dialog open={isSaveDialogOpen} onOpenChange={setIsSaveDialogOpen}>
           <DialogContent className="sm:max-w-[500px]">
             <DialogHeader>
-              <DialogTitle>Guardar informe en Documentos</DialogTitle>
+              <DialogTitle>Archivar informe en Documentos</DialogTitle>
             </DialogHeader>
             <div className="grid gap-4 py-4">
               <div>

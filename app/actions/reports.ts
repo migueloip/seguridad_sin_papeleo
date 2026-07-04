@@ -4,7 +4,7 @@ import { sql } from "@/lib/db"
 import type { Report as DbReport } from "@/lib/db"
 import { generateText } from "ai"
 import type { LanguageModel } from "ai"
-import { getSetting } from "./settings"
+import { getAiSettings, getSetting } from "./settings"
 import { getModel } from "@/lib/ai"
 import { getCurrentUserId } from "@/lib/auth"
 import type { DesignerElement, EditorState, MatrixRow, Severity, Status } from "@/lib/pdf-editor"
@@ -207,12 +207,10 @@ export async function generateAIReport(
   projectId?: number,
 ): Promise<{ content: string; title: string; id: number }> {
   const userId = await getCurrentUserId()
-  const apiKey = await getSetting("ai_api_key")
-  const aiModel = (await getSetting("ai_model")) || "gemini-2.5-flash"
-  const aiProvider = "google"
+  const ai = await getAiSettings()
   const styleExamples = (await getSetting("ai_report_style_examples")) || ""
 
-  if (!apiKey) {
+  if (!ai.ready) {
     const reportTypeMap: Record<string, string> = {
       weekly: "Reporte Semanal de Seguridad",
       monthly: "Informe Mensual de Seguridad",
@@ -250,7 +248,7 @@ export async function generateAIReport(
       `Se recomienda mantener la vigilancia sobre los indicadores y ejecutar acciones correctivas oportunas.`
     const inserted = await sql<{ id: number }>`
       INSERT INTO reports (report_type, title, date_from, date_to, content, generated_by, project_id)
-      VALUES (${reportType}, ${title}, ${new Date(data.dateFrom)}, ${new Date(data.dateTo)}, ${JSON.stringify({ markdown: content })}::jsonb, 'Sistema (sin IA)', ${projectId || null})
+      VALUES (${reportType}, ${title}, ${new Date(data.dateFrom)}, ${new Date(data.dateTo)}, ${sql.json({ markdown: content })}, 'Sistema (sin IA)', ${projectId || null})
       RETURNING id
     `
     const idNum = Number(inserted[0].id)
@@ -313,12 +311,12 @@ Genera un informe estructurado con:
 El informe debe ser profesional, conciso y orientado a la accion. Usa formato Markdown.`
 
   try {
-    const model = getModel(aiProvider, aiModel, apiKey) as unknown as LanguageModel
+    const model = getModel(ai.provider, ai.model, ai.apiKey, ai.baseUrl) as unknown as LanguageModel
     const { text } = await generateText({ model, prompt })
 
     const inserted = await sql<{ id: number }>`
       INSERT INTO reports (report_type, title, date_from, date_to, content, generated_by, project_id)
-      VALUES (${reportType}, ${title}, ${new Date(data.dateFrom)}, ${new Date(data.dateTo)}, ${JSON.stringify({ markdown: text })}::jsonb, 'Sistema', ${projectId || null})
+      VALUES (${reportType}, ${title}, ${new Date(data.dateFrom)}, ${new Date(data.dateTo)}, ${sql.json({ markdown: text })}, 'Sistema', ${projectId || null})
       RETURNING id
     `
     const idNum = Number(inserted[0].id)
@@ -492,9 +490,7 @@ export async function fillPdfDesignerWithAI(args: FillPdfDesignerArgs): Promise<
   if (!userId) {
     throw new Error("Debes iniciar sesión")
   }
-  const apiKey = await getSetting("ai_api_key")
-  const aiModel = (await getSetting("ai_model")) || "gemini-2.5-flash"
-  const aiProvider = "google"
+  const ai = await getAiSettings()
 
   const data = await getReportData(args.period, args.projectId)
   const state = args.state
@@ -509,7 +505,7 @@ export async function fillPdfDesignerWithAI(args: FillPdfDesignerArgs): Promise<
     `Personal: total ${data.workers.total}`,
   ].join("\n")
 
-  if (!apiKey) {
+  if (!ai.ready) {
     const filled = templateElements.map((el) => {
       if (el.type === "plain_text" && !el.text.trim()) return { ...el, text: fallbackSummary }
       if (el.type === "simple_section" && !el.body.trim())
@@ -694,7 +690,7 @@ TEMPLATE_JSON (JSON):
 ${JSON.stringify(templateJson)}
 `
 
-  const model = getModel(aiProvider, aiModel, apiKey) as unknown as LanguageModel
+  const model = getModel(ai.provider, ai.model, ai.apiKey, ai.baseUrl) as unknown as LanguageModel
   const { text } = await generateText({ model, prompt })
   const parsed = parseJsonFromAiText(text)
   if (!parsed || typeof parsed !== "object") {
@@ -713,12 +709,10 @@ export async function fillMatrixWithAI(args: { projectId?: number; request?: str
   if (!userId) {
     throw new Error("Debes iniciar sesión")
   }
-  const apiKey = await getSetting("ai_api_key")
-  if (!apiKey) {
+  const ai = await getAiSettings()
+  if (!ai.ready) {
     return []
   }
-  const aiModel = (await getSetting("ai_model")) || "gemini-2.5-flash"
-  const aiProvider = "google"
 
   const data = await getReportData("monthly", args.projectId)
   const request = String(args.request || "").trim()
@@ -750,7 +744,7 @@ El resultado debe ser un arreglo JSON de objetos con estructura:
 ]
 `
 
-  const model = getModel(aiProvider, aiModel, apiKey) as unknown as LanguageModel
+  const model = getModel(ai.provider, ai.model, ai.apiKey, ai.baseUrl) as unknown as LanguageModel
   try {
     const { text } = await generateText({ model, prompt })
     const parsed = parseJsonFromAiText(text)
@@ -764,11 +758,9 @@ El resultado debe ser un arreglo JSON de objetos con estructura:
 export async function rewriteTextWithAI(input: string): Promise<string> {
   const trimmed = String(input || "").trim()
   if (!trimmed) return input
-  const apiKey = await getSetting("ai_api_key")
-  if (!apiKey) return input
-  const aiModel = (await getSetting("ai_model")) || "gemini-2.5-flash"
-  const aiProvider = "google"
-  const model = getModel(aiProvider, aiModel, apiKey) as unknown as LanguageModel
+  const ai = await getAiSettings()
+  if (!ai.ready) return input
+  const model = getModel(ai.provider, ai.model, ai.apiKey, ai.baseUrl) as unknown as LanguageModel
   const prompt = `Reescribe el siguiente texto en español con lenguaje técnico-formal chileno, claro y profesional, manteniendo el significado pero mejorando redacción y coherencia preventiva:\n\n${trimmed}`
   try {
     const { text } = await generateText({ model, prompt })
@@ -805,6 +797,13 @@ export async function getReportById(id: number) {
   return result[0]
 }
 
+export async function deleteReport(id: number): Promise<boolean> {
+  const userId = await getCurrentUserId()
+  if (!userId) return false
+  const res = await sql`DELETE FROM reports WHERE id = ${id} AND user_id = ${userId}`
+  return res.count > 0
+}
+
 export async function createManualReport(
   title: string,
   dateFrom: string,
@@ -816,7 +815,7 @@ export async function createManualReport(
   if (!userId) return null
   const inserted = await sql<{ id: number }>`
     INSERT INTO reports (report_type, title, date_from, date_to, content, generated_by, project_id, user_id)
-    VALUES ('manual', ${title}, ${new Date(dateFrom)}, ${new Date(dateTo)}, ${JSON.stringify({ markdown })}::jsonb, 'Usuario', ${projectId || null}, ${userId})
+    VALUES ('manual', ${title}, ${new Date(dateFrom)}, ${new Date(dateTo)}, ${sql.json({ markdown })}, 'Usuario', ${projectId || null}, ${userId})
     RETURNING id
   `
   return inserted[0]?.id ?? null
@@ -833,12 +832,71 @@ export async function updateReport(
   const nextTitle = fields.title ?? current[0].title
   const nextContent =
     fields.markdown !== undefined
-      ? JSON.stringify({ markdown: fields.markdown })
-      : JSON.stringify(current[0].content || { markdown: "" })
+      ? { markdown: fields.markdown }
+      : (current[0].content ?? { markdown: "" })
   await sql`
     UPDATE reports
-    SET title = ${nextTitle}, content = ${nextContent}::jsonb
+    SET title = ${nextTitle}, content = ${sql.json(nextContent)}
     WHERE id = ${id} AND user_id = ${userId}
   `
   return true
+}
+
+/** Estado del diseñador que el editor persiste dentro de reports.content.designer. */
+export interface DesignerSnapshot {
+  elements: DesignerElement[]
+  coverTitle: string
+  coverSubtitle: string
+  pageSize: string
+  pageMarginMm: number
+  numberSections: boolean
+}
+
+/**
+ * Guarda el informe del editor visual como un registro de `reports` (crea o
+ * actualiza). El estado completo del diseñador va en content.designer, de modo
+ * que al reabrir el informe se restauran los bloques tal cual; se conserva el
+ * markdown existente (informes generados por IA) si lo hubiera.
+ */
+export async function saveDesignerReport(args: {
+  id?: number | null
+  title: string
+  projectId?: number
+  designer: DesignerSnapshot
+}): Promise<number | null> {
+  const userId = await getCurrentUserId()
+  if (!userId) return null
+  const title = args.title.trim() || "Informe de Seguridad"
+
+  if (args.id) {
+    const current = await sql<DbReport>`
+      SELECT * FROM reports WHERE id = ${args.id} AND user_id = ${userId} LIMIT 1
+    `
+    if (!current[0]) return null
+    // Tolera contenido antiguo doble-serializado (jsonb string) al mezclar.
+    let prevContent: Record<string, unknown> = {}
+    const raw = current[0].content
+    if (raw && typeof raw === "object") prevContent = raw as Record<string, unknown>
+    else if (typeof raw === "string") {
+      try {
+        const parsed = JSON.parse(raw)
+        if (parsed && typeof parsed === "object") prevContent = parsed
+      } catch {}
+    }
+    const nextContent = { ...prevContent, designer: args.designer }
+    await sql`
+      UPDATE reports
+      SET title = ${title}, content = ${sql.json(nextContent)}
+      WHERE id = ${args.id} AND user_id = ${userId}
+    `
+    return args.id
+  }
+
+  const today = new Date()
+  const inserted = await sql<{ id: number }>`
+    INSERT INTO reports (report_type, title, date_from, date_to, content, generated_by, project_id, user_id)
+    VALUES ('manual', ${title}, ${today}, ${today}, ${sql.json({ designer: args.designer })}, 'Editor', ${args.projectId || null}, ${userId})
+    RETURNING id
+  `
+  return inserted[0]?.id ?? null
 }

@@ -1,27 +1,30 @@
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import Link from "next/link"
-import { login } from "@/app/actions/auth"
 import { AnimatedPage } from "@/components/animated-page"
+import { BrandMark } from "@/components/easysecure/brand-mark"
+import { AuthBrandPanel } from "@/components/easysecure/auth-brand-panel"
+import { LoginForm } from "@/components/easysecure/auth-forms"
+
+export const metadata = { title: "Iniciar sesión" }
 
 export default function LoginPage() {
   return (
     <AnimatedPage duration={400}>
-      <div className="flex min-h-screen items-center justify-center bg-background p-4">
-        <div className="w-full max-w-sm rounded-lg border border-border bg-card p-6 shadow-sm">
-          <h1 className="mb-4 text-xl font-semibold">Iniciar sesión</h1>
-          <form action={login} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input id="email" name="email" type="email" required autoComplete="email" />
+      <div className="grid min-h-screen lg:grid-cols-[1.05fr_1fr]">
+        <AuthBrandPanel />
+
+        {/* Panel de formulario */}
+        <div className="flex items-center justify-center bg-background p-6 sm:p-10">
+          <div className="w-full max-w-[380px]">
+            <div className="mb-8 flex items-center gap-3 lg:hidden">
+              <BrandMark size={36} />
+              <span className="font-display text-lg font-bold tracking-tight">Easysecure</span>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">Contraseña</Label>
-              <Input id="password" name="password" type="password" required autoComplete="current-password" />
-            </div>
-            <Button type="submit" className="w-full">Entrar</Button>
-          </form>
+            <h2 className="mb-1.5 font-display text-[26px] font-bold tracking-[-0.02em]">
+              Iniciar sesión
+            </h2>
+            <p className="mb-8 text-sm text-muted-foreground">Ingresa a tu panel de prevención.</p>
+
+            <LoginForm />
+          </div>
         </div>
       </div>
     </AnimatedPage>
