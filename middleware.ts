@@ -1,7 +1,9 @@
 import type { NextRequest } from "next/server"
 import { NextResponse } from "next/server"
 
-const PUBLIC_PATHS = ["/auth/login", "/auth/register", "/favicon.ico", "/icon.svg", "/apple-icon.png"]
+// "/" es pública: muestra la landing sin sesión y el panel con sesión (la
+// propia page.tsx decide). El resto de rutas de app siguen protegidas.
+const PUBLIC_PATHS = ["/", "/auth/login", "/auth/register", "/favicon.ico", "/icon.svg", "/apple-icon.png"]
 
 // Extensiones de assets estáticos que sirve /public/ y deben pasar sin auth.
 // Si auth bloquea estas peticiones, Next.js Image recibe el HTML del redirect
