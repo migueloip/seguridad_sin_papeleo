@@ -1,6 +1,13 @@
 import { NextResponse } from "next/server"
+import { getSession } from "@/lib/auth"
 
 export async function GET() {
+  // El middleware solo comprueba que exista la cookie; aquí se valida la sesión real.
+  const session = await getSession()
+  if (!session) {
+    return NextResponse.json({ error: "No autenticado" }, { status: 401 })
+  }
+
   const clientId = process.env.AUTODESK_CLIENT_ID
   const clientSecret = process.env.AUTODESK_CLIENT_SECRET
   if (!clientId || !clientSecret) {
@@ -40,7 +47,8 @@ export async function GET() {
       )
     }
 
-    return NextResponse.json(data)
+    // El token es una credencial: que ningún caché intermedio lo guarde.
+    return NextResponse.json(data, { headers: { "Cache-Control": "no-store" } })
   } catch {
     return NextResponse.json(
       { error: "Error de red al obtener token de Autodesk." },

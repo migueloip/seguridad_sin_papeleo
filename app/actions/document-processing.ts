@@ -2,9 +2,36 @@
 
 import { generateText } from "ai"
 import type { LanguageModel } from "ai"
-import { getAiSettings, getSetting } from "./settings"
+import { getAiSettings } from "./settings"
 import { getModel } from "@/lib/ai"
+import { getCurrentUserId } from "@/lib/auth"
 import { formatRut } from "@/lib/utils"
+
+// Límites de entrada (este archivo es "use server": cada export es un endpoint
+// público, así que todo se valida aquí aunque el cliente ya lo haga).
+/** Máximo del base64 de una imagen/PDF (8 MB, igual que bodySizeLimit). */
+const MAX_BASE64_CHARS = 8 * 1024 * 1024
+/** Máximo de la descripción en lenguaje natural del editor de documentos. */
+const MAX_DESCRIPTION_CHARS = 4000
+
+const BASE64_RE = /^[A-Za-z0-9+/_-]+={0,2}$/
+const MIME_RE = /^(image\/[a-z0-9.+-]{1,60}|application\/pdf)$/i
+
+async function requireUserId(): Promise<number> {
+  const userId = await getCurrentUserId()
+  if (!userId) throw new Error("No autenticado")
+  return Number(userId)
+}
+
+function assertFileInput(base64: unknown, mime: unknown): { base64: string; mime: string } {
+  if (typeof base64 !== "string" || !base64) throw new Error("No se recibió el archivo.")
+  if (base64.length > MAX_BASE64_CHARS) throw new Error("El archivo supera el tamaño máximo (8 MB).")
+  if (!BASE64_RE.test(base64)) throw new Error("El archivo no tiene un formato válido.")
+  if (typeof mime !== "string" || !MIME_RE.test(mime)) {
+    throw new Error("Tipo de archivo no soportado. Usa una imagen o un PDF.")
+  }
+  return { base64, mime: mime.toLowerCase() }
+}
 
 interface ExtractedData {
   rut: string | null
@@ -27,7 +54,12 @@ export async function parseDocumentDescription(text: string): Promise<{
   vigenciaMeses: number | null
   notas: string | null
 }> {
+  await requireUserId()
   const empty = { tipoDocumento: null, nombre: null, vigenciaMeses: null, notas: null }
+  if (typeof text !== "string") throw new Error("La descripción no es válida.")
+  if (text.length > MAX_DESCRIPTION_CHARS) {
+    throw new Error(`La descripción es demasiado larga (máximo ${MAX_DESCRIPTION_CHARS} caracteres).`)
+  }
   const ai = await getAiSettings()
   if (!ai.ready || !text.trim()) return empty
   const prompt =
@@ -54,6 +86,8 @@ export async function parseDocumentDescription(text: string): Promise<{
 }
 
 export async function extractDocumentData(base64Image: string, mimeType: string): Promise<ExtractedData> {
+  await requireUserId()
+  const file = assertFileInput(base64Image, mimeType)
   const ai = await getAiSettings()
   if (!ai.ready) {
     return {
@@ -87,7 +121,7 @@ Responde SOLO con el JSON, sin explicaciones adicionales. Si no puedes extraer a
           role: "user",
           content: [
             { type: "text", text: prompt },
-            { type: "image", image: `data:${mimeType};base64,${base64Image}` },
+            { type: "image", image: `data:${file.mime};base64,${file.base64}` },
           ],
         },
       ],
@@ -126,6 +160,8 @@ export interface ClassificationResult {
 }
 
 export async function classifyUpload(base64: string, mime: string): Promise<ClassificationResult> {
+  await requireUserId()
+  const file = assertFileInput(base64, mime)
   const ai = await getAiSettings()
   if (!ai.ready) {
     return { target: "document" }
@@ -139,7 +175,7 @@ export async function classifyUpload(base64: string, mime: string): Promise<Clas
     messages: [
       {
         role: "user",
-        content: [{ type: "text", text: prompt }, { type: "image", image: `data:${mime};base64,${base64}` }],
+        content: [{ type: "text", text: prompt }, { type: "image", image: `data:${file.mime};base64,${file.base64}` }],
       },
     ],
   })

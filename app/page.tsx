@@ -1,9 +1,10 @@
-import { DashboardContent } from "@/components/dashboard-content"
+import { DashboardContent, type ObraMembershipLink } from "@/components/dashboard-content"
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { getSession } from "@/lib/auth"
 import { getDashboardStats } from "@/app/actions/dashboard"
 import { AnimatedPage } from "@/components/animated-page"
 import { Landing } from "@/components/easysecure/landing"
+import { listProjectAccessForUser } from "@/lib/obra/access"
 
 // Next.js detecta automáticamente que la página es dinámica al usar cookies()
 // vía getSession(); el `force-dynamic` explícito es redundante.
@@ -21,6 +22,17 @@ export default async function Home() {
 
   const stats = await getDashboardStats()
 
+  // Obras de otros dueños donde la persona es integrante (jefe, trabajador, visita...): el
+  // panel heredado muestra solo datos propios, así que se le ofrece entrar directo a su obra.
+  let obraMemberships: ObraMembershipLink[] = []
+  try {
+    obraMemberships = (await listProjectAccessForUser(Number(session.user_id)))
+      .filter((a) => !a.is_owner)
+      .map((a) => ({ project_id: a.project_id, project_name: a.project_name, role: a.role }))
+  } catch (e) {
+    console.error("[inicio] no se pudieron leer las obras del usuario", e)
+  }
+
   // Construct user object matching DashboardLayout expectation
   const layoutUser = {
     name: session.name,
@@ -36,6 +48,7 @@ export default async function Home() {
         <DashboardContent
           stats={stats}
           userName={session.name || session.email.split("@")[0]}
+          obraMemberships={obraMemberships}
         />
       </DashboardLayout>
     </AnimatedPage>

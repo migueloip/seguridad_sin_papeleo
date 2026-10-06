@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { sql } from "@/lib/db"
 import { getSession } from "@/lib/auth"
+import { applyObraSchema } from "@/lib/obra/schema"
 
 export async function POST(req: Request) {
   try {
@@ -9,6 +10,11 @@ export async function POST(req: Request) {
     if ((session.role || "user") !== "admin") return NextResponse.json({ error: "forbidden" }, { status: 403 })
     const url = new URL(req.url)
     const scope = url.searchParams.get("scope")
+    if (scope === "obra") {
+      // Migración 006 (Obra Integral): idempotente y con advisory lock.
+      await applyObraSchema(sql)
+      return NextResponse.json({ ok: true, scope: "obra" })
+    }
     if (scope === "admonitions") {
       await sql`CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, email VARCHAR(255) UNIQUE NOT NULL, name VARCHAR(255), password_hash VARCHAR(255) NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`
       await sql`ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'user'`

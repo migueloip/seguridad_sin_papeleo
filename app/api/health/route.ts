@@ -3,18 +3,19 @@ import { sql } from "@/lib/db"
 import { getSetting } from "@/app/actions/settings"
 
 export async function GET() {
-  const result: { db: "ok" | "error"; aiConfigured: boolean; admonitionsExists?: boolean; message?: string } = {
+  const result: { db: "ok" | "error"; aiConfigured: boolean; admonitionsExists?: boolean } = {
     db: "ok",
     aiConfigured: false,
   }
   try {
     await sql`SELECT 1`
   } catch (e: unknown) {
+    // Endpoint público: el detalle del error (host, usuario, etc.) solo va al log.
+    console.error("[health] error de base de datos:", e)
     result.db = "error"
-    result.message = e instanceof Error ? e.message : "db error"
   }
   try {
-    const rows = await sql<{ exists: boolean }>`
+    const rows = await sql<{ exists: boolean }[]>`
       SELECT EXISTS (
         SELECT 1
         FROM information_schema.tables

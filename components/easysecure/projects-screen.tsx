@@ -1,9 +1,10 @@
 "use client"
 
 import { useState, useTransition } from "react"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
-import { MapPin, Plus, X } from "lucide-react"
+import { ArrowRight, HardHat, MapPin, Plus, X } from "lucide-react"
 import { createProject } from "@/app/actions/projects"
 import { logout } from "@/app/actions/auth"
 import { BrandMark } from "@/components/easysecure/brand-mark"
@@ -133,6 +134,14 @@ export function ProjectsScreen({
           <p className="text-[15px] text-[#f6f4ee]/55">
             Cada proyecto guarda sus propios hallazgos, documentos, planos y personal.
           </p>
+          <Link
+            href="/obra"
+            className="mt-5 inline-flex min-h-10 items-center gap-2 rounded-[11px] border border-brand/40 bg-brand/10 px-4 py-2 text-[13px] font-semibold text-brand transition-colors hover:bg-brand/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+          >
+            <HardHat className="h-4 w-4 shrink-0" />
+            <span>Obra integral: equipo, planos por especialidad y tareas</span>
+            <ArrowRight className="h-4 w-4 shrink-0" />
+          </Link>
         </div>
 
         {/* Grid */}

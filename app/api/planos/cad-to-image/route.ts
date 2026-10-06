@@ -1,12 +1,25 @@
 import { NextResponse } from "next/server"
+import { getSession } from "@/lib/auth"
+
+/** Máximo del base64 de un archivo CAD (25 MB de texto). */
+const MAX_CAD_BASE64_CHARS = 25 * 1024 * 1024
 
 export async function POST(req: Request) {
+  // El middleware solo comprueba que exista la cookie; aquí se valida la sesión real.
+  const session = await getSession()
+  if (!session) {
+    return NextResponse.json({ error: "No autenticado" }, { status: 401 })
+  }
+
   try {
     const body = (await req.json()) as { base64?: string; ext?: string }
     const base64 = typeof body.base64 === "string" ? body.base64.trim() : ""
     const extRaw = typeof body.ext === "string" ? body.ext.trim().toLowerCase() : ""
     if (!base64) {
       return NextResponse.json({ error: "Falta contenido del archivo CAD" }, { status: 400 })
+    }
+    if (base64.length > MAX_CAD_BASE64_CHARS) {
+      return NextResponse.json({ error: "El archivo CAD supera el tamaño máximo permitido." }, { status: 413 })
     }
     if (!extRaw || (extRaw !== "dxf" && extRaw !== "dwg")) {
       return NextResponse.json({ error: "Extensión de archivo CAD no soportada" }, { status: 400 })
@@ -45,7 +58,7 @@ export async function POST(req: Request) {
       )
     }
     return NextResponse.json({ dataUrl: data.dataUrl, mimeType: data.mimeType || "image/png" })
-  } catch (e) {
+  } catch {
     return NextResponse.json(
       {
         error: "Error procesando archivo CAD. Exporta el plano como imagen o PDF.",

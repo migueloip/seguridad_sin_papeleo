@@ -5,6 +5,9 @@
 - `npm run build` - Production build
 - `npm run lint` - Run ESLint
 - `npm run test` - Run vitest (not jest)
+- `npm run test:obra:int` - Tests de integración del módulo Obra contra Postgres real
+  (usa `TEST_DATABASE_ADMIN_URL`; por defecto `postgres://postgres:postgres@localhost:5432/postgres`)
+- `npm run seed:obra-demo -- --owner-email <correo>` - Obra demo "Edificio Demo Los Aromos"
 
 ## Required Environment Variables
 ```
@@ -14,6 +17,8 @@ ADMIN_PASSWORD=
 CONFIG_ENCRYPTION_SECRET=
 SUPABASE_URL=
 SUPABASE_SERVICE_KEY=
+# Opcional (módulo Obra): "0" desactiva la migración 006 automática al primer uso
+OBRA_AUTO_MIGRATE=
 ```
 
 ## Testing
@@ -39,7 +44,8 @@ SUPABASE_SERVICE_KEY=
 - Ignore generated 3D files: `public/architect3d/**`
 
 ## Database
-- SQL migrations in `scripts/*.sql` (001-005)
+- SQL migrations in `scripts/*.sql` (001-006). La 006 (Obra Integral) es un
+  espejo generado de `lib/obra/schema.ts` (ver sección "Módulo Obra Integral").
 - Provider: **Supabase** (Postgres) — el `lib/db.ts` detecta hostnames de
   Supabase pooler / db.*.supabase.co y aplica `sslmode=require` y puerto 6543
   automáticamente.
@@ -66,3 +72,85 @@ SUPABASE_SERVICE_KEY=
 - Core logic: `src/`
 - Database: `lib/db.ts`
 - Auth: `lib/auth.ts`, `lib/mobile-auth.ts`
+
+## Módulo Obra Integral (`/obra`)
+Plan y contratos completos: `docs/PLAN-OBRA-INTEGRAL.md`. Resumen para agentes:
+
+### Estructura
+- `lib/obra/*.ts` (puros, usables en cliente salvo `access.ts` y `schema.ts`):
+  `types.ts` (catálogos y DTOs, el contrato compartido), `permissions.ts`
+  (matriz rol→permiso, `can`), `geometry.ts` (marcos de capa y distancias),
+  `rules.ts` + `correlation.ts` (motor determinista hallazgo→elementos
+  cercanos), `classify.ts`, `metrics.ts`, `suggestions.ts` (esquemas zod de
+  payloads y transiciones), `dxf.ts` (importación DXF ASCII),
+  `client-files.ts` (imagen/PDF → data URL en el navegador).
+- Solo servidor: `lib/obra/access.ts` (sesión → acceso, errores, auditoría),
+  `lib/obra/schema.ts` (DDL 006) y `lib/obra/server/*.ts` (lógica sin
+  `"use server"`; cada función recibe `actorUserId` explícito y se reutiliza
+  desde acciones, API móvil y tests).
+- `app/actions/obra/*.ts`: acciones `"use server"` finas
+  (`requireSessionUserId` → `lib/obra/server/*` → `revalidatePath` →
+  `ActionResult<T>` con `toActionError`). Cada export es un endpoint público:
+  solo funciones async.
+- Rutas: `app/obra/**` (páginas), `components/obra/**` (UI),
+  `app/api/obra/layers/[id]/image` (imagen de capa con control de acceso),
+  `app/api/mobile/obra/**` (tareas con Bearer).
+- Componentes cliente: nunca importar `lib/obra/server/*`, `lib/obra/access.ts`,
+  `lib/db` ni `lib/auth` (rompe el build).
+
+### Reglas de autorización
+- Toda función de servidor autoriza con
+  `requireProjectPermissionForUser(actorUserId, projectId, permiso)`.
+- Si recibe el id de una entidad (tarea, sugerencia, capa, elemento, hallazgo,
+  revisión), primero lee su `project_id` en la BD y autoriza contra ESE
+  proyecto; si no existe o no hay acceso → `ObraAccessError(404)` (no revelar
+  que existe). Toda referencia cruzada (`finding_id`, `layer_id`,
+  `inspection_id`, `assigned_user_id`...) debe pertenecer al mismo proyecto.
+- Tenant = dueño del proyecto (`projects.user_id`): es gerente implícito y los
+  registros en tablas heredadas (`findings`) se guardan con su `user_id`. El
+  resto del equipo entra por `obra_members`.
+- Errores: `ObraValidationError` (mensaje mostrable en español) y
+  `ObraAccessError` (401/403/404). Nunca devolver mensajes internos de la BD.
+- La UI oculta acciones con `can(role, permiso)`, pero la autorización real es
+  siempre la del servidor.
+
+### Humano en el circuito (HITL)
+- La IA nunca escribe en tareas, hallazgos ni planos: crea filas en
+  `obra_ai_suggestions` (`pending`). Sin IA configurada, el motor de reglas
+  genera las mismas sugerencias (`generator = 'reglas'`).
+- Aplicar una sugerencia exige `ai.review` (y `ai.review_critical` si es
+  crítica), se hace en una transacción con `SELECT … FOR UPDATE` y queda
+  auditada. La BD lo refuerza: CHECK `obra_suggestion_reviewed_by_human` y
+  `obra_tasks.suggestion_id UNIQUE`.
+- "Anotar en tareas de la próxima revisión" crea la tarea en la próxima
+  revisión abierta (o una "Revisión semanal" a 7 días si no hay).
+- La IA usa la configuración de IA del dueño del proyecto (`/configuracion`).
+
+### Migración 006
+- Automática: `ensureObraSchema()` la aplica una vez por proceso al primer uso
+  del módulo, con advisory lock (`7262006`). `OBRA_AUTO_MIGRATE=0` la desactiva.
+- Manual: `POST /api/admin/migrate?scope=obra` (sesión de admin) o
+  `psql -f scripts/006-obra-integral.sql`. El seed demo también la aplica si falta.
+- `scripts/006-obra-integral.sql` se GENERA desde `lib/obra/schema.ts`
+  (no editar a mano): `UPDATE_OBRA_SQL=1 npx vitest run lib/obra/schema.test.ts`.
+
+### Tests
+- Unitarios puros: `npx vitest run lib/obra`.
+- Integración con Postgres real (`tests/obra/*.int.test.ts`, se saltan sin la
+  variable). Cada archivo crea su propia BD `ssp_test_<nombre>` desde
+  `tests/obra/baseline.sql` + 006 (ver `tests/obra/helpers.ts`), así que corren
+  en paralelo:
+  ```bash
+  TEST_DATABASE_ADMIN_URL=postgres://postgres:postgres@localhost:5432/postgres npx vitest run tests/obra
+  # o: npm run test:obra:int
+  ```
+  Usar `// @vitest-environment node`, `vi.mock("@/lib/auth", ...)` con
+  `authMock` + `actAs(userId)` y un nombre de BD único por archivo.
+
+### Datos demo
+- `DATABASE_URL=... npm run seed:obra-demo -- --owner-email <correo>` crea
+  (idempotente, sin borrar nada) la obra "Edificio Demo Los Aromos" para ese
+  usuario (debe existir), con miembros demo `*.demo@losaromos.test` (clave
+  `Demo1234!`, solo al crearlos; `--reset-passwords` la restablece), capas del
+  nivel 1 con elementos, un hallazgo junto al colector, una revisión y tareas.
+

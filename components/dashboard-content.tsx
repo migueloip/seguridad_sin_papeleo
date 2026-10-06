@@ -1,14 +1,20 @@
 "use client"
 
 import Link from "next/link"
-import { ShieldCheck, TriangleAlert, Clock, Plus, FileText, TrendingUp } from "lucide-react"
+import { ShieldCheck, TriangleAlert, Clock, Plus, FileText, TrendingUp, HardHat, ChevronRight } from "lucide-react"
 import type { DashboardStats } from "@/app/actions/dashboard"
+import { OBRA_ROLE_LABELS, type ObraRole } from "@/lib/obra/types"
 import { FindingsChart } from "./findings-chart"
+
+/** Obra donde el usuario participa como integrante del equipo (no como dueño). */
+export type ObraMembershipLink = { project_id: number; project_name: string; role: ObraRole }
 
 interface DashboardContentProps {
   stats: DashboardStats
   userName?: string | null
   projectName?: string | null
+  /** Obras de otros dueños donde el usuario es integrante: se muestran arriba con acceso directo. */
+  obraMemberships?: ObraMembershipLink[]
 }
 
 const SEV: Record<string, { label: string; color: string; tint: string }> = {
@@ -19,17 +25,24 @@ const SEV: Record<string, { label: string; color: string; tint: string }> = {
 }
 
 function greeting(): string {
-  const h = new Date().getHours()
+  // Hora de Chile en servidor y navegador por igual: si el servidor corre en UTC, usar la
+  // hora local de cada lado hacía que el saludo no calzara al hidratar (error #418 de React).
+  const h = Number(
+    new Intl.DateTimeFormat("en-US", { timeZone: "America/Santiago", hour: "numeric", hourCycle: "h23" }).format(new Date()),
+  )
   return h < 12 ? "Buenos días" : h < 19 ? "Buenas tardes" : "Buenas noches"
 }
 
 function fmtDate(s: string): string {
-  const d = new Date(s)
+  // created_at llega como texto sin zona (TIMESTAMP de la BD, en UTC). Sin la "Z", el servidor
+  // (UTC) y el navegador (Chile) lo leían distinto y la fecha no calzaba al hidratar.
+  const iso = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(s) ? `${s.replace(" ", "T")}Z` : s
+  const d = new Date(iso)
   if (isNaN(d.getTime())) return s
-  return d.toLocaleDateString("es-CL", { day: "2-digit", month: "short" })
+  return d.toLocaleDateString("es-CL", { day: "2-digit", month: "short", timeZone: "America/Santiago" })
 }
 
-export function DashboardContent({ stats, userName, projectName }: DashboardContentProps) {
+export function DashboardContent({ stats, userName, projectName, obraMemberships = [] }: DashboardContentProps) {
   const openFindings = stats.findings.open + stats.findings.in_progress
   const compliance =
     stats.documents.total > 0
@@ -49,7 +62,14 @@ export function DashboardContent({ stats, userName, projectName }: DashboardCont
             Estado general de seguridad{projectName ? ` · ${projectName}` : ""}
           </p>
         </div>
-        <div className="flex gap-2.5">
+        <div className="flex flex-wrap gap-2.5">
+          <Link
+            href="/obra"
+            className="flex h-10 items-center gap-2 rounded-[11px] border border-brand/40 bg-brand/10 px-[15px] text-[13px] font-semibold transition-colors hover:bg-brand/20"
+          >
+            <HardHat className="h-4 w-4 text-brand" />
+            Obra integral
+          </Link>
           <Link
             href="/hallazgos"
             className="flex h-10 items-center gap-2 rounded-[11px] border border-border bg-card px-[15px] text-[13px] font-semibold transition-colors hover:bg-secondary"
@@ -66,6 +86,37 @@ export function DashboardContent({ stats, userName, projectName }: DashboardCont
           </Link>
         </div>
       </div>
+
+      {obraMemberships.length > 0 ? (
+        <section
+          aria-labelledby="obra-membresias"
+          className="rounded-[14px] border border-brand/40 bg-brand/10 p-4"
+        >
+          <h2 id="obra-membresias" className="flex items-center gap-2 font-display text-base font-semibold">
+            <HardHat className="h-[18px] w-[18px] text-brand" />
+            {obraMemberships.length === 1 ? "Eres parte del equipo de una obra" : "Eres parte del equipo de estas obras"}
+          </h2>
+          <p className="mb-3 mt-0.5 text-[13px] text-muted-foreground">
+            Ahí están tus tareas, los planos y el botón para reportar una condición insegura.
+          </p>
+          <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {obraMemberships.map((m) => (
+              <li key={m.project_id}>
+                <Link
+                  href={`/obra/${m.project_id}`}
+                  className="flex min-h-12 items-center gap-3 rounded-[11px] border border-border bg-card px-3.5 py-2.5 transition-colors hover:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-semibold">{m.project_name}</span>
+                    <span className="block truncate text-xs text-muted-foreground">{OBRA_ROLE_LABELS[m.role]}</span>
+                  </span>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       {/* KPIs */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

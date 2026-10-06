@@ -1,13 +1,34 @@
-import { streamText, convertToModelMessages, type UIMessage } from "ai"
+import { streamText, convertToModelMessages, type LanguageModel, type UIMessage } from "ai"
 import { getModel } from "@/lib/ai"
 import { getAiSettings } from "@/app/actions/settings"
 import { sql } from "@/lib/db"
-import { getCurrentUserId } from "@/lib/auth"
+import { getSession } from "@/lib/auth"
 
 export const maxDuration = 30
 
+/** Máximo de mensajes aceptados por conversación (evita cuerpos gigantes contra la IA). */
+const MAX_MESSAGES = 100
+
 export async function POST(req: Request) {
-  const { messages, projectId } = (await req.json()) as { messages: UIMessage[]; projectId?: number }
+  // El middleware solo comprueba que exista la cookie; aquí se valida la sesión real.
+  const session = await getSession()
+  if (!session) {
+    return new Response("No autenticado", { status: 401 })
+  }
+  const userId = Number(session.user_id)
+
+  let body: { messages?: unknown; projectId?: unknown }
+  try {
+    body = (await req.json()) as { messages?: unknown; projectId?: unknown }
+  } catch {
+    return new Response("Solicitud inválida", { status: 400 })
+  }
+  if (!Array.isArray(body?.messages) || body.messages.length > MAX_MESSAGES) {
+    return new Response("Solicitud inválida", { status: 400 })
+  }
+  const messages = body.messages as UIMessage[]
+  const rawPid = Number(body.projectId)
+  const projectId = Number.isSafeInteger(rawPid) && rawPid > 0 ? rawPid : null
 
   const ai = await getAiSettings()
   if (!ai.ready) {
@@ -19,9 +40,8 @@ export async function POST(req: Request) {
   // Datos del ESTADO VIGENTE (sin filtro de fecha), por usuario (RLS) y proyecto si aplica.
   let context = ""
   try {
-    const userId = await getCurrentUserId()
     if (userId) {
-      const pid = projectId ?? null
+      const pid = projectId
       const [fr, dr, wr, recent] = await Promise.all([
         sql<{
           total: number
@@ -30,7 +50,7 @@ export async function POST(req: Request) {
           critical_open: number
           high_open: number
           overdue: number
-        }>`
+        }[]>`
           SELECT
             COUNT(*)::int as total,
             COUNT(*) FILTER (WHERE status IN ('open', 'in_progress'))::int as open,
@@ -41,7 +61,7 @@ export async function POST(req: Request) {
           FROM findings
           WHERE user_id = ${userId} AND (${pid}::int IS NULL OR project_id = ${pid}::int)
         `,
-        sql<{ total: number; expired: number; expiring: number }>`
+        sql<{ total: number; expired: number; expiring: number }[]>`
           SELECT
             COUNT(*)::int as total,
             COUNT(*) FILTER (WHERE expiry_date IS NOT NULL AND expiry_date < CURRENT_DATE)::int as expired,
@@ -49,11 +69,11 @@ export async function POST(req: Request) {
           FROM documents
           WHERE user_id = ${userId}
         `,
-        sql<{ total: number }>`
+        sql<{ total: number }[]>`
           SELECT COUNT(*)::int as total FROM workers
           WHERE user_id = ${userId} AND (${pid}::int IS NULL OR project_id = ${pid}::int)
         `,
-        sql<{ id: number; title: string; severity: string }>`
+        sql<{ id: number; title: string; severity: string }[]>`
           SELECT id, title, severity FROM findings
           WHERE user_id = ${userId} AND status IN ('open', 'in_progress')
             AND (${pid}::int IS NULL OR project_id = ${pid}::int)
@@ -80,7 +100,7 @@ export async function POST(req: Request) {
     // Sin datos: el asistente responde igual, indicando que no pudo leer el proyecto.
   }
 
-  const model = getModel(ai.provider, ai.model, ai.apiKey, ai.baseUrl)
+  const model = getModel(ai.provider, ai.model, ai.apiKey, ai.baseUrl) as unknown as LanguageModel
   const system =
     `Eres el asistente de Easysecure, experto en prevención de riesgos para obras de construcción en Chile. ` +
     `Respondes preguntas sobre este proyecto (hallazgos, documentos y vencimientos, personal, planos de riesgo, ` +
@@ -91,7 +111,7 @@ export async function POST(req: Request) {
   const result = streamText({
     model,
     system,
-    messages: await convertToModelMessages(messages),
+    messages: convertToModelMessages(messages),
   })
 
   return result.toUIMessageStreamResponse()

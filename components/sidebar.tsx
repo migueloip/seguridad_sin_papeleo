@@ -17,6 +17,7 @@ import {
   ShieldCheck,
   Building2,
   ChevronsUpDown,
+  HardHat,
   LogOut,
   X,
 } from "lucide-react"
@@ -24,7 +25,7 @@ import type { LucideIcon } from "lucide-react"
 import { logout } from "@/app/actions/auth"
 import { getSetting } from "@/app/actions/settings"
 import { BrandMark } from "@/components/easysecure/brand-mark"
-import { projectBase, sectionFromPath, type SectionKey } from "@/components/easysecure/sections"
+import { obraHref, projectBase, sectionFromPath, type SectionKey } from "@/components/easysecure/sections"
 
 interface SidebarComponentProps {
   open: boolean
@@ -76,8 +77,9 @@ export function Sidebar({
   }, [])
   const on = (k: SectionKey) => enabled?.[k] !== false && !navDisabled.includes(k)
 
-  const items: NavItem[] = [
+  const allItems: NavItem[] = [
     { key: "dashboard", name: "Principal", icon: LayoutGrid, href: "/" },
+    { key: "obra", name: "Obra integral", icon: HardHat, href: obraHref(pathname) },
     { key: "hallazgos", name: "Hallazgos", icon: TriangleAlert, href: `${base}/hallazgos`, badge: openFindings },
     { key: "ia", name: "IA", icon: Sparkles, href: "/ia", chip: "CHAT" },
     { key: "documentos", name: "Documentos", icon: FileText, href: `${base}/documentos` },
@@ -85,7 +87,8 @@ export function Sidebar({
     { key: "personal", name: "Personal", icon: Users, href: `${base}/personal` },
     { key: "planos", name: "Planos · Riesgos", icon: Layers, href: `${base}/planos` },
     { key: "checklists", name: "Checklists", icon: ClipboardCheck, href: "/checklists" },
-  ].filter((it) => it.key === "dashboard" || it.key === "ia" || on(it.key as SectionKey))
+  ]
+  const items = allItems.filter((it) => it.key === "dashboard" || it.key === "ia" || on(it.key))
 
   const renderNav = (it: NavItem) => {
     const isActive = active === it.key
