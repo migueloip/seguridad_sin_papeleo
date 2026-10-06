@@ -460,7 +460,12 @@ export const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
   cancelada: "Cancelada",
 }
 
-export const TASK_ORIGINS = ["manual", "ia", "hallazgo"] as const
+/**
+ * Origen de una tarea: creada a mano, desde un hallazgo, o al aprobar una
+ * sugerencia redactada por un modelo de IA ("ia") o por el motor de reglas
+ * ("reglas"). Las dos últimas siempre llevan suggestion_id.
+ */
+export const TASK_ORIGINS = ["manual", "ia", "reglas", "hallazgo"] as const
 export type TaskOrigin = (typeof TASK_ORIGINS)[number]
 
 export type ObraTask = {
@@ -533,6 +538,74 @@ export type ObraMember = {
   worker_name: string | null
   is_owner: boolean
   created_at: string | null
+}
+
+// Invitaciones al equipo (reemplazan el alta directa con contraseña temporal)
+
+export const INVITATION_STATUSES = ["pendiente", "aceptada", "revocada", "vencida"] as const
+export type InvitationStatus = (typeof INVITATION_STATUSES)[number]
+export const INVITATION_STATUS_LABELS: Record<InvitationStatus, string> = {
+  pendiente: "Pendiente",
+  aceptada: "Aceptada",
+  revocada: "Revocada",
+  vencida: "Vencida",
+}
+
+/** Días que dura un enlace de invitación. */
+export const INVITATION_TTL_DAYS = 7
+
+/** Invitación vista por quien gestiona el equipo (nunca incluye el token). */
+export type ObraInvitation = {
+  id: number
+  project_id: number
+  email: string
+  name: string | null
+  role: ObraRole
+  worker_id: number | null
+  worker_name: string | null
+  invited_by: number | null
+  invited_by_name: string | null
+  status: InvitationStatus
+  created_at: string
+  expires_at: string
+  accepted_at: string | null
+}
+
+/**
+ * Vista pública de una invitación (página /invitacion/[token]). Solo la ve
+ * quien tiene el enlace; no revela si el correo ya tiene cuenta.
+ */
+export type InvitationPreview = {
+  project_name: string
+  role: ObraRole
+  email: string
+  name: string | null
+  inviter_name: string | null
+  status: InvitationStatus
+  expires_at: string
+}
+
+/** Resultado de crear o regenerar una invitación: el enlace se muestra una sola vez. */
+export type InvitationLink = {
+  invitation: ObraInvitation
+  /** URL absoluta /invitacion/<token>. Solo se guarda el hash del token. */
+  url: string
+}
+
+// Subida directa de planos a Supabase Storage (evita el límite de tamaño de las server actions)
+
+/** Permiso de subida firmado para una imagen de capa. */
+export type LayerUploadTicket = {
+  /** Ruta interna del objeto en el bucket privado (obra/<projectId>/uploads/<uuid>.<ext>). */
+  path: string
+  /** URL absoluta a la que el navegador hace PUT del archivo. */
+  upload_url: string
+  /** Token de la URL firmada (ya incluido en upload_url; se expone para depurar). */
+  token: string
+  /** Segundos de validez de la URL firmada. */
+  expires_in: number
+  max_bytes: number
+  mime: string
 }
 
 export type ProjectAccess = {

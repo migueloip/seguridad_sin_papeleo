@@ -138,7 +138,7 @@ CREATE TABLE IF NOT EXISTS obra_tasks (
   description TEXT,
   priority VARCHAR(10) NOT NULL DEFAULT 'media' CHECK (priority IN ('baja', 'media', 'alta', 'critica')),
   status VARCHAR(20) NOT NULL DEFAULT 'pendiente' CHECK (status IN ('pendiente', 'en_progreso', 'hecha', 'cancelada')),
-  origin VARCHAR(10) NOT NULL DEFAULT 'manual' CHECK (origin IN ('manual', 'ia', 'hallazgo')),
+  origin VARCHAR(10) NOT NULL DEFAULT 'manual' CHECK (origin IN ('manual', 'ia', 'reglas', 'hallazgo')),
   suggestion_id INTEGER UNIQUE REFERENCES obra_ai_suggestions(id) ON DELETE SET NULL,
   finding_id INTEGER REFERENCES findings(id) ON DELETE SET NULL,
   layer_id INTEGER REFERENCES obra_plan_layers(id) ON DELETE SET NULL,
@@ -163,6 +163,38 @@ CREATE INDEX IF NOT EXISTS idx_obra_tasks_project_status ON obra_tasks(project_i
 CREATE INDEX IF NOT EXISTS idx_obra_tasks_assigned_user ON obra_tasks(assigned_user_id);
 
 CREATE INDEX IF NOT EXISTS idx_obra_tasks_inspection ON obra_tasks(inspection_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint c
+    WHERE c.conname = 'obra_tasks_origin_check' AND c.conrelid = 'obra_tasks'::regclass AND pg_get_constraintdef(c.oid) LIKE '%''manual''%' AND pg_get_constraintdef(c.oid) LIKE '%''ia''%' AND pg_get_constraintdef(c.oid) LIKE '%''reglas''%' AND pg_get_constraintdef(c.oid) LIKE '%''hallazgo''%'
+  ) THEN
+    ALTER TABLE obra_tasks DROP CONSTRAINT IF EXISTS obra_tasks_origin_check;
+    ALTER TABLE obra_tasks ADD CONSTRAINT obra_tasks_origin_check CHECK (origin IN ('manual', 'ia', 'reglas', 'hallazgo'));
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS obra_invitations (
+  id SERIAL PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  email VARCHAR(255) NOT NULL,
+  name VARCHAR(255),
+  role VARCHAR(30) NOT NULL CHECK (role IN ('gerente', 'jefe_obra', 'prevencionista', 'supervisor', 'trabajador', 'visita')),
+  worker_id INTEGER REFERENCES workers(id) ON DELETE SET NULL,
+  token_hash CHAR(64) NOT NULL UNIQUE,
+  invited_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at TIMESTAMP NOT NULL,
+  accepted_at TIMESTAMP,
+  accepted_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  revoked_at TIMESTAMP,
+  CONSTRAINT obra_invitation_single_outcome CHECK (accepted_at IS NULL OR revoked_at IS NULL)
+);
+
+CREATE INDEX IF NOT EXISTS idx_obra_invitations_project ON obra_invitations(project_id, created_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_obra_invitations_open ON obra_invitations(project_id, lower(email)) WHERE accepted_at IS NULL AND revoked_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS obra_audit_log (
   id BIGSERIAL PRIMARY KEY,

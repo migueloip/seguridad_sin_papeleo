@@ -5,7 +5,8 @@
  * generado (lo verifica lib/obra/schema.test.ts; regenerar con
  * `UPDATE_OBRA_SQL=1 npx vitest run lib/obra/schema.test.ts`).
  *
- * Todas las sentencias son idempotentes (IF NOT EXISTS) y no reciben datos de
+ * Todas las sentencias son idempotentes (IF NOT EXISTS, o bloques DO que
+ * comprueban el estado antes de cambiarlo) y no reciben datos de
  * usuario: los únicos valores interpolados son los catálogos constantes de
  * lib/obra/types.ts, por eso se ejecutan con sql.unsafe().
  */
@@ -31,6 +32,28 @@ function inList(values: readonly string[]): string {
     if (!/^[a-z_]+$/.test(v)) throw new Error(`Valor de catálogo inválido para SQL: ${v}`)
   }
   return values.map((v) => `'${v}'`).join(", ")
+}
+
+/**
+ * Sincroniza un CHECK "columna IN (...)" con su catálogo en bases que ya
+ * tenían la tabla (CREATE TABLE IF NOT EXISTS no la toca): si el constraint no
+ * contiene todos los valores actuales, lo reemplaza. Idempotente.
+ */
+function syncInListCheck(table: string, constraint: string, column: string, values: readonly string[]): string {
+  for (const id of [table, constraint, column]) {
+    if (!/^[a-z_]+$/.test(id)) throw new Error(`Identificador inválido para SQL: ${id}`)
+  }
+  const covers = values.map((v) => `pg_get_constraintdef(c.oid) LIKE '%''${v}''%'`).join(" AND ")
+  return `DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint c
+    WHERE c.conname = '${constraint}' AND c.conrelid = '${table}'::regclass AND ${covers}
+  ) THEN
+    ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS ${constraint};
+    ALTER TABLE ${table} ADD CONSTRAINT ${constraint} CHECK (${column} IN (${inList(values)}));
+  END IF;
+END $$`
 }
 
 export const OBRA_SCHEMA_STATEMENTS: readonly string[] = [
@@ -178,6 +201,28 @@ export const OBRA_SCHEMA_STATEMENTS: readonly string[] = [
   `CREATE INDEX IF NOT EXISTS idx_obra_tasks_project_status ON obra_tasks(project_id, status)`,
   `CREATE INDEX IF NOT EXISTS idx_obra_tasks_assigned_user ON obra_tasks(assigned_user_id)`,
   `CREATE INDEX IF NOT EXISTS idx_obra_tasks_inspection ON obra_tasks(inspection_id)`,
+  // "reglas" se agregó a TASK_ORIGINS después de la primera versión de la tabla.
+  syncInListCheck("obra_tasks", "obra_tasks_origin_check", "origin", TASK_ORIGINS),
+
+  `CREATE TABLE IF NOT EXISTS obra_invitations (
+  id SERIAL PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  email VARCHAR(255) NOT NULL,
+  name VARCHAR(255),
+  role VARCHAR(30) NOT NULL CHECK (role IN (${inList(OBRA_ROLES)})),
+  worker_id INTEGER REFERENCES workers(id) ON DELETE SET NULL,
+  token_hash CHAR(64) NOT NULL UNIQUE,
+  invited_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at TIMESTAMP NOT NULL,
+  accepted_at TIMESTAMP,
+  accepted_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  revoked_at TIMESTAMP,
+  CONSTRAINT obra_invitation_single_outcome CHECK (accepted_at IS NULL OR revoked_at IS NULL)
+)`,
+  `CREATE INDEX IF NOT EXISTS idx_obra_invitations_project ON obra_invitations(project_id, created_at DESC)`,
+  // Una sola invitación abierta por correo y obra (las vencidas se revocan antes de crear otra).
+  `CREATE UNIQUE INDEX IF NOT EXISTS uq_obra_invitations_open ON obra_invitations(project_id, lower(email)) WHERE accepted_at IS NULL AND revoked_at IS NULL`,
 
   `CREATE TABLE IF NOT EXISTS obra_audit_log (
   id BIGSERIAL PRIMARY KEY,
