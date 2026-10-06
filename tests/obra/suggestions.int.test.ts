@@ -88,11 +88,18 @@ describe.skipIf(!HAS_TEST_DB)("sugerencias de IA con aprobación humana (BD real
     return r[0].n
   }
 
-  async function insertSuggestion(kind: string, severity: string, payload: unknown, extra: { finding_id?: number; layer_id?: number } = {}) {
+  async function insertSuggestion(
+    kind: string,
+    severity: string,
+    payload: unknown,
+    extra: { finding_id?: number; layer_id?: number; generator?: "ia" | "reglas" } = {},
+  ) {
+    // Sin generator explícito queda el default de la tabla ('reglas').
     const r = await db.sql<{ id: number }[]>`
-      INSERT INTO obra_ai_suggestions (project_id, kind, title, severity, payload, finding_id, layer_id, requested_by)
+      INSERT INTO obra_ai_suggestions (project_id, kind, title, severity, payload, finding_id, layer_id, requested_by, generator, model)
       VALUES (${db.projectId}, ${kind}, 'Sugerencia de prueba', ${severity}, ${db.sql.json(payload as never)},
-              ${extra.finding_id ?? null}, ${extra.layer_id ?? null}, ${db.users.supervisor})
+              ${extra.finding_id ?? null}, ${extra.layer_id ?? null}, ${db.users.supervisor},
+              ${extra.generator ?? "reglas"}, ${extra.generator === "ia" ? "google/gemini-2.5-flash" : null})
       RETURNING id`
     return Number(r[0].id)
   }
@@ -324,7 +331,8 @@ describe.skipIf(!HAS_TEST_DB)("sugerencias de IA con aprobación humana (BD real
     expect(r.applied_entity_type).toBe("task")
     const t = await db.sql<{ origin: string; suggestion_id: number; title: string }[]>`
       SELECT origin, suggestion_id, title FROM obra_tasks WHERE id = ${r.applied_entity_id}`
-    expect(t[0]).toEqual({ origin: "ia", suggestion_id: broken, title: "Revisar vereda hundida" })
+    // La sugerencia de prueba es del motor de reglas (default de generator).
+    expect(t[0]).toEqual({ origin: "reglas", suggestion_id: broken, title: "Revisar vereda hundida" })
 
     const foreignTask = await insertSuggestion(
       "create_task",
@@ -387,6 +395,55 @@ describe.skipIf(!HAS_TEST_DB)("sugerencias de IA con aprobación humana (BD real
     expect(audit[0].details.severity).toBe("critical")
     const t = await db.sql<{ priority: string }[]>`SELECT priority FROM obra_tasks WHERE id = ${r.applied_entity_id}`
     expect(t[0].priority).toBe("critica")
+  })
+
+  it("origen de la tarea aprobada: 'reglas' si la redactó el motor de reglas e 'ia' si la redactó un modelo", async () => {
+    const { approveObraSuggestion } = await import("@/app/actions/obra/suggestions")
+    const { listObraTasks } = await import("@/app/actions/obra/tasks")
+    const data = { title: "Revisar colector bajo vereda", priority: "media", due_in_days: 3, finding_id: ids.finding, checklist: ["Inspeccionar"] }
+    const byRules = await insertSuggestion("create_task", "medium", { kind: "create_task", data }, { finding_id: ids.finding, generator: "reglas" })
+    const byAi = await insertSuggestion(
+      "create_task",
+      "medium",
+      { kind: "create_task", data: { ...data, title: "Sellar fisura junto a cámara" } },
+      { finding_id: ids.finding, generator: "ia" },
+    )
+    const byAiEdited = await insertSuggestion(
+      "create_task",
+      "low",
+      { kind: "create_task", data: { ...data, title: "Medir hundimiento", priority: "baja" } },
+      { finding_id: ids.finding, generator: "ia" },
+    )
+
+    actAs(db.users.jefe_obra)
+    const rr = unwrap(await approveObraSuggestion(byRules))
+    const ra = unwrap(await approveObraSuggestion(byAi))
+    // Editar una redactada por IA no cambia quién la redactó.
+    const re = unwrap(await approveObraSuggestion(byAiEdited, { edited_payload: { ...data, title: "Medir hundimiento con nivel" } }))
+
+    const rows = await db.sql<{ id: number; origin: string; suggestion_id: number }[]>`
+      SELECT id, origin, suggestion_id FROM obra_tasks
+      WHERE id IN ${db.sql([rr.applied_entity_id!, ra.applied_entity_id!, re.applied_entity_id!])} ORDER BY id`
+    expect(rows.map((r) => [Number(r.suggestion_id), r.origin])).toEqual([
+      [byRules, "reglas"],
+      [byAi, "ia"],
+      [byAiEdited, "ia"],
+    ])
+    // El DTO también lo trae (la UI decide el texto con origin).
+    const tasks = unwrap(await listObraTasks(db.projectId))
+    expect(tasks.find((t) => t.id === rr.applied_entity_id)).toMatchObject({ origin: "reglas", suggestion_id: byRules })
+    expect(tasks.find((t) => t.id === ra.applied_entity_id)).toMatchObject({ origin: "ia", suggestion_id: byAi })
+
+    const audit = await db.sql<{ action: string; entity_id: number; details: Record<string, unknown> }[]>`
+      SELECT action, entity_id, details FROM obra_audit_log
+      WHERE (action = 'task.created' AND entity_id IN ${db.sql([rr.applied_entity_id!, ra.applied_entity_id!])})
+         OR (action = 'suggestion.approved' AND entity_id IN ${db.sql([byRules, byAi])})`
+    const created = Object.fromEntries(audit.filter((a) => a.action === "task.created").map((a) => [Number(a.entity_id), a.details]))
+    expect(created[rr.applied_entity_id!]).toMatchObject({ origin: "reglas", suggestion_id: byRules })
+    expect(created[ra.applied_entity_id!]).toMatchObject({ origin: "ia", suggestion_id: byAi })
+    const approved = Object.fromEntries(audit.filter((a) => a.action === "suggestion.approved").map((a) => [Number(a.entity_id), a.details]))
+    expect(approved[byRules]).toMatchObject({ generator: "reglas", task_origin: "reglas" })
+    expect(approved[byAi]).toMatchObject({ generator: "ia", task_origin: "ia" })
   })
 
   it("listado: findings.view, filtros validados y límite", async () => {

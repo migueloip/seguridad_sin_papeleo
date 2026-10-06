@@ -24,6 +24,40 @@ export interface Setting {
 /** Valor que ve el navegador en lugar de una clave sensible guardada. */
 const MASKED = "__MASKED__"
 
+/**
+ * Claves que se pueden guardar con updateSetting/updateSettings (endpoints
+ * públicos): las que edita /configuracion (components/settings-content.tsx) y
+ * las que el resto del código lee o escribe (readSetting, getSetting,
+ * getSettingForUser, getAiSettings). Cualquier otra clave se ignora (o es un
+ * error en updateSetting), para que una llamada directa a la acción no pueda
+ * sembrar claves arbitrarias en la tabla settings. Si agregas una clave nueva a
+ * la app, súmala aquí.
+ */
+const WRITABLE_SETTING_KEYS: ReadonlySet<string> = new Set([
+  // IA (lib/settings.ts getAiSettings, lib/mobile-api.ts getAiSettingsForUser)
+  "ai_provider",
+  "ai_model",
+  "ai_api_key",
+  "ai_base_url",
+  "ai_report_style_examples",
+  // OCR (app/actions/ocr.ts)
+  "ocr_method",
+  // Empresa e informes (app/api/settings/*, components/reports-content.tsx)
+  "company_name",
+  "company_logo",
+  "responsible_name",
+  "responsible_signature",
+  "require_signature",
+  "pdf_template_default",
+  // Navegación (components/sidebar.tsx) y notificaciones (app/actions/notifications.ts)
+  "nav_disabled",
+  "notifications_read_at",
+])
+
+function isWritableKey(key: unknown): key is string {
+  return typeof key === "string" && WRITABLE_SETTING_KEYS.has(key)
+}
+
 function maskIfSensitive(key: string, value: string | null): string | null {
   return SENSITIVE_SETTING_KEYS.has(key) && value ? MASKED : value
 }
@@ -83,11 +117,14 @@ export async function getSetting(key: string): Promise<string | null> {
   return readSetting(key)
 }
 
+/** Guarda una clave para el usuario de la sesión. Solo acepta claves de la lista blanca. */
 export async function updateSetting(key: string, value: string): Promise<void> {
+  if (!isWritableKey(key)) throw new Error("Clave de configuración no permitida.")
+  if (typeof value !== "string") throw new Error("Valor de configuración no válido.")
   if (SENSITIVE_SETTING_KEYS.has(key) && value === MASKED) return
-  const toStore = encryptIfNeeded(key, value)
   const userId = await getCurrentUserId()
   if (!userId) return
+  const toStore = encryptIfNeeded(key, value)
   await sql`
     INSERT INTO settings (user_id, key, value, created_at, updated_at)
     VALUES (${userId}, ${key}, ${toStore}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
@@ -96,10 +133,18 @@ export async function updateSetting(key: string, value: string): Promise<void> {
   revalidatePath("/configuracion")
 }
 
+/**
+ * Guarda varias claves (botón "Guardar" de /configuracion, que envía todas las
+ * que conoce). Las claves fuera de la lista blanca y los valores que no son
+ * texto se ignoran; una clave sensible enmascarada no se toca.
+ */
 export async function updateSettings(settings: { key: string; value: string }[]): Promise<void> {
+  if (!Array.isArray(settings)) return
   const userId = await getCurrentUserId()
   if (!userId) return
   for (const setting of settings) {
+    if (!setting || typeof setting !== "object") continue
+    if (!isWritableKey(setting.key) || typeof setting.value !== "string") continue
     if (SENSITIVE_SETTING_KEYS.has(setting.key) && setting.value === MASKED) continue
     const toStore = encryptIfNeeded(setting.key, setting.value)
     await sql`

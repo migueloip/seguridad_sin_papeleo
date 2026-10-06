@@ -18,6 +18,7 @@ import {
   MapPin,
   PenLine,
   ShieldCheck,
+  UserPlus,
   UsersRound,
 } from "lucide-react"
 import { listObraAudit } from "@/app/actions/obra/audit"
@@ -51,6 +52,10 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   "member.added": "agregó a una persona al equipo",
   "member.role_changed": "cambió el rol de una persona",
   "member.removed": "quitó a una persona del equipo",
+  "invitation.created": "invitó a una persona al equipo",
+  "invitation.regenerated": "generó un nuevo enlace de invitación",
+  "invitation.revoked": "revocó una invitación",
+  "invitation.accepted": "aceptó una invitación",
   "suggestion.created": "registró una sugerencia",
   "suggestion.approved": "aprobó una sugerencia de IA",
   "suggestion.rejected": "descartó una sugerencia de IA",
@@ -83,6 +88,7 @@ const ENTITY_ICONS: Record<string, LucideIcon> = {
   task: ClipboardList,
   inspection: CalendarCheck,
   member: UsersRound,
+  invitation: UserPlus,
   suggestion: ShieldCheck,
   layer: Layers,
   element: PenLine,
@@ -119,7 +125,10 @@ export function describeAuditEntry(e: AuditEntry): { text: string; detail: strin
 
   switch (e.action) {
     case "task.created":
-      if (d.origin === "ia") text = "anotó una tarea sugerida"
+      // "ia" en registros antiguos también cubría las sugerencias del motor de reglas (la
+      // bitácora no se reescribe): solo "reglas" permite afirmar el origen.
+      if (d.origin === "reglas") text = "anotó una tarea sugerida automáticamente (reglas)"
+      else if (d.origin === "ia") text = "anotó una tarea sugerida"
       else if (d.origin === "hallazgo") text = "creó una tarea desde un hallazgo"
       if (title) parts.push(`«${title}»`)
       break
@@ -164,11 +173,33 @@ export function describeAuditEntry(e: AuditEntry): { text: string; detail: strin
       break
     }
     case "member.added": {
+      // Desde las invitaciones, quien queda como actor es la persona que se une. Las entradas
+      // antiguas (alta directa, sin invitation_id) tienen como actor a quien la agregó.
+      const viaInvitation = num(d.invitation_id) != null
+      if (viaInvitation) text = "se unió al equipo"
       const email = str(d.email)
       const role = roleLabel(d.role)
-      if (email) parts.push(email)
+      if (email && !viaInvitation) parts.push(email)
       if (role) parts.push(`como ${role}`)
-      if (d.new_user === true) parts.push("cuenta nueva")
+      if (viaInvitation) parts.push("por invitación")
+      else if (d.new_user === true) parts.push("cuenta nueva")
+      break
+    }
+    case "invitation.created":
+    case "invitation.regenerated":
+    case "invitation.revoked":
+    case "invitation.accepted": {
+      if (e.action === "invitation.regenerated" && d.was_expired === true) text = "renovó una invitación vencida"
+      if (e.action === "invitation.accepted" && d.already_in_team === true) {
+        text = "abrió una invitación cuando ya era parte del equipo"
+      }
+      const email = str(d.email)
+      const role = roleLabel(d.role)
+      if (email && e.action !== "invitation.accepted") parts.push(email)
+      if (role) parts.push(`como ${role}`)
+      if (e.action === "invitation.created" && num(d.replaced_invitation_id) != null) {
+        parts.push("reemplaza una invitación anterior")
+      }
       break
     }
     case "member.role_changed": {
@@ -182,6 +213,14 @@ export function describeAuditEntry(e: AuditEntry): { text: string; detail: strin
     case "member.removed": {
       const email = str(d.email)
       if (email) parts.push(email)
+      const unassigned = num(d.unassigned_tasks)
+      if (unassigned && unassigned > 0) {
+        parts.push(
+          unassigned === 1
+            ? "1 tarea abierta quedó sin persona asignada"
+            : `${unassigned} tareas abiertas quedaron sin persona asignada`,
+        )
+      }
       break
     }
     case "suggestion.rejected": {

@@ -1,15 +1,35 @@
 "use client"
 
 /**
- * Equipo de la obra: integrantes con su rol, qué hace cada rol y una tabla de
- * permisos. Quien gestiona el equipo (members.manage) puede agregar
- * integrantes (con contraseña temporal si no tenían cuenta), cambiar su rol y
- * quitarlos.
+ * Equipo de la obra: integrantes con su rol, invitaciones, qué hace cada rol
+ * y una tabla de permisos. Quien gestiona el equipo (members.manage) invita
+ * personas por correo (reciben un enlace que vence y aceptan ellas mismas),
+ * regenera o revoca invitaciones, cambia roles y quita integrantes.
  */
-import { useId, useMemo, useState, useTransition, type FormEvent } from "react"
+import { useCallback, useEffect, useId, useMemo, useState, useTransition, type FormEvent } from "react"
 import { toast } from "sonner"
-import { Check, Copy, KeyRound, Loader2, Minus, UserMinus, UserPlus, UsersRound } from "lucide-react"
-import { addObraMember, removeObraMember, updateObraMemberRole } from "@/app/actions/obra/members"
+import {
+  Ban,
+  Check,
+  Copy,
+  History,
+  Link2,
+  Loader2,
+  MailPlus,
+  MessageCircle,
+  Minus,
+  RefreshCw,
+  TriangleAlert,
+  UserMinus,
+  UsersRound,
+} from "lucide-react"
+import {
+  createObraInvitation,
+  listObraInvitations,
+  regenerateObraInvitationLink,
+  revokeObraInvitation,
+} from "@/app/actions/obra/invitations"
+import { removeObraMember, updateObraMemberRole } from "@/app/actions/obra/members"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -25,15 +45,20 @@ import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, Sele
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { can, canAssignRole, PERMISSIONS, type Permission } from "@/lib/obra/permissions"
 import {
+  INVITATION_STATUS_LABELS,
+  INVITATION_TTL_DAYS,
   OBRA_ROLE_DESCRIPTIONS,
   OBRA_ROLE_LABELS,
   OBRA_ROLES,
+  type InvitationLink,
+  type InvitationStatus,
+  type ObraInvitation,
   type ObraMember,
   type ObraRole,
 } from "@/lib/obra/types"
 import { cn } from "@/lib/utils"
 import { RoleBadge } from "./badges"
-import { callAction } from "./task-card"
+import { callAction, formatDateTimeCL } from "./task-card"
 
 type LinkableWorker = { id: number; name: string; rut: string | null }
 
@@ -50,7 +75,7 @@ const ROLE_SHORT: Record<ObraRole, string> = {
 /** Permisos en lenguaje simple. */
 const PERMISSION_LABELS: Record<Permission, string> = {
   "project.view": "Ver la obra y su resumen",
-  "members.manage": "Agregar o quitar personas del equipo",
+  "members.manage": "Invitar o quitar personas del equipo",
   "plans.view": "Ver los planos",
   "plans.manage": "Subir, alinear y editar planos",
   "findings.view": "Ver todos los hallazgos",
@@ -79,6 +104,8 @@ export function TeamContent({
   currentUserId,
   initialMembers,
   linkableWorkers,
+  projectName,
+  initialInvitations,
 }: {
   projectId: number
   role: ObraRole
@@ -86,6 +113,10 @@ export function TeamContent({
   initialMembers: ObraMember[]
   /** Trabajadores del dueño que se pueden vincular (solo si el rol gestiona el equipo). */
   linkableWorkers: LinkableWorker[] | null
+  /** Nombre de la obra para el mensaje de WhatsApp (opcional). */
+  projectName?: string
+  /** Invitaciones ya cargadas en el servidor; si no se pasan, se cargan al montar (solo members.manage). */
+  initialInvitations?: ObraInvitation[] | null
 }) {
   const canManage = can(role, "members.manage")
 
@@ -96,13 +127,44 @@ export function TeamContent({
     setMembers(initialMembers)
   }
 
-  const [addOpen, setAddOpen] = useState(false)
-  const [credentials, setCredentials] = useState<{ email: string; password: string } | null>(null)
+  const [inviteOpen, setInviteOpen] = useState(false)
+  const [shownLink, setShownLink] = useState<{ link: InvitationLink; regenerated: boolean } | null>(null)
   const [removing, setRemoving] = useState<ObraMember | null>(null)
   const [busyUserId, setBusyUserId] = useState<number | null>(null)
   const [isPending, startTransition] = useTransition()
 
   const assignable = OBRA_ROLES.filter((r) => canAssignRole(role, r))
+
+  // Invitaciones (solo quien gestiona el equipo): null = cargando.
+  const [invitations, setInvitations] = useState<ObraInvitation[] | null>(initialInvitations ?? null)
+  const [invitationsError, setInvitationsError] = useState<string | null>(null)
+
+  const loadInvitations = useCallback(async () => {
+    setInvitationsError(null)
+    const res = await callAction(() => listObraInvitations(projectId))
+    if (res.ok === false) {
+      setInvitationsError(res.error)
+      return
+    }
+    setInvitations(res.data)
+  }, [projectId])
+
+  useEffect(() => {
+    if (!canManage || initialInvitations !== undefined) return
+    let cancelled = false
+    callAction(() => listObraInvitations(projectId)).then((res) => {
+      if (cancelled) return
+      if (res.ok === false) setInvitationsError(res.error)
+      else setInvitations(res.data)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [canManage, initialInvitations, projectId])
+
+  function upsertInvitation(inv: ObraInvitation) {
+    setInvitations((prev) => [inv, ...(prev ?? []).filter((x) => x.id !== inv.id)].sort(byNewest))
+  }
 
   function canEditMember(m: ObraMember): boolean {
     if (!canManage || m.is_owner || m.user_id === currentUserId) return false
@@ -138,7 +200,7 @@ export function TeamContent({
       }
       setMembers((prev) => prev.filter((x) => x.user_id !== m.user_id))
       setRemoving(null)
-      toast.success(`${m.name || m.email} ya no es parte del equipo.`)
+      toast.success(`${m.name || m.email} ya no es parte del equipo. Sus tareas abiertas quedaron para su rol.`)
     })
   }
 
@@ -157,9 +219,9 @@ export function TeamContent({
             </p>
           </div>
           {canManage ? (
-            <Button type="button" className="h-10 rounded-[10px]" onClick={() => setAddOpen(true)}>
-              <UserPlus className="h-4 w-4" aria-hidden />
-              Agregar integrante
+            <Button type="button" className="h-10 rounded-[10px]" onClick={() => setInviteOpen(true)}>
+              <MailPlus className="h-4 w-4" aria-hidden />
+              Invitar integrante
             </Button>
           ) : null}
         </div>
@@ -235,10 +297,29 @@ export function TeamContent({
         {canManage && members.length <= 1 ? (
           <p className="flex items-center gap-2 text-sm text-muted-foreground">
             <UsersRound className="h-4 w-4" aria-hidden />
-            Agrega a tu equipo para repartir tareas, reportar hallazgos desde terreno y aprobar sugerencias de IA.
+            Invita a tu equipo para repartir tareas, reportar hallazgos desde terreno y aprobar sugerencias de IA.
           </p>
         ) : null}
       </section>
+
+      {canManage ? (
+        <InvitationsSection
+          invitations={invitations}
+          error={invitationsError}
+          actorRole={role}
+          onRetry={() => {
+            void loadInvitations()
+          }}
+          onRegenerated={(link) => {
+            upsertInvitation(link.invitation)
+            setShownLink({ link, regenerated: true })
+          }}
+          onRevoked={(inv) => {
+            upsertInvitation(inv)
+            toast.success(`Se revocó la invitación de ${inv.email}. Su enlace ya no sirve.`)
+          }}
+        />
+      ) : null}
 
       {/* Roles */}
       <section aria-labelledby="team-roles-title" className="space-y-3">
@@ -282,50 +363,21 @@ export function TeamContent({
       </section>
 
       {canManage ? (
-        <AddMemberDialog
+        <InviteMemberDialog
           projectId={projectId}
-          open={addOpen}
-          onOpenChange={setAddOpen}
+          open={inviteOpen}
+          onOpenChange={setInviteOpen}
           assignable={assignable}
           workers={linkableWorkers ?? []}
-          onAdded={(member, password) => {
-            setMembers((prev) => [...prev.filter((x) => x.user_id !== member.user_id), member])
-            setAddOpen(false)
-            if (password) {
-              setCredentials({ email: member.email, password })
-            } else {
-              toast.success(`${member.name || member.email} se agregó al equipo. Ya tenía cuenta: entra con su contraseña de siempre.`)
-            }
+          onInvited={(link) => {
+            upsertInvitation(link.invitation)
+            setInviteOpen(false)
+            setShownLink({ link, regenerated: false })
           }}
         />
       ) : null}
 
-      {/* Contraseña temporal (se muestra una sola vez) */}
-      <Dialog open={credentials !== null} onOpenChange={(o) => !o && setCredentials(null)}>
-        <DialogContent className="sm:max-w-[460px]">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <KeyRound className="h-5 w-5 text-brand" aria-hidden />
-              Cuenta creada
-            </DialogTitle>
-            <DialogDescription>
-              Entrégale estos datos para que entre a Easysecure. La contraseña se muestra una sola vez; pídele cambiarla en
-              Perfil.
-            </DialogDescription>
-          </DialogHeader>
-          {credentials ? (
-            <div className="space-y-3">
-              <CopyField label="Correo" value={credentials.email} />
-              <CopyField label="Contraseña temporal" value={credentials.password} mono />
-            </div>
-          ) : null}
-          <DialogFooter>
-            <Button type="button" className="h-10" onClick={() => setCredentials(null)}>
-              Listo, ya la anoté
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <InvitationLinkDialog shown={shownLink} projectName={projectName} onClose={() => setShownLink(null)} />
 
       {/* Confirmar quitar integrante */}
       <Dialog open={removing !== null} onOpenChange={(o) => !o && !isPending && setRemoving(null)}>
@@ -333,8 +385,10 @@ export function TeamContent({
           <DialogHeader>
             <DialogTitle>¿Quitar del equipo?</DialogTitle>
             <DialogDescription className="break-words">
-              {removing ? `${removing.name || removing.email} perderá el acceso a esta obra.` : ""} Sus tareas asignadas
-              seguirán a su nombre hasta que las reasignes.
+              {removing ? `${removing.name || removing.email} perderá el acceso a esta obra.` : ""} Sus tareas abiertas
+              quedarán sin persona asignada, visibles para su rol
+              {removing ? ` (${OBRA_ROLE_LABELS[removing.role]})` : ""}, hasta que las reasignes. Las tareas hechas no
+              cambian.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -400,44 +454,350 @@ function PermissionsTable({ currentRole }: { currentRole: ObraRole }) {
 }
 
 // ---------------------------------------------------------------------------
-// Agregar integrante
+// Invitaciones
+// ---------------------------------------------------------------------------
+
+function byNewest(a: ObraInvitation, b: ObraInvitation): number {
+  return b.created_at.localeCompare(a.created_at) || b.id - a.id
+}
+
+const INVITATION_STATUS_CLS: Record<InvitationStatus, string> = {
+  pendiente: "bg-warning-tint text-warning",
+  aceptada: "bg-success-tint text-success",
+  revocada: "bg-danger-tint text-danger",
+  vencida: "bg-muted text-muted-foreground",
+}
+
+function InvitationStatusBadge({ status }: { status: InvitationStatus }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold",
+        INVITATION_STATUS_CLS[status],
+      )}
+    >
+      {INVITATION_STATUS_LABELS[status]}
+    </span>
+  )
+}
+
+function invitationDetail(inv: ObraInvitation): string {
+  if (inv.status === "pendiente") return `Vence el ${formatDateTimeCL(inv.expires_at)}`
+  if (inv.status === "vencida") return `Venció el ${formatDateTimeCL(inv.expires_at)}`
+  if (inv.status === "aceptada") return inv.accepted_at ? `Aceptada el ${formatDateTimeCL(inv.accepted_at)}` : "Aceptada"
+  return "Su enlace ya no sirve"
+}
+
+function InvitationsSection({
+  invitations,
+  error,
+  actorRole,
+  onRetry,
+  onRegenerated,
+  onRevoked,
+}: {
+  invitations: ObraInvitation[] | null
+  error: string | null
+  actorRole: ObraRole
+  onRetry: () => void
+  onRegenerated: (link: InvitationLink) => void
+  onRevoked: (inv: ObraInvitation) => void
+}) {
+  const [showHistory, setShowHistory] = useState(false)
+  const [busyId, setBusyId] = useState<number | null>(null)
+  const [revoking, setRevoking] = useState<ObraInvitation | null>(null)
+  const [isPending, startTransition] = useTransition()
+
+  // Solo la invitación más nueva de cada correo se puede regenerar (una vencida reemplazada ya no sirve).
+  const { open, history, latestIds } = useMemo(() => {
+    const latest = new Set<number>()
+    const seen = new Set<string>()
+    for (const inv of invitations ?? []) {
+      const key = inv.email.toLowerCase()
+      if (!seen.has(key)) {
+        seen.add(key)
+        latest.add(inv.id)
+      }
+    }
+    const all = invitations ?? []
+    const isOpen = (inv: ObraInvitation) =>
+      inv.status === "pendiente" || (inv.status === "vencida" && latest.has(inv.id))
+    return { open: all.filter(isOpen), history: all.filter((inv) => !isOpen(inv)), latestIds: latest }
+  }, [invitations])
+
+  function regenerate(inv: ObraInvitation) {
+    setBusyId(inv.id)
+    startTransition(async () => {
+      const res = await callAction(() => regenerateObraInvitationLink(inv.id))
+      setBusyId(null)
+      if (res.ok === false) {
+        toast.error(res.error)
+        return
+      }
+      onRegenerated(res.data)
+    })
+  }
+
+  function confirmRevoke() {
+    const inv = revoking
+    if (!inv) return
+    setBusyId(inv.id)
+    startTransition(async () => {
+      const res = await callAction(() => revokeObraInvitation(inv.id))
+      setBusyId(null)
+      if (res.ok === false) {
+        toast.error(res.error)
+        return
+      }
+      setRevoking(null)
+      onRevoked(res.data)
+    })
+  }
+
+  function renderItem(inv: ObraInvitation) {
+    const manageable = canAssignRole(actorRole, inv.role)
+    const canRegenerate =
+      manageable && (inv.status === "pendiente" || (inv.status === "vencida" && latestIds.has(inv.id)))
+    const canRevoke = manageable && inv.status === "pendiente"
+    const busy = busyId === inv.id && isPending
+    return (
+      <li key={inv.id} className="flex flex-wrap items-center gap-3 p-3.5 sm:flex-nowrap">
+        <span
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-secondary text-muted-foreground"
+          aria-hidden
+        >
+          <MailPlus className="h-4 w-4" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="break-all font-semibold">{inv.name || inv.email}</span>
+            <InvitationStatusBadge status={inv.status} />
+            <RoleBadge role={inv.role} />
+          </div>
+          {inv.name ? <div className="break-all text-[13px] text-muted-foreground">{inv.email}</div> : null}
+          <div className="text-xs text-muted-foreground">
+            {invitationDetail(inv)}
+            {inv.invited_by_name ? ` · Invitó: ${inv.invited_by_name}` : ""}
+            {inv.worker_name ? ` · Ficha: ${inv.worker_name}` : ""}
+          </div>
+        </div>
+        {canRegenerate || canRevoke ? (
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:flex-nowrap">
+            {canRegenerate ? (
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 shrink-0"
+                disabled={busy}
+                onClick={() => regenerate(inv)}
+                aria-label={`Regenerar el enlace de la invitación de ${inv.email}`}
+              >
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <RefreshCw className="h-4 w-4" aria-hidden />}
+                Regenerar enlace
+              </Button>
+            ) : null}
+            {canRevoke ? (
+              <Button
+                type="button"
+                variant="ghost"
+                className="h-10 shrink-0 text-danger hover:bg-danger-tint hover:text-danger"
+                disabled={busy}
+                onClick={() => setRevoking(inv)}
+                aria-label={`Revocar la invitación de ${inv.email}`}
+              >
+                <Ban className="h-4 w-4" aria-hidden />
+                Revocar
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+      </li>
+    )
+  }
+
+  return (
+    <section aria-labelledby="team-invitations-title" className="space-y-3">
+      <div>
+        <h2 id="team-invitations-title" className="font-display text-lg font-semibold">
+          Invitaciones
+        </h2>
+        <p className="text-sm text-muted-foreground">
+          Cada persona entra al equipo solo cuando acepta su invitación. Los enlaces vencen a los {INVITATION_TTL_DAYS} días.
+        </p>
+      </div>
+
+      {error ? (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center gap-3 rounded-[14px] border border-danger/30 bg-danger-tint p-3.5 text-[13px] text-danger"
+        >
+          <TriangleAlert className="h-4 w-4 shrink-0" aria-hidden />
+          <span className="min-w-0 flex-1">No se pudieron cargar las invitaciones: {error}</span>
+          <Button type="button" variant="outline" className="h-10" onClick={onRetry}>
+            Reintentar
+          </Button>
+        </div>
+      ) : invitations === null ? (
+        <p className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
+          <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+          Cargando invitaciones…
+        </p>
+      ) : (
+        <>
+          {open.length > 0 ? (
+            <ul className="divide-y divide-border overflow-hidden rounded-[14px] border border-border bg-card">
+              {open.map(renderItem)}
+            </ul>
+          ) : (
+            <p className="rounded-[14px] border border-dashed border-border p-4 text-sm text-muted-foreground">
+              No hay invitaciones pendientes.
+            </p>
+          )}
+          {history.length > 0 ? (
+            <div className="space-y-2">
+              <Button
+                type="button"
+                variant="ghost"
+                className="h-10 px-2 text-muted-foreground"
+                aria-expanded={showHistory}
+                onClick={() => setShowHistory((v) => !v)}
+              >
+                <History className="h-4 w-4" aria-hidden />
+                {showHistory ? "Ocultar historial" : `Ver historial (${history.length})`}
+              </Button>
+              {showHistory ? (
+                <ul className="divide-y divide-border overflow-hidden rounded-[14px] border border-border bg-card">
+                  {history.map(renderItem)}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
+        </>
+      )}
+
+      <Dialog open={revoking !== null} onOpenChange={(o) => !o && !isPending && setRevoking(null)}>
+        <DialogContent className="sm:max-w-[440px]">
+          <DialogHeader>
+            <DialogTitle>¿Revocar la invitación?</DialogTitle>
+            <DialogDescription className="break-words">
+              {revoking ? `El enlace enviado a ${revoking.email} dejará de servir.` : ""} Si después quieres sumar a esa
+              persona, crea una invitación nueva.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" className="h-10" disabled={isPending} onClick={() => setRevoking(null)}>
+              Cancelar
+            </Button>
+            <Button type="button" variant="destructive" className="h-10" disabled={isPending} onClick={confirmRevoke}>
+              {isPending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Ban className="h-4 w-4" aria-hidden />}
+              Sí, revocar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </section>
+  )
+}
+
+/** Enlace recién creado o regenerado: se muestra una sola vez. */
+function InvitationLinkDialog({
+  shown,
+  projectName,
+  onClose,
+}: {
+  shown: { link: InvitationLink; regenerated: boolean } | null
+  projectName?: string
+  onClose: () => void
+}) {
+  const inv = shown?.link.invitation
+  const url = shown?.link.url ?? ""
+  const message = inv
+    ? `Hola${inv.name ? ` ${inv.name}` : ""}: te invito a sumarte ${
+        projectName ? `a la obra «${projectName}»` : "al equipo de la obra"
+      } en Easysecure como ${OBRA_ROLE_LABELS[inv.role]}. Acepta la invitación con este enlace (vence en ${INVITATION_TTL_DAYS} días): ${url}`
+    : ""
+  return (
+    <Dialog open={shown !== null} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-[500px]">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Link2 className="h-5 w-5 text-brand" aria-hidden />
+            {shown?.regenerated ? "Enlace nuevo listo" : "Invitación lista"}
+          </DialogTitle>
+          <DialogDescription className="break-words">
+            {inv
+              ? `Envíale este enlace a ${inv.email}. Al abrirlo, la persona acepta con su cuenta o crea una con ese correo y su propia contraseña.`
+              : ""}
+          </DialogDescription>
+        </DialogHeader>
+        {inv ? (
+          <div className="space-y-3">
+            <CopyField label="Enlace de invitación" value={url} />
+            <Button asChild variant="outline" className="h-10 w-full">
+              <a href={`https://wa.me/?text=${encodeURIComponent(message)}`} target="_blank" rel="noopener noreferrer">
+                <MessageCircle className="h-4 w-4" aria-hidden />
+                Compartir por WhatsApp
+              </a>
+            </Button>
+            <p className="flex items-start gap-2 rounded-[10px] bg-warning-tint px-3 py-2.5 text-[13px] text-foreground">
+              <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden />
+              <span>
+                El enlace vence en {INVITATION_TTL_DAYS} días y se muestra solo ahora; si lo pierdes, regenéralo desde la
+                lista de invitaciones.{shown?.regenerated ? " El enlace anterior ya no sirve." : ""}
+              </span>
+            </p>
+          </div>
+        ) : null}
+        <DialogFooter>
+          <Button type="button" className="h-10" onClick={onClose}>
+            Listo
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Invitar integrante
 // ---------------------------------------------------------------------------
 
 const NO_WORKER = "none"
 
-function AddMemberDialog({
+function InviteMemberDialog({
   projectId,
   open,
   onOpenChange,
   assignable,
   workers,
-  onAdded,
+  onInvited,
 }: {
   projectId: number
   open: boolean
   onOpenChange: (open: boolean) => void
   assignable: ObraRole[]
   workers: LinkableWorker[]
-  onAdded: (member: ObraMember, temporaryPassword: string | null) => void
+  onInvited: (link: InvitationLink) => void
 }) {
   const [saving, setSaving] = useState(false)
   return (
     <Dialog open={open} onOpenChange={(o) => !saving && onOpenChange(o)}>
       <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-[500px]">
         <DialogHeader>
-          <DialogTitle>Agregar integrante</DialogTitle>
+          <DialogTitle>Invitar integrante</DialogTitle>
           <DialogDescription>
-            Si la persona aún no tiene cuenta en Easysecure, se crea con una contraseña temporal.
+            Se genera un enlace para que la persona acepte la invitación con su cuenta o cree una con este correo. Nadie
+            entra al equipo sin aceptar.
           </DialogDescription>
         </DialogHeader>
         {open ? (
-          <AddMemberForm
+          <InviteMemberForm
             projectId={projectId}
             assignable={assignable}
             workers={workers}
             onCancel={() => onOpenChange(false)}
             onSavingChange={setSaving}
-            onAdded={onAdded}
+            onInvited={onInvited}
           />
         ) : null}
       </DialogContent>
@@ -445,20 +805,20 @@ function AddMemberDialog({
   )
 }
 
-function AddMemberForm({
+function InviteMemberForm({
   projectId,
   assignable,
   workers,
   onCancel,
   onSavingChange,
-  onAdded,
+  onInvited,
 }: {
   projectId: number
   assignable: ObraRole[]
   workers: LinkableWorker[]
   onCancel: () => void
   onSavingChange: (saving: boolean) => void
-  onAdded: (member: ObraMember, temporaryPassword: string | null) => void
+  onInvited: (link: InvitationLink) => void
 }) {
   const formId = useId()
   const [email, setEmail] = useState("")
@@ -494,9 +854,9 @@ function AddMemberForm({
     onSavingChange(true)
     startTransition(async () => {
       const res = await callAction(() =>
-        addObraMember(projectId, {
+        createObraInvitation(projectId, {
           email: em,
-          name: nm || undefined,
+          name: nm || null,
           role: newRole,
           worker_id: worker === NO_WORKER ? null : Number(worker),
         }),
@@ -507,7 +867,7 @@ function AddMemberForm({
         toast.error(res.error)
         return
       }
-      onAdded(res.data.member, res.data.temporary_password)
+      onInvited(res.data)
     })
   }
 
@@ -529,6 +889,7 @@ function AddMemberForm({
           required
           aria-required
         />
+        <p className="text-xs text-muted-foreground">Solo esa persona podrá aceptar la invitación, con este correo.</p>
       </div>
       <div className="space-y-1.5">
         <Label htmlFor={`${formId}-name`}>Nombre (opcional)</Label>
@@ -540,7 +901,7 @@ function AddMemberForm({
           placeholder="Ej.: Juan Pérez"
           className="h-10"
         />
-        <p className="text-xs text-muted-foreground">Se usa solo si la persona aún no tiene cuenta.</p>
+        <p className="text-xs text-muted-foreground">Para reconocer la invitación en la lista y saludarla en el mensaje.</p>
       </div>
       <div className="space-y-1.5">
         <Label htmlFor={`${formId}-role`}>Rol en la obra</Label>
@@ -602,8 +963,8 @@ function AddMemberForm({
           Cancelar
         </Button>
         <Button type="submit" className="h-10" disabled={isPending}>
-          {isPending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <UserPlus className="h-4 w-4" aria-hidden />}
-          Agregar
+          {isPending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <MailPlus className="h-4 w-4" aria-hidden />}
+          Crear invitación
         </Button>
       </DialogFooter>
     </form>

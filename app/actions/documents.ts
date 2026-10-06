@@ -1,5 +1,4 @@
 "use server"
-// @ts-nocheck - TypeScript postgres template literal type issue with v3
 
 import { sql } from "@/lib/db"
 import type { Worker, DocumentType, Document } from "@/lib/db"

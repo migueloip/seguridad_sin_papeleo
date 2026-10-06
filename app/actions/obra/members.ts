@@ -2,12 +2,12 @@
 
 /**
  * Acciones del equipo de obra. Cada export es un endpoint público; la lógica
- * y la autorización viven en lib/obra/server/members.ts.
+ * y la autorización viven en lib/obra/server/members.ts. Las altas se hacen
+ * solo por invitación (app/actions/obra/invitations.ts).
  */
 import { revalidatePath } from "next/cache"
 import { requireSessionUserId, toActionError } from "@/lib/obra/access"
 import {
-  addMember,
   listLinkableWorkers,
   listMembers,
   removeMember,
@@ -19,20 +19,6 @@ export async function listObraMembers(projectId: number): Promise<ActionResult<O
   try {
     const userId = await requireSessionUserId()
     const data = await listMembers(userId, projectId)
-    return { ok: true, data }
-  } catch (e) {
-    return toActionError(e)
-  }
-}
-
-export async function addObraMember(
-  projectId: number,
-  input: { email: string; name?: string; role: ObraRole; worker_id?: number | null },
-): Promise<ActionResult<{ member: ObraMember; temporary_password: string | null }>> {
-  try {
-    const userId = await requireSessionUserId()
-    const data = await addMember(userId, projectId, input)
-    revalidatePath(`/obra/${data.member.project_id}`, "layout")
     return { ok: true, data }
   } catch (e) {
     return toActionError(e)

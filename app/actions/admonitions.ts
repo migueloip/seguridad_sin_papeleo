@@ -116,6 +116,13 @@ type UpdateAdmonitionInput = Partial<{
   approval_status: "pending" | "approved" | "rejected"
 }>
 
+type AdmonitionWithWorker = Admonition & {
+  first_name: string
+  last_name: string
+  company: string | null
+  role: string | null
+}
+
 export async function getAdmonitions(filters?: {
   worker_id?: number
   from?: string
@@ -149,8 +156,7 @@ export async function getAdmonitions(filters?: {
   const approvalParam =
     filters?.approval_status && filters.approval_status !== "todos" ? filters.approval_status : null
 
-// @ts-expect-error - postgres v3 template literal type recursion issue
-const rows = await sql<[Admonition & { first_name: string; last_name: string; company: string | null; role: string | null }]>`
+  const rows = await sql<AdmonitionWithWorker[]>`
     SELECT a.*, w.first_name, w.last_name, w.company, w.role
     FROM admonitions a
     JOIN workers w ON a.worker_id = w.id
@@ -184,7 +190,7 @@ export async function getAdmonitionsTimeline(mode: TimelineMode): Promise<{ buck
   await ensureAdmonitionsSchema()
 
   if (mode === "day") {
-    const rows = await sql<{ bucket: string | Date; count: number }>`
+    const rows = await sql<{ bucket: string | Date; count: number }[]>`
       SELECT date_trunc('day', admonition_date)::date as bucket, COUNT(*)::int as count
       FROM admonitions
       WHERE user_id = ${userId}
@@ -199,7 +205,7 @@ export async function getAdmonitionsTimeline(mode: TimelineMode): Promise<{ buck
   }
 
   if (mode === "week") {
-    const rows = await sql<{ bucket: string | Date; count: number }>`
+    const rows = await sql<{ bucket: string | Date; count: number }[]>`
       SELECT date_trunc('week', admonition_date)::date as bucket, COUNT(*)::int as count
       FROM admonitions
       WHERE user_id = ${userId}
@@ -213,7 +219,7 @@ export async function getAdmonitionsTimeline(mode: TimelineMode): Promise<{ buck
     }))
   }
 
-  const rows = await sql<{ bucket: string | Date; count: number }>`
+  const rows = await sql<{ bucket: string | Date; count: number }[]>`
     SELECT date_trunc('month', admonition_date)::date as bucket, COUNT(*)::int as count
     FROM admonitions
     WHERE user_id = ${userId}
@@ -236,7 +242,7 @@ export async function createAdmonition(data: CreateAdmonitionInput): Promise<Adm
   if (!["verbal", "escrita", "suspension"].includes(data.admonition_type)) throw new Error("Tipo inválido")
   if (!data.reason || !data.reason.trim()) throw new Error("Motivo requerido")
 
-  const result = await sql<Admonition>`
+  const result = await sql<Admonition[]>`
     INSERT INTO admonitions (user_id, worker_id, admonition_date, admonition_type, reason, supervisor_signature, attachments, status, approval_status, created_at, updated_at)
     VALUES (${userId}, ${data.worker_id}, ${new Date(data.admonition_date)}, ${data.admonition_type}, ${data.reason},
             ${data.supervisor_signature || null},
@@ -267,7 +273,7 @@ export async function updateAdmonition(id: number, data: UpdateAdmonitionInput):
   await ensureAdmonitionsSchema()
   const approval = data.approval_status || null
   const status = data.status || null
-  const res = await sql<Admonition>`
+  const res = await sql<Admonition[]>`
     UPDATE admonitions
     SET
       admonition_date = COALESCE(${data.admonition_date ? new Date(data.admonition_date) : null}, admonition_date),
@@ -343,7 +349,7 @@ export async function getAdmonitionStats(params?: { from?: string; to?: string }
   await ensureAdmonitionsSchema()
   const fromDate = params?.from ? new Date(params.from) : null
   const toDate = params?.to ? new Date(params.to) : null
-  const byDepartment = await sql<{ department: string | null; total: number }>`
+  const byDepartment = await sql<{ department: string | null; total: number }[]>`
     SELECT w.company as department, COUNT(*) as total
     FROM admonitions a
     JOIN workers w ON a.worker_id = w.id
@@ -353,7 +359,7 @@ export async function getAdmonitionStats(params?: { from?: string; to?: string }
     GROUP BY w.company
     ORDER BY total DESC
   `
-  const byType = await sql<{ admonition_type: string; total: number }>`
+  const byType = await sql<{ admonition_type: string; total: number }[]>`
     SELECT admonition_type, COUNT(*) as total
     FROM admonitions a
     WHERE a.user_id = ${userId}
@@ -362,7 +368,7 @@ export async function getAdmonitionStats(params?: { from?: string; to?: string }
     GROUP BY admonition_type
     ORDER BY total DESC
   `
-  const byMonth = await sql<{ month: string; total: number }>`
+  const byMonth = await sql<{ month: string; total: number }[]>`
     SELECT to_char(admonition_date, 'YYYY-MM') as month, COUNT(*) as total
     FROM admonitions a
     WHERE a.user_id = ${userId}

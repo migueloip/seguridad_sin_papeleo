@@ -2,6 +2,7 @@
  * API móvil de tareas de obra (app de terreno, token Bearer).
  *
  *   GET /api/mobile/obra/tasks                 → { projects: ObraProjectSummary[] }
+ *       (pending_suggestions es 0 en las obras donde el rol no tiene ai.review)
  *   GET /api/mobile/obra/tasks?project_id=N    → { tasks: ObraTask[] } (las visibles para el usuario)
  *       parámetros opcionales: status=pendiente,en_progreso  mine=1
  */

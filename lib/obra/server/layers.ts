@@ -6,6 +6,11 @@
  * - La imagen de la lámina se guarda en el bucket privado (o inline sin
  *   Supabase) y se sirve solo por /api/obra/layers/[id]/image con control de
  *   acceso. image_data nunca viaja en los DTO.
+ * - Láminas grandes: createLayerUploadTicket firma una subida directa del
+ *   navegador al bucket (obra/<proyecto>/uploads/<uuid>.<ext>) y createLayer
+ *   recibe `image_upload` con esa ruta; el servidor verifica el objeto (que
+ *   sea del proyecto, exista, pese ≤ 25 MB y sea PNG/JPEG/WebP real) antes de
+ *   guardarla, y una misma ruta no se puede usar en dos capas.
  * - El borrado es lógico (deleted_at): los elementos y pines quedan en la BD
  *   pero dejan de listarse.
  */
@@ -19,7 +24,15 @@ import {
 } from "../access"
 import { DEFAULT_FRAME } from "../geometry"
 import { can, type Permission } from "../permissions"
-import { DISCIPLINES, type CadOrigin, type Discipline, type LayerFrame, type PlanLayer, type ProjectAccess } from "../types"
+import {
+  DISCIPLINES,
+  type CadOrigin,
+  type Discipline,
+  type LayerFrame,
+  type LayerUploadTicket,
+  type PlanLayer,
+  type ProjectAccess,
+} from "../types"
 import {
   asSql,
   cleanLine,
@@ -36,11 +49,21 @@ import {
   type Queryable,
 } from "./mappers"
 import {
+  createObraSignedDownloadUrl,
   decodeImageDataUrl,
   deleteObraObject,
+  formatMegabytes,
+  isLayerUploadPath,
+  isSupabaseStorageEnabled,
   MAX_IMAGE_DIMENSION_PX,
+  newLayerUploadPath,
+  normalizeImageMime,
+  PLAN_INLINE_MAX_BYTES,
+  PLAN_UPLOAD_MAX_BYTES,
   readStoredImage,
+  signObraUpload,
   storeLayerImage,
+  verifyUploadedObraImage,
   type ImageMime,
 } from "./storage"
 
@@ -61,7 +84,19 @@ export const LAYER_LIMITS = {
 
 const NOT_FOUND = "Capa no encontrada."
 
+/**
+ * Espacio de claves del advisory lock (pg_advisory_xact_lock(int, int)) que
+ * serializa, por proyecto, el uso de láminas subidas directo (una ruta no puede
+ * quedar en dos capas aunque lleguen dos createLayer a la vez).
+ */
+const LAYER_UPLOAD_LOCK_NS = 7262008
+
 export type LayerImageInput = { data_url: string; width_px: number; height_px: number }
+
+/** Lámina ya subida directo al bucket con un LayerUploadTicket. */
+export type LayerImageUploadInput = { path: string; width_px: number; height_px: number }
+
+export type LayerUploadTicketInput = { mime: string; size_bytes: number }
 
 export type CreateLayerInput = {
   name: string
@@ -69,6 +104,8 @@ export type CreateLayerInput = {
   level: number
   level_label?: string | null
   image?: LayerImageInput | null
+  /** Alternativa a `image` para láminas grandes: ruta devuelta por createLayerUploadTicket (mismo proyecto). */
+  image_upload?: LayerImageUploadInput | null
   width_m?: number
   aspect?: number
   /** Solo DXF: origen CAD de la lámina (ver dxfToElementDrafts). Alinea la capa con otras DXF del nivel. */
@@ -229,6 +266,33 @@ function normImage(v: unknown): NormalizedImage | null {
   return { bytes: img.bytes, mime: img.mime, ext: img.ext, width_px: width, height_px: height }
 }
 
+/** Valida la referencia a una lámina subida directo: ruta exacta del MISMO proyecto y dimensiones declaradas. */
+function normImageUpload(v: unknown, projectId: number): LayerImageUploadInput {
+  const o = requireObject(v, "La imagen subida de la capa no es válida.")
+  if (!isSupabaseStorageEnabled()) {
+    throw new ObraValidationError("La subida directa de planos requiere Supabase Storage, que no está configurado.")
+  }
+  if (!isLayerUploadPath(projectId, o.path)) {
+    throw new ObraValidationError("La imagen subida no corresponde a esta obra o su ruta no es válida.")
+  }
+  const width = normPx(o.width_px)
+  const height = normPx(o.height_px)
+  if (width == null || height == null) throw new ObraValidationError("Faltan las dimensiones de la imagen subida.")
+  return { path: o.path, width_px: width, height_px: height }
+}
+
+/** Una lámina subida solo puede quedar en una capa (borrada o no). */
+async function assertUploadUnused(q: Queryable, path: string): Promise<void> {
+  const s = asSql(q)
+  const rows = await s<{ id: number }[]>`SELECT id FROM obra_plan_layers WHERE image_path = ${path} LIMIT 1`
+  if (rows[0]) throw new ObraValidationError("Esa imagen subida ya se usó en otra capa. Vuelve a subir el archivo.")
+}
+
+/** Mensaje cuando no hay Supabase Storage: indica el tamaño que sí cabe inline. */
+function directUploadUnavailableMessage(): string {
+  return `La subida de planos grandes requiere Supabase Storage; reduce el archivo a menos de ${formatMegabytes(PLAN_INLINE_MAX_BYTES)}.`
+}
+
 // ---------------------------------------------------------------------------
 // Acceso por capa (proyecto resuelto desde la BD)
 // ---------------------------------------------------------------------------
@@ -281,8 +345,48 @@ export async function listLayers(userId: number, projectId: number): Promise<Pla
 }
 
 /**
- * Crea una capa (plans.manage). Si trae imagen, la proporción del marco es
- * alto/ancho de la imagen real; si no, `aspect` (o 0,7). Ancho por defecto 50 m.
+ * Permiso firmado (plans.manage) para que el navegador suba una lámina grande
+ * DIRECTO al bucket privado, sin pasar el archivo por la server action. Solo
+ * con Supabase Storage configurado; PNG, JPEG o WebP de hasta 25 MB. La ruta
+ * (obra/<proyecto>/uploads/<uuid>.<ext>) se usa después en
+ * createLayer({ image_upload: { path, width_px, height_px } }).
+ */
+export async function createLayerUploadTicket(
+  userId: number,
+  projectId: number,
+  input: LayerUploadTicketInput,
+): Promise<LayerUploadTicket> {
+  const access = await requireProjectPermissionForUser(userId, projectId, "plans.manage")
+  const o = requireObject(input, "Datos de la subida no válidos.")
+  if (!isSupabaseStorageEnabled()) throw new ObraValidationError(directUploadUnavailableMessage())
+  const mime = normalizeImageMime(o.mime)
+  if (!mime) throw new ObraValidationError("La lámina debe ser una imagen PNG, JPG o WebP.")
+  const size = o.size_bytes
+  if (typeof size !== "number" || !Number.isInteger(size) || size < 1) {
+    throw new ObraValidationError("El tamaño del archivo no es válido.")
+  }
+  if (size > PLAN_UPLOAD_MAX_BYTES) {
+    throw new ObraValidationError(
+      `La lámina supera el máximo de ${formatMegabytes(PLAN_UPLOAD_MAX_BYTES)}. Exporta solo la lámina necesaria o con menor resolución.`,
+    )
+  }
+  const path = newLayerUploadPath(access.project_id, mime)
+  const signed = await signObraUpload(path)
+  return {
+    path,
+    upload_url: signed.upload_url,
+    token: signed.token,
+    expires_in: signed.expires_in,
+    max_bytes: PLAN_UPLOAD_MAX_BYTES,
+    mime,
+  }
+}
+
+/**
+ * Crea una capa (plans.manage). La lámina llega inline (`image`, data URL) o
+ * ya subida al bucket (`image_upload`, ver createLayerUploadTicket), nunca
+ * ambas. Si trae imagen, la proporción del marco es alto/ancho de la imagen
+ * real; si no, `aspect` (o 0,7). Ancho por defecto 50 m.
  * Si es DXF (`cad_origin`) y ya hay otra capa DXF en el mismo nivel, nace
  * alineada con ella usando las coordenadas del dibujo (alignCadFrame).
  */
@@ -294,22 +398,58 @@ export async function createLayer(userId: number, projectId: number, input: Crea
   const level = normLevel(o.level)
   const levelLabel = normLevelLabel(o.level_label)
   const widthM = o.width_m === undefined || o.width_m === null ? DEFAULT_FRAME.width_m : normWidth(o.width_m)
+  const hasInline = o.image !== undefined && o.image !== null
+  const hasUpload = o.image_upload !== undefined && o.image_upload !== null
+  if (hasInline && hasUpload) {
+    throw new ObraValidationError("Envía la lámina de una sola forma: como imagen o como archivo ya subido, no ambas.")
+  }
   const image = normImage(o.image)
+  const upload = hasUpload ? normImageUpload(o.image_upload, access.project_id) : null
+  const cadOrigin = normCadOrigin(o.cad_origin)
+
+  // Lámina subida directo: antes de tocar el objeto se comprueba que ninguna capa lo use
+  // (verifyUploadedObraImage borra los archivos inválidos y no debe borrar la imagen de otra capa).
+  let uploaded: { path: string; mime: ImageMime; size: number; width_px: number; height_px: number } | null = null
+  if (upload) {
+    await assertUploadUnused(sql, upload.path)
+    const v = await verifyUploadedObraImage(upload.path, PLAN_UPLOAD_MAX_BYTES)
+    // Las dimensiones reales del archivo mandan sobre las declaradas.
+    uploaded = {
+      path: upload.path,
+      mime: v.mime,
+      size: v.size,
+      width_px: v.width_px ?? upload.width_px,
+      height_px: v.height_px ?? upload.height_px,
+    }
+  }
+  const picture = image
+    ? { mime: image.mime, width_px: image.width_px, height_px: image.height_px, bytes: image.bytes.length }
+    : uploaded
+      ? { mime: uploaded.mime, width_px: uploaded.width_px, height_px: uploaded.height_px, bytes: uploaded.size }
+      : null
   let aspect: number
-  if (image) aspect = image.height_px / image.width_px
+  if (picture) aspect = picture.height_px / picture.width_px
   else aspect = o.aspect === undefined || o.aspect === null ? DEFAULT_FRAME.aspect : normAspect(o.aspect)
   aspect = normAspect(aspect)
-  const cadOrigin = normCadOrigin(o.cad_origin)
 
   // Se reserva el id antes de subir la imagen: así la subida (red) ocurre fuera
   // de la transacción y la ruta del objeto lleva el id de la capa.
   const seq = await sql<{ id: number }[]>`SELECT nextval(pg_get_serial_sequence('obra_plan_layers', 'id'))::int AS id`
   const layerId = Number(seq[0].id)
-  const stored = image ? await storeLayerImage(access.project_id, layerId, image) : { image_path: null, image_data: null }
+  const stored = image
+    ? await storeLayerImage(access.project_id, layerId, image)
+    : { image_path: uploaded?.path ?? null, image_data: null }
+  // Solo se limpia el objeto que esta llamada subió: la lámina subida directo se conserva si la
+  // transacción falla (se puede reintentar con la misma ruta, y podría ser de otra capa concurrente).
+  const ownedPath = image ? stored.image_path : null
 
   try {
     return (await sql.begin(async (tx) => {
       const s = asSql(tx)
+      if (uploaded) {
+        await s`SELECT pg_advisory_xact_lock(${LAYER_UPLOAD_LOCK_NS}::int, ${access.project_id}::int)`
+        await assertUploadUnused(s, uploaded.path)
+      }
       let frame = { offset_x_m: 0, offset_y_m: 0, rotation_deg: 0 }
       let alignedWith: number | null = null
       if (cadOrigin) {
@@ -345,8 +485,8 @@ export async function createLayer(userId: number, projectId: number, input: Crea
           width_px, height_px, width_m, aspect, offset_x_m, offset_y_m, rotation_deg, cad_origin, uploaded_by
         ) VALUES (
           ${layerId}, ${access.project_id}, ${name}, ${discipline}, ${level}, ${levelLabel},
-          ${stored.image_path}, ${stored.image_data}, ${image?.mime ?? null},
-          ${image?.width_px ?? null}, ${image?.height_px ?? null}, ${widthM}, ${aspect},
+          ${stored.image_path}, ${stored.image_data}, ${picture?.mime ?? null},
+          ${picture?.width_px ?? null}, ${picture?.height_px ?? null}, ${widthM}, ${aspect},
           ${frame.offset_x_m}, ${frame.offset_y_m}, ${frame.rotation_deg},
           ${cadOrigin ? s.json(cadOrigin) : null}, ${userId}
         )
@@ -362,9 +502,10 @@ export async function createLayer(userId: number, projectId: number, input: Crea
             name,
             discipline,
             level,
-            has_image: Boolean(image),
-            mime_type: image?.mime ?? null,
-            bytes: image?.bytes.length ?? 0,
+            has_image: Boolean(picture),
+            mime_type: picture?.mime ?? null,
+            bytes: picture?.bytes ?? 0,
+            ...(uploaded ? { direct_upload: true } : {}),
             width_m: widthM,
             ...(cadOrigin ? { dxf: true, aligned_with_layer_id: alignedWith } : {}),
           },
@@ -376,7 +517,7 @@ export async function createLayer(userId: number, projectId: number, input: Crea
       return layer
     })) as PlanLayer
   } catch (e) {
-    if (stored.image_path) await deleteObraObject(stored.image_path)
+    if (ownedPath) await deleteObraObject(ownedPath)
     throw e
   }
 }
@@ -535,7 +676,25 @@ export async function deleteLayer(userId: number, layerId: number): Promise<{ pr
   return { project_id: access.project_id }
 }
 
-/** Imagen de una capa (plans.view), con el tipo real detectado en sus bytes. */
+/**
+ * URL firmada de descarga (plans.view, válida `expiresIn` s) de la lámina de
+ * una capa guardada en el bucket, o null si es inline o no hay Supabase.
+ * Permite que /api/obra/layers/[id]/image redirija las láminas grandes en vez
+ * de pasar sus bytes por la función.
+ */
+export async function getLayerImageSignedUrl(userId: number, layerId: number, expiresIn = 300): Promise<string | null> {
+  const { access, layerId: id } = await authorizeLayer(userId, layerId, "plans.view")
+  const rows = await sql<{ image_path: string | null; image_data: string | null }[]>`
+    SELECT image_path, image_data FROM obra_plan_layers
+    WHERE id = ${id} AND project_id = ${access.project_id} AND deleted_at IS NULL
+  `
+  const row = rows[0]
+  if (!row || (!row.image_path && !row.image_data)) throw new ObraAccessError(404, "La capa no tiene imagen.")
+  if (!row.image_path || !isSupabaseStorageEnabled()) return null
+  return createObraSignedDownloadUrl(row.image_path, expiresIn)
+}
+
+/** Imagen de una capa (plans.view), con el tipo real detectado en sus bytes (inline o del bucket, hasta 25 MB). */
 export async function readLayerImage(userId: number, layerId: number): Promise<{ bytes: Buffer; mime: string }> {
   const { access, layerId: id } = await authorizeLayer(userId, layerId, "plans.view")
   const rows = await sql<{ image_path: string | null; image_data: string | null }[]>`

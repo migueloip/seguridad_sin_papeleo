@@ -17,6 +17,8 @@ export default function proxy(req: NextRequest) {
     PUBLIC_PATHS.includes(pathname) ||
     STATIC_ASSET_RE.test(pathname) ||
     pathname.startsWith("/_next") ||
+    // Página pública de invitación al equipo de obra (y sus server actions, que se envían a la misma ruta).
+    pathname.startsWith("/invitacion/") ||
     pathname.startsWith("/api/health") ||
     pathname.startsWith("/api/mobile") ||
     pathname.startsWith("/api/diagnostics") ||

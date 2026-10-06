@@ -121,12 +121,12 @@ describe("con sesión válida", () => {
     expect(res.status).toBe(400)
   })
 
-  it("/api/autodesk/token entrega el token sin caché", async () => {
+  it("/api/autodesk/token entrega solo access_token y expires_in, sin caché", async () => {
     fetchMock.mockResolvedValue(
-      new Response(JSON.stringify({ access_token: "tok", expires_in: 3599 }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
+      new Response(
+        JSON.stringify({ access_token: "tok", expires_in: 3599, token_type: "Bearer", scope: "data:write", extra: "x" }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
     )
     const res = await autodeskGET()
     expect(res.status).toBe(200)
@@ -135,19 +135,113 @@ describe("con sesión válida", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
+  it("/api/autodesk/token pide solo el scope del visor y no pone el secreto en el cuerpo", async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ access_token: "tok", expires_in: 3599 }), { status: 200 }))
+    await autodeskGET()
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe("https://developer.api.autodesk.com/authentication/v2/token")
+    const body = new URLSearchParams(String(init.body))
+    expect(body.get("grant_type")).toBe("client_credentials")
+    expect(body.get("scope")).toBe("viewables:read")
+    expect(String(init.body)).not.toContain("secreto")
+    const headers = new Headers(init.headers)
+    expect(headers.get("authorization")).toBe(`Basic ${Buffer.from("id:secreto").toString("base64")}`)
+    expect(init.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it("/api/autodesk/token no expone los mensajes del proveedor", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {})
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ developerMessage: "The client_id specified does not have access to the api product" }), {
+        status: 401,
+      }),
+    )
+    const res = await autodeskGET()
+    expect(res.status).toBe(502)
+    const text = JSON.stringify(await res.json())
+    expect(text).not.toMatch(/client_id|api product|developerMessage/)
+    expect(text).toMatch(/No se pudo obtener el token de Autodesk/)
+
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ expires_in: 10 }), { status: 200 }))
+    expect((await autodeskGET()).status).toBe(502)
+
+    fetchMock.mockRejectedValueOnce(new Error("getaddrinfo ENOTFOUND developer.api.autodesk.com"))
+    const net = await autodeskGET()
+    expect(net.status).toBe(502)
+    expect(JSON.stringify(await net.json())).not.toContain("ENOTFOUND")
+
+    delete process.env.AUTODESK_CLIENT_SECRET
+    const cfg = await autodeskGET()
+    expect(cfg.status).toBe(503)
+    expect(JSON.stringify(await cfg.json())).not.toMatch(/AUTODESK_CLIENT/)
+    spy.mockRestore()
+  })
+
   it("/api/planos/cad-to-image pasa la autenticación y valida la extensión", async () => {
     const res = await cadPOST(jsonRequest("/api/planos/cad-to-image", { base64: "QUJD", ext: "exe" }))
     expect(res.status).toBe(400)
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it("/api/planos/cad-to-image llama al conversor con un archivo válido", async () => {
+  it("/api/planos/cad-to-image llama al conversor con un archivo válido (con tiempo máximo)", async () => {
     fetchMock.mockResolvedValue(
-      new Response(JSON.stringify({ dataUrl: "data:image/png;base64,QUJD", mimeType: "image/png" }), { status: 200 }),
+      new Response(JSON.stringify({ dataUrl: "data:image/png;base64,QUJD", mimeType: "text/html" }), { status: 200 }),
     )
     const res = await cadPOST(jsonRequest("/api/planos/cad-to-image", { base64: "QUJD", ext: "dxf" }))
     expect(res.status).toBe(200)
+    // El tipo sale del propio data URL, no de lo que declare el conversor.
+    expect(await res.json()).toEqual({ dataUrl: "data:image/png;base64,QUJD", mimeType: "image/png" })
     expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe("https://conversor.example.com/convert")
+    expect(init.signal).toBeInstanceOf(AbortSignal)
+    expect(JSON.parse(String(init.body))).toEqual({ base64: "QUJD", ext: "dxf" })
+  })
+
+  it("/api/planos/cad-to-image no devuelve el error del conversor al cliente", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {})
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: "ODA File Converter 25.4 falló en /srv/convert/tmp/abc.dwg" }), { status: 500 }),
+    )
+    const res = await cadPOST(jsonRequest("/api/planos/cad-to-image", { base64: "QUJD", ext: "dwg" }))
+    expect(res.status).toBe(502)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toMatch(/El conversor CAD no pudo procesar el archivo/)
+    expect(body.error).not.toMatch(/ODA|srv|abc\.dwg/)
+    // Sí queda registrado en el servidor.
+    expect(JSON.stringify(spy.mock.calls)).toContain("ODA File Converter")
+
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ dataUrl: "data:text/html;base64,PHNjcmlwdD4=" }), { status: 200 }))
+    expect((await cadPOST(jsonRequest("/api/planos/cad-to-image", { base64: "QUJD", ext: "dxf" }))).status).toBe(502)
+
+    fetchMock.mockRejectedValueOnce(new Error("connect ECONNREFUSED 10.0.0.7:8080"))
+    const down = await cadPOST(jsonRequest("/api/planos/cad-to-image", { base64: "QUJD", ext: "dxf" }))
+    expect(down.status).toBe(502)
+    expect(JSON.stringify(await down.json())).not.toContain("ECONNREFUSED")
+    spy.mockRestore()
+  })
+
+  it("/api/planos/cad-to-image responde 504 si el conversor no responde a tiempo", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {})
+    fetchMock.mockRejectedValueOnce(new DOMException("The operation was aborted due to timeout", "TimeoutError"))
+    const res = await cadPOST(jsonRequest("/api/planos/cad-to-image", { base64: "QUJD", ext: "dxf" }))
+    expect(res.status).toBe(504)
+    expect(((await res.json()) as { error: string }).error).toMatch(/no respondió a tiempo/)
+    spy.mockRestore()
+  })
+
+  it("/api/planos/cad-to-image limita el tamaño de la entrada sin llamar al conversor", async () => {
+    const big = "A".repeat(25 * 1024 * 1024 + 1)
+    const res = await cadPOST(jsonRequest("/api/planos/cad-to-image", { base64: big, ext: "dxf" }))
+    expect(res.status).toBe(413)
+    const declared = new Request("http://localhost/api/planos/cad-to-image", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Content-Length": String(30 * 1024 * 1024) },
+      body: JSON.stringify({ base64: "QUJD", ext: "dxf" }),
+    })
+    expect((await cadPOST(declared)).status).toBe(413)
+    expect((await cadPOST(jsonRequest("/api/planos/cad-to-image", "no-json"))).status).toBe(400)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })
 

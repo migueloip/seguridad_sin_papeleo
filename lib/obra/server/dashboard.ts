@@ -8,6 +8,11 @@
  * igual que el resto del módulo, y las sugerencias huérfanas no cuentan. El
  * índice de riesgo siempre se calcula con datos de todo el proyecto, para que
  * sea el mismo para todos los roles.
+ *
+ * Sugerencias pendientes: solo quien puede decidirlas (ai.review) recibe sus
+ * conteos. Para los demás roles (supervisor, trabajador, visita) valen 0, tanto
+ * en el tablero como en el resumen del hub y de la API móvil: no tiene sentido
+ * mostrarles una bandeja que no pueden atender.
  */
 import { sql } from "@/lib/db"
 import { listProjectAccessForUser, requireProjectPermissionForUser } from "../access"
@@ -170,6 +175,7 @@ export async function getDashboard(userId: number, projectId: number): Promise<O
   for (const r of statusRows) {
     if ((TASK_STATUSES as readonly string[]).includes(r.status)) tasksByStatus[r.status as TaskStatus] += toNum(r.n)
   }
+  // El riesgo usa el conteo real (es el mismo para todos los roles); los conteos visibles, solo si revisa.
   const pendingCritical = toNum(c?.pending_critical_suggestions)
 
   const pendingSuggestions: AiSuggestion[] = suggestionRows.map(mapSuggestion)
@@ -181,8 +187,8 @@ export async function getDashboard(userId: number, projectId: number): Promise<O
       open_tasks: toNum(c?.open_tasks),
       overdue_tasks: toNum(c?.overdue_tasks),
       my_open_tasks: toNum(c?.my_open_tasks),
-      pending_suggestions: toNum(c?.pending_suggestions),
-      pending_critical_suggestions: pendingCritical,
+      pending_suggestions: canReview ? toNum(c?.pending_suggestions) : 0,
+      pending_critical_suggestions: canReview ? pendingCritical : 0,
       open_findings: openFindings,
       pinned_findings: toNum(c?.pinned_findings),
       layers: toNum(c?.layers),
@@ -205,12 +211,14 @@ export async function getDashboard(userId: number, projectId: number): Promise<O
 
 /**
  * Obras donde el usuario es dueño o integrante, con agregados para el hub.
- * Usa un número fijo de consultas agrupadas (no N+1).
+ * Usa un número fijo de consultas agrupadas (no N+1). pending_suggestions
+ * solo se calcula en las obras donde el rol tiene ai.review (0 en las demás).
  */
 export async function listMyProjects(userId: number): Promise<ObraProjectSummary[]> {
   const accesses = await listProjectAccessForUser(userId)
   if (accesses.length === 0) return []
   const ids = accesses.map((a) => a.project_id)
+  const reviewIds = accesses.filter((a) => can(a.role, "ai.review")).map((a) => a.project_id)
   const today = todayISO()
 
   const [taskRows, suggestionRows, findingRows, inspectionRows] = await Promise.all([
@@ -233,12 +241,14 @@ export async function listMyProjects(userId: number): Promise<ObraProjectSummary
       WHERE t.project_id IN ${sql(ids)} AND t.status IN ('pendiente', 'en_progreso')
       GROUP BY 1, 2, 3
     `,
-    sql<{ project_id: number; n: number }[]>`
-      SELECT s.project_id, COUNT(*)::int AS n
-      FROM obra_ai_suggestions s
-      WHERE s.project_id IN ${sql(ids)} AND ${livePendingSuggestionCondition(sql)}
-      GROUP BY s.project_id
-    `,
+    reviewIds.length > 0
+      ? sql<{ project_id: number; n: number }[]>`
+          SELECT s.project_id, COUNT(*)::int AS n
+          FROM obra_ai_suggestions s
+          WHERE s.project_id IN ${sql(reviewIds)} AND ${livePendingSuggestionCondition(sql)}
+          GROUP BY s.project_id
+        `
+      : Promise.resolve([] as { project_id: number; n: number }[]),
     sql<{ project_id: number; open_n: number; critical_n: number }[]>`
       SELECT f.project_id,
              COUNT(*)::int AS open_n,
@@ -286,8 +296,10 @@ export async function listMyProjects(userId: number): Promise<ObraProjectSummary
     }
   }
   for (const r of suggestionRows) {
-    const sum = byProject.get(Number(r.project_id))
-    if (sum) sum.pending_suggestions = toNum(r.n)
+    const pid = Number(r.project_id)
+    const sum = byProject.get(pid)
+    // Defensa adicional: la consulta ya se limita a las obras donde el rol revisa.
+    if (sum && can(accessById.get(pid)?.role, "ai.review")) sum.pending_suggestions = toNum(r.n)
   }
   for (const r of findingRows) {
     const sum = byProject.get(Number(r.project_id))

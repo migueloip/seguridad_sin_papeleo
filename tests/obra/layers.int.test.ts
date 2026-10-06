@@ -354,6 +354,10 @@ describe.skipIf(!HAS_TEST_DB)("capas de plano, imágenes y elementos (BD real)",
         objects.set(decodeURIComponent(up[1]), Buffer.from(init?.body as Uint8Array))
         return new Response(JSON.stringify({ Key: up[1] }), { status: 200 })
       }
+      const sign = /\/storage\/v1\/object\/sign\/obra-planos\/(.+)$/.exec(url)
+      if (method === "POST" && sign) {
+        return new Response(JSON.stringify({ signedURL: `/object/sign/obra-planos/${sign[1]}?token=firma-de-prueba` }), { status: 200 })
+      }
       const down = /\/storage\/v1\/object\/authenticated\/obra-planos\/(.+)$/.exec(url)
       if (method === "GET" && down) {
         const b = objects.get(decodeURIComponent(down[1]))
@@ -382,7 +386,13 @@ describe.skipIf(!HAS_TEST_DB)("capas de plano, imágenes y elementos (BD real)",
     )
     const bucketCalls = calls.filter((c) => c.url.endsWith("/storage/v1/bucket"))
     expect(bucketCalls).toHaveLength(1)
-    expect(JSON.parse(bucketCalls[0].body!)).toEqual({ id: "obra-planos", name: "obra-planos", public: false })
+    expect(JSON.parse(bucketCalls[0].body!)).toEqual({
+      id: "obra-planos",
+      name: "obra-planos",
+      public: false,
+      file_size_limit: 25 * 1024 * 1024,
+      allowed_mime_types: ["image/png", "image/jpeg", "image/webp"],
+    })
     expect(calls.every((c) => c.auth === "Bearer service-key-de-prueba")).toBe(true)
 
     const rows = await db.sql<{ id: number; image_path: string | null; image_data: string | null }[]>`
@@ -393,14 +403,26 @@ describe.skipIf(!HAS_TEST_DB)("capas de plano, imágenes y elementos (BD real)",
     }
     expect(a.has_image).toBe(true)
 
+    // La ruta redirige a una URL firmada de corta duración (no pasa los bytes por la función).
     actAs(db.users.visita)
     const res = await imageRoute(a.id)
-    expect(res.status).toBe(200)
-    expect(Buffer.from(await res.arrayBuffer()).equals(png)).toBe(true)
-    const get = calls.find((c) => c.method === "GET")!
-    expect(get.url).toBe(`https://proyecto-prueba.supabase.co/storage/v1/object/authenticated/obra-planos/${rows[0].image_path}`)
+    expect(res.status).toBe(302)
+    expect(res.headers.get("location")).toBe(
+      `https://proyecto-prueba.supabase.co/storage/v1/object/sign/obra-planos/${rows[0].image_path}?token=firma-de-prueba`,
+    )
+    expect(res.headers.get("cache-control")).toBe("private, max-age=600")
+    const signCall = calls.find((c) => c.method === "POST" && c.url.includes("/object/sign/"))!
+    expect(JSON.parse(signCall.body!)).toEqual({ expiresIn: 900 })
     actAs(db.users.extrano)
     expect((await imageRoute(a.id)).status).toBe(404)
+    // Lectura autenticada de los bytes (respaldo de la ruta y extracción con IA).
+    const { readLayerImage } = await import("@/lib/obra/server/layers")
+    const img = await readLayerImage(db.users.visita, a.id)
+    expect(img.mime).toBe("image/png")
+    expect(img.bytes.equals(png)).toBe(true)
+    // (el primer GET es la verificación del bucket que ya existía; ver tests/obra/storage.int.test.ts)
+    const get = calls.find((c) => c.method === "GET" && c.url.includes("/object/authenticated/"))!
+    expect(get.url).toBe(`https://proyecto-prueba.supabase.co/storage/v1/object/authenticated/obra-planos/${rows[0].image_path}`)
 
     // Fotos de hallazgos: misma subida privada, referenciadas como "obra-storage:<ruta>".
     const { decodeImageDataUrl, readObraStorageRef, storeFindingPhoto } = await import("@/lib/obra/server/storage")

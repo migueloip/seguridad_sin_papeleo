@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
 import bcrypt from "bcryptjs"
 import { createSession, destroySession } from "@/lib/auth"
+import { safeNextPath } from "@/lib/safe-redirect"
 
 // Retry wrapper for database operations (handles Neon connection drops)
 async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, delayMs = 1000): Promise<T> {
@@ -111,7 +112,8 @@ export async function registerAction(_prev: AuthFormState, formData: FormData): 
   await createSession(userId)
   await adoptOrphanDataIfFirstUser(userId)
   const createdRole = result[0].role || "user"
-  redirect(createdRole === "admin" ? "/admin" : "/")
+  // ?next= (p.ej. volver a /invitacion/<token>): solo rutas relativas del mismo sitio.
+  redirect(safeNextPath(formData.get("next")) ?? (createdRole === "admin" ? "/admin" : "/"))
 }
 
 export async function login(formData: FormData) {
@@ -150,7 +152,8 @@ export async function loginAction(_prev: AuthFormState, formData: FormData): Pro
   }
 
   await createSession(Number(u.id))
-  redirect((u.role || "user") === "admin" ? "/admin" : "/")
+  // ?next= (p.ej. volver a /invitacion/<token>): solo rutas relativas del mismo sitio.
+  redirect(safeNextPath(formData.get("next")) ?? ((u.role || "user") === "admin" ? "/admin" : "/"))
 }
 
 export async function logout() {

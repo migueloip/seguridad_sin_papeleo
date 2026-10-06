@@ -11,6 +11,9 @@
  * - El proyecto se resuelve desde la sugerencia (nunca desde el cliente) y
  *   todo payload, también el editado, se valida otra vez y sus referencias
  *   (hallazgo, capa) deben pertenecer al mismo proyecto.
+ * - La tarea creada al aprobar un create_task queda con origin 'ia' si la
+ *   sugerencia la redactó un modelo (generator = 'ia') y 'reglas' si salió del
+ *   motor de reglas, aunque la persona la haya editado antes de aprobarla.
  */
 import { sql } from "@/lib/db"
 import { getProjectAccessForUser, ObraAccessError, ObraValidationError, requireProjectPermissionForUser, writeAudit } from "../access"
@@ -28,6 +31,7 @@ import {
   type SuggestionKind,
   type SuggestionPayload,
   type SuggestionStatus,
+  type TaskOrigin,
 } from "../types"
 import { insertElementsInTx, lockLayerForWrite, normalizeElementDraft } from "./elements"
 import { getInspectionById } from "./inspections"
@@ -241,6 +245,8 @@ export async function approveSuggestion(
       if (row.finding_id != null && d.finding_id !== Number(row.finding_id)) {
         throw new ObraValidationError("No se puede cambiar el hallazgo de una tarea sugerida.")
       }
+      // El origen distingue quién redactó la sugerencia aprobada: un modelo de IA o el motor de reglas.
+      const origin: TaskOrigin = row.generator === "ia" ? "ia" : "reglas"
       const task = await createTaskInTx(
         s,
         access,
@@ -258,10 +264,11 @@ export async function approveSuggestion(
           y: d.y,
           checklist: d.checklist,
         },
-        { origin: "ia", suggestion_id: id },
+        { origin, suggestion_id: id },
       )
       appliedType = "task"
       appliedId = task.id
+      applyDetails.task_origin = task.origin
       applyDetails.inspection_id = task.inspection_id
       applyDetails.due_date = task.due_date
       if (task.inspection_id != null) {

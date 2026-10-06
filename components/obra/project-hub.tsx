@@ -50,6 +50,7 @@ export function ProjectHub({ projects, today }: { projects: ObraProjectSummary[]
 
 function ProjectCard({ project: p, today }: { project: ObraProjectSummary; today: string }) {
   const role = p.role
+  // Sin ai.review el servidor envía pending_suggestions = 0 y el indicador no se muestra.
   const showApprovals = can(role, "ai.review")
   const showFindings = can(role, "findings.view")
   return (

@@ -175,6 +175,8 @@ BEGIN
   END IF;
 END $$;
 
+UPDATE obra_tasks t SET origin = 'reglas' FROM obra_ai_suggestions s WHERE s.id = t.suggestion_id AND t.origin = 'ia' AND s.generator = 'reglas';
+
 CREATE TABLE IF NOT EXISTS obra_invitations (
   id SERIAL PRIMARY KEY,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

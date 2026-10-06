@@ -3,18 +3,24 @@
 /**
  * Subir una capa de plano (permiso plans.manage): nombre, especialidad, nivel,
  * etiqueta del nivel y ancho real en metros, más el archivo:
- * - imagen (PNG/JPG/WebP): se reduce en el navegador y se sube como lámina;
+ * - imagen (PNG/JPG/WebP): se envía con su resolución completa (hasta
+ *   6000 px; PNG/JPEG/WebP sin recomprimir);
  * - PDF: se elige la página y se dibuja en el navegador (pdf.js);
+ * - si la lámina cabe en el límite inline (≈ 3,2 MB) viaja como data URL en
+ *   la server action; si no, se pide un permiso firmado y el navegador la sube
+ *   DIRECTO a Supabase Storage (PUT con progreso), y la capa se crea con esa
+ *   ruta. Sin Supabase (o si falla la subida) se muestra el motivo y se ofrece
+ *   reducirla para enviarla inline;
  * - DXF (ASCII): se leen las entidades vectoriales, se asigna un tipo a cada
  *   capa CAD (sugerido por su nombre, editable), se revisa la vista previa y
  *   se crea una capa sin imagen con sus elementos (en lotes, con progreso);
  * - DWG: no se puede leer; se pide exportarlo como DXF.
  */
-import { useId, useRef, useState, type ChangeEvent, type FormEvent } from "react"
+import { useEffect, useId, useRef, useState, type ChangeEvent, type FormEvent } from "react"
 import { toast } from "sonner"
 import { FileUp, Loader2, TriangleAlert, Upload } from "lucide-react"
 import { createObraElements } from "@/app/actions/obra/elements"
-import { createObraLayer } from "@/app/actions/obra/layers"
+import { createObraLayer, createObraLayerUploadTicket } from "@/app/actions/obra/layers"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -29,14 +35,25 @@ import { Label } from "@/components/ui/label"
 import { Progress } from "@/components/ui/progress"
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select"
 import {
+  blobToDataUrl,
   detectPlanFileKind,
+  estimateDataUrlBytes,
+  fitsInline,
+  formatMegabytes,
   getPdfPageCount,
   PLAN_FILE_ACCEPT,
+  PlanUploadError,
   readImageFileAsDataUrl,
+  readImageFileForUpload,
   readTextFile,
+  renderPdfPageForUpload,
   renderPdfPageToDataUrl,
+  UPLOAD_NETWORK_ERROR,
+  uploadToSignedUrl,
   type EncodedImage,
   type PlanFileKind,
+  type PlanImageMime,
+  type PreparedPlanImage,
 } from "@/lib/obra/client-files"
 import {
   countEntitiesByLayer,
@@ -74,6 +91,48 @@ const DWG_MESSAGE =
   "Los archivos DWG no se pueden leer directamente. Ábrelo en AutoCAD (u otro programa CAD), usa «Guardar como» → DXF (ASCII) y sube ese archivo."
 
 type DxfState = { parsed: ParsedDxf; mapping: DxfLayerMapping; result: DxfToDraftsResult; counts: [string, number][] }
+
+/**
+ * Lámina lista para enviar: como Blob (resolución completa; inline o subida
+ * directa según su peso) o como data URL ya reducido (envío inline).
+ */
+type PlanImage = {
+  width: number
+  height: number
+  mime: PlanImageMime
+  bytes: number
+  blob: Blob | null
+  dataUrl: string | null
+  /** URL de la vista previa (blob: se revoca al cambiar de lámina). */
+  previewUrl: string
+  reencoded: boolean
+}
+
+function fromPrepared(p: PreparedPlanImage): PlanImage {
+  return { ...p, bytes: p.blob.size, dataUrl: null, previewUrl: URL.createObjectURL(p.blob) }
+}
+
+function fromEncoded(e: EncodedImage): PlanImage {
+  const mime: PlanImageMime = e.mime === "image/png" || e.mime === "image/webp" ? e.mime : "image/jpeg"
+  return {
+    width: e.width,
+    height: e.height,
+    mime,
+    bytes: estimateDataUrlBytes(e.dataUrl),
+    blob: null,
+    dataUrl: e.dataUrl,
+    previewUrl: e.dataUrl,
+    reencoded: true,
+  }
+}
+
+/** ¿Se envía inline (data URL en la server action) o hay que subirla directo a Storage? */
+function sendsInline(img: PlanImage): boolean {
+  return img.dataUrl !== null || (img.blob !== null && fitsInline({ blob: img.blob, mime: img.mime }))
+}
+
+/** Errores en los que reducir la lámina no ayuda (permisos o sesión). */
+const NO_FALLBACK_RE = /no permite|Sesión no válida|no encontrad/i
 
 function baseName(fileName: string): string {
   const n = fileName.replace(/\.[^.]+$/, "").replace(/[_]+/g, " ").trim()
@@ -171,15 +230,32 @@ function UploadForm({
   const [file, setFile] = useState<File | null>(null)
   const [kind, setKind] = useState<PlanFileKind | null>(null)
   const [fileBusy, setFileBusy] = useState<string | null>(null)
-  const [image, setImage] = useState<EncodedImage | null>(null)
+  const [image, setImageState] = useState<PlanImage | null>(null)
   const [pdf, setPdf] = useState<{ pages: number; page: number } | null>(null)
   const [dxf, setDxf] = useState<DxfState | null>(null)
   const [fileError, setFileError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [progress, setProgress] = useState<{ label: string; value: number } | null>(null)
+  /** Motivo por el que no se pudo subir directo (sin Supabase, red/CORS…): se ofrece reducir la lámina. */
+  const [fallback, setFallback] = useState<string | null>(null)
+  /** Última lámina subida directo (para reintentar createObraLayer sin volver a subirla). */
+  const uploadedRef = useRef<{ blob: Blob; path: string } | null>(null)
 
   const saving = progress !== null
   const working = saving || fileBusy !== null
+
+  // Libera la URL de la vista previa al cambiar de lámina o cerrar el diálogo.
+  useEffect(
+    () => () => {
+      if (image?.previewUrl.startsWith("blob:")) URL.revokeObjectURL(image.previewUrl)
+    },
+    [image],
+  )
+
+  function setImage(next: PlanImage | null) {
+    setImageState(next)
+    setFallback(null)
+  }
 
   function changeLevel(v: string) {
     setLevel(v)
@@ -210,6 +286,7 @@ function UploadForm({
     setDxf(null)
     setFileError(null)
     setError(null)
+    uploadedRef.current = null
     const k = detectPlanFileKind(f)
     setKind(k)
     if (!nameTouched) setName(baseName(f.name))
@@ -225,12 +302,12 @@ function UploadForm({
     onBusyChange(true)
     try {
       if (k === "image") {
-        setImage(await readImageFileAsDataUrl(f))
+        setImage(fromPrepared(await readImageFileForUpload(f)))
       } else if (k === "pdf") {
         const pages = await getPdfPageCount(f)
         setPdf({ pages, page: 1 })
         setFileBusy("Dibujando la página 1 del PDF…")
-        setImage(await renderPdfPageToDataUrl(f, 1))
+        setImage(fromPrepared(await renderPdfPageForUpload(f, 1)))
       } else if (k === "dxf") {
         const text = await readTextFile(f)
         setFileBusy("Interpretando el DXF…")
@@ -260,7 +337,7 @@ function UploadForm({
     setFileBusy(`Dibujando la página ${page} del PDF…`)
     onBusyChange(true)
     try {
-      setImage(await renderPdfPageToDataUrl(file, page))
+      setImage(fromPrepared(await renderPdfPageForUpload(file, page)))
       setFileError(null)
     } catch (err) {
       setFileError(err instanceof Error && err.message ? err.message : "No se pudo dibujar la página.")
@@ -282,8 +359,66 @@ function UploadForm({
     }
   }
 
-  async function submit(e: FormEvent) {
+  /**
+   * Sube la lámina directo a Supabase Storage: permiso firmado → PUT con
+   * progreso. Devuelve la ruta o null (con el motivo en `fallback`). Si el
+   * permiso venció o la ruta ya existía, reintenta una vez con otro permiso.
+   */
+  async function uploadDirect(img: PlanImage, blob: Blob): Promise<string | null> {
+    const cached = uploadedRef.current
+    if (cached && cached.blob === blob) return cached.path
+    for (let attempt = 0; attempt < 2; attempt++) {
+      setProgress({ label: "Pidiendo permiso para subir la lámina…", value: 3 })
+      const ticket = await callAction(() => createObraLayerUploadTicket(projectId, { mime: img.mime, size_bytes: blob.size }))
+      if (ticket.ok === false) {
+        setFallback(ticket.error)
+        return null
+      }
+      const total = formatMegabytes(blob.size)
+      try {
+        await uploadToSignedUrl(ticket.data.upload_url, blob, ticket.data.mime, {
+          onProgress: (f) =>
+            setProgress({ label: `Subiendo la lámina (${Math.round(f * 100)} % de ${total})…`, value: 5 + Math.round(f * 80) }),
+        })
+        uploadedRef.current = { blob, path: ticket.data.path }
+        return ticket.data.path
+      } catch (err) {
+        const e = err instanceof PlanUploadError ? err : new PlanUploadError(UPLOAD_NETWORK_ERROR, "network", 0)
+        if ((e.kind === "expired" || e.kind === "conflict") && attempt === 0) continue
+        setFallback(e.message)
+        return null
+      }
+    }
+    return null
+  }
+
+  function submit(e: FormEvent) {
     e.preventDefault()
+    void doSubmit(image)
+  }
+
+  /** Reduce la lámina al límite inline (como antes de la subida directa) y la envía por la server action. */
+  async function reduceAndSubmit() {
+    if (!file || (kind !== "image" && kind !== "pdf")) return
+    setFallback(null)
+    setFileBusy("Reduciendo la lámina para enviarla sin el almacenamiento de archivos…")
+    onBusyChange(true)
+    let reduced: PlanImage
+    try {
+      const encoded = kind === "pdf" ? await renderPdfPageToDataUrl(file, pdf?.page ?? 1) : await readImageFileAsDataUrl(file)
+      reduced = fromEncoded(encoded)
+    } catch (err) {
+      setFileError(err instanceof Error && err.message ? err.message : "No se pudo reducir la lámina.")
+      return
+    } finally {
+      setFileBusy(null)
+      onBusyChange(false)
+    }
+    setImage(reduced)
+    await doSubmit(reduced)
+  }
+
+  async function doSubmit(img: PlanImage | null) {
     const n = name.trim()
     if (!n) return setError("Escribe el nombre de la capa.")
     const lvl = Number(level)
@@ -294,13 +429,41 @@ function UploadForm({
     if (!Number.isFinite(w) || w < LIMITS.widthMin || w > LIMITS.widthMax) {
       return setError(`El ancho real de la lámina debe estar entre ${LIMITS.widthMin} y ${LIMITS.widthMax} metros.`)
     }
-    if (!image && !dxf) return setError("Elige el archivo de la lámina (imagen, PDF o DXF).")
+    if (!img && !dxf) return setError("Elige el archivo de la lámina (imagen, PDF o DXF).")
     if (dxf && dxf.result.drafts.length === 0) {
       return setError("Con la asignación actual no se importa ningún elemento. Asigna un tipo a al menos una capa CAD.")
     }
     setError(null)
+    setFallback(null)
     onBusyChange(true)
-    setProgress({ label: image ? "Subiendo la lámina…" : "Creando la capa…", value: 10 })
+    setProgress({ label: img ? "Preparando la lámina…" : "Creando la capa…", value: img ? 2 : 10 })
+
+    const stop = () => {
+      setProgress(null)
+      onBusyChange(false)
+    }
+    let picture: {
+      image?: { data_url: string; width_px: number; height_px: number }
+      image_upload?: { path: string; width_px: number; height_px: number }
+    } = {}
+    if (img) {
+      if (sendsInline(img)) {
+        let dataUrl: string
+        try {
+          dataUrl = img.dataUrl ?? (await blobToDataUrl(img.blob as Blob, img.mime))
+        } catch {
+          stop()
+          return setError("No se pudo leer la lámina. Vuelve a elegir el archivo.")
+        }
+        picture = { image: { data_url: dataUrl, width_px: img.width, height_px: img.height } }
+        setProgress({ label: "Subiendo la lámina…", value: 10 })
+      } else {
+        const path = await uploadDirect(img, img.blob as Blob)
+        if (!path) return stop()
+        picture = { image_upload: { path, width_px: img.width, height_px: img.height } }
+        setProgress({ label: "Creando la capa…", value: 88 })
+      }
+    }
 
     const origin = dxf?.result.origin ?? null
     const created = await callAction(() =>
@@ -309,7 +472,7 @@ function UploadForm({
         discipline,
         level: lvl,
         level_label: levelLabelText.trim() || null,
-        image: image ? { data_url: image.dataUrl, width_px: image.width, height_px: image.height } : null,
+        ...picture,
         width_m: w,
         // dxfToElementDrafts ya entrega la proporción entre 0,01 y 100 (ensancha la lámina si hace falta).
         aspect: dxf ? Math.min(100, Math.max(0.01, dxf.result.aspect || 0.7)) : undefined,
@@ -320,16 +483,18 @@ function UploadForm({
       }),
     )
     if (created.ok === false) {
-      setProgress(null)
-      onBusyChange(false)
-      // Una lámina pesada puede superar el límite de envío del servidor: el error llega como falla de red.
+      stop()
+      // Si el servidor rechazó la lámina subida (inválida o ya usada), la próxima vez se sube de nuevo.
+      if (picture.image_upload && created.error !== NETWORK_ERROR) uploadedRef.current = null
+      // Una lámina inline pesada puede superar el límite de envío del servidor: el error llega como falla de red.
       toast.error(
-        created.error === NETWORK_ERROR && image
+        created.error === NETWORK_ERROR && picture.image
           ? "No se pudo enviar la lámina. Si el archivo es muy pesado, prueba con una imagen de menor resolución o exporta solo la lámina necesaria; si no, revisa tu conexión."
           : created.error,
       )
       return
     }
+    uploadedRef.current = null
     const layer = created.data
     let inserted = 0
     if (dxf) {
@@ -428,16 +593,38 @@ function UploadForm({
 
         {image ? (
           <figure className="space-y-1">
-            {/* eslint-disable-next-line @next/next/no-img-element -- vista previa local (data URL) */}
+            {/* eslint-disable-next-line @next/next/no-img-element -- vista previa local (blob: o data URL) */}
             <img
-              src={image.dataUrl}
+              src={image.previewUrl}
               alt="Vista previa de la lámina"
               className="max-h-64 w-full rounded-[10px] border border-border bg-white object-contain"
             />
             <figcaption className="text-[12px] text-muted-foreground">
-              {image.width} × {image.height} px · proporción alto/ancho {formatNumberCL(image.height / image.width, 2)}
+              {image.width} × {image.height} px · {formatMegabytes(image.bytes)} · proporción alto/ancho{" "}
+              {formatNumberCL(image.height / image.width, 2)}
+              {sendsInline(image) ? "" : " · se subirá directo al almacenamiento de archivos, con su resolución completa"}
             </figcaption>
           </figure>
+        ) : null}
+
+        {fallback ? (
+          <div className="space-y-2 rounded-[10px] bg-danger-tint px-3 py-2 text-[13px] text-danger" role="alert">
+            <p className="flex items-start gap-2">
+              <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+              {fallback}
+            </p>
+            {!NO_FALLBACK_RE.test(fallback) && (kind === "image" || kind === "pdf") ? (
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 bg-background"
+                disabled={working}
+                onClick={() => void reduceAndSubmit()}
+              >
+                Reducir la lámina y crear la capa igual
+              </Button>
+            ) : null}
+          </div>
         ) : null}
       </section>
 

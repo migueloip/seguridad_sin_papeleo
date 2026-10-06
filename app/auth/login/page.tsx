@@ -1,11 +1,22 @@
+import type { Metadata } from "next"
 import { AnimatedPage } from "@/components/animated-page"
 import { BrandMark } from "@/components/easysecure/brand-mark"
 import { AuthBrandPanel } from "@/components/easysecure/auth-brand-panel"
 import { LoginForm } from "@/components/easysecure/auth-forms"
+import { safeNextPath } from "@/lib/safe-redirect"
 
-export const metadata = { title: "Iniciar sesión" }
+// La URL puede traer ?next=/invitacion/<token>: no enviarla como Referer a otros sitios.
+export const metadata: Metadata = { title: "Iniciar sesión", referrer: "same-origin" }
 
-export default function LoginPage() {
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ next?: string | string[] }>
+}) {
+  const sp = await searchParams
+  // Retorno tras iniciar sesión (p.ej. /invitacion/<token>); se ignora si no es una ruta relativa segura.
+  const next = safeNextPath(typeof sp.next === "string" ? sp.next : null)
+  const forInvitation = next?.startsWith("/invitacion/") ?? false
   return (
     <AnimatedPage duration={400}>
       <div className="grid min-h-screen lg:grid-cols-[1.05fr_1fr]">
@@ -21,9 +32,11 @@ export default function LoginPage() {
             <h2 className="mb-1.5 font-display text-[26px] font-bold tracking-[-0.02em]">
               Iniciar sesión
             </h2>
-            <p className="mb-8 text-sm text-muted-foreground">Ingresa a tu panel de prevención.</p>
+            <p className="mb-8 text-sm text-muted-foreground">
+              {forInvitation ? "Ingresa con el correo invitado para aceptar la invitación a la obra." : "Ingresa a tu panel de prevención."}
+            </p>
 
-            <LoginForm />
+            <LoginForm next={next} />
           </div>
         </div>
       </div>

@@ -16,7 +16,9 @@ describe("esquema obra", () => {
 
   it("todas las sentencias son idempotentes", () => {
     for (const s of OBRA_SCHEMA_STATEMENTS) {
-      expect(s).toMatch(/IF NOT EXISTS/)
+      // Los backfills de datos se re-ejecutan sin efecto porque su WHERE excluye lo ya corregido.
+      if (/^UPDATE /.test(s)) expect(s).toMatch(/\bWHERE\b/)
+      else expect(s).toMatch(/IF NOT EXISTS/)
     }
   })
 })

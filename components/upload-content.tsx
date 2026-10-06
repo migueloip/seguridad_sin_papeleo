@@ -32,6 +32,36 @@ import { createChecklistTemplate } from "@/app/actions/checklists"
 import { documentTypes } from "@/app/data/document-types"
 import { normalizeRut, isValidRut, normalizeDate } from "@/lib/utils"
 
+type PdfJs = typeof import("pdfjs-dist")
+
+let pdfjsPromise: Promise<PdfJs> | null = null
+
+/**
+ * Carga pdf.js con su worker servido desde el propio bundle de la app (mismo
+ * origen y exactamente la versión instalada del paquete), igual que
+ * lib/obra/client-files.ts. Antes el worker se bajaba de un CDN de terceros
+ * con versión flotante ("@4") y sin verificación de integridad, y ese código
+ * corre con el origen de la app.
+ */
+function loadPdfJs(): Promise<PdfJs> {
+  if (!pdfjsPromise) {
+    pdfjsPromise = (import("pdfjs-dist") as Promise<PdfJs>)
+      .then((pdfjs) => {
+        try {
+          pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString()
+        } catch {
+          // ya configurado
+        }
+        return pdfjs
+      })
+      .catch((e: unknown) => {
+        pdfjsPromise = null
+        throw e
+      })
+  }
+  return pdfjsPromise
+}
+
 interface ExtractedData {
   rut: string | null
   nombre: string | null
@@ -224,10 +254,7 @@ export function UploadContent({ projectId }: { projectId?: number }) {
 
         try {
           setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, progress: 20 } : f)))
-          const pdfjs = (await import("pdfjs-dist")) as typeof import("pdfjs-dist")
-          try {
-            pdfjs.GlobalWorkerOptions.workerSrc = "https://unpkg.com/pdfjs-dist@4/build/pdf.worker.min.mjs"
-          } catch {}
+          const pdfjs = await loadPdfJs()
           const buf = await file.arrayBuffer()
           const loadingTask = pdfjs.getDocument({ data: new Uint8Array(buf) })
           const pdf = await loadingTask.promise
@@ -336,8 +363,7 @@ export function UploadContent({ projectId }: { projectId?: number }) {
           // If PDF, render first page to PNG for Vision models
           if (file.type === "application/pdf") {
             try {
-              const pdfjs = (await import("pdfjs-dist")) as typeof import("pdfjs-dist")
-              try { pdfjs.GlobalWorkerOptions.workerSrc = "https://unpkg.com/pdfjs-dist@4/build/pdf.worker.min.mjs" } catch {}
+              const pdfjs = await loadPdfJs()
               // pdfjs.getDocument expects an ArrayBuffer
               const buf = await file.arrayBuffer()
               const loadingTask = pdfjs.getDocument({ data: new Uint8Array(buf) })

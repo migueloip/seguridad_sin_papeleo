@@ -145,4 +145,26 @@ describe.skipIf(!HAS_TEST_DB)("API móvil de tareas de obra (BD real, Bearer)", 
     const ok = await callPost(tasks.other, { status: "en_progreso" }, tokens.supervisor)
     expect(ok.status).toBe(200)
   })
+
+  it("GET sin project_id: pending_suggestions es 0 para roles sin ai.review y real para quien revisa", async () => {
+    const { GET } = await import("@/app/api/mobile/obra/tasks/route")
+    const sg = await db.sql<{ id: number }[]>`
+      INSERT INTO obra_ai_suggestions (project_id, kind, status, title, severity, payload)
+      VALUES (${db.projectId}, 'create_task', 'pending', 'Pendiente para revisar', 'high', '{"title":"x"}'::jsonb)
+      RETURNING id`
+    await db.sql`INSERT INTO sessions (user_id, token, expires_at)
+                 VALUES (${db.users.prevencionista}, 'tok-prevencionista', CURRENT_TIMESTAMP + interval '1 day')`
+    try {
+      for (const token of [tokens.trabajador, tokens.supervisor]) {
+        const body = (await (await GET(get("", token))).json()) as { projects: ObraProjectSummary[] }
+        const p = body.projects.find((x) => x.project_id === db.projectId)
+        expect(p?.pending_suggestions).toBe(0)
+      }
+      const prev = (await (await GET(get("", "tok-prevencionista"))).json()) as { projects: ObraProjectSummary[] }
+      expect(prev.projects.find((x) => x.project_id === db.projectId)).toMatchObject({ role: "prevencionista", pending_suggestions: 1 })
+    } finally {
+      await db.sql`DELETE FROM obra_ai_suggestions WHERE id = ${sg[0].id}`
+      await db.sql`DELETE FROM sessions WHERE token = 'tok-prevencionista'`
+    }
+  })
 })

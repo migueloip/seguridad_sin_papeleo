@@ -1,5 +1,4 @@
 "use server"
-// @ts-nocheck - TypeScript postgres template literal type issue with v3
 
 import { sql } from "@/lib/db"
 import { getCurrentUserId } from "@/lib/auth"
@@ -181,7 +180,7 @@ export type ChecklistTemplateRow = {
 export async function getChecklistTemplates(): Promise<ChecklistTemplateRow[]> {
   const userId = await getCurrentUserId()
   if (!userId) return []
-  const rows = await sql<ChecklistTemplateRow>`
+  const rows = await sql<ChecklistTemplateRow[]>`
     SELECT
       t.id,
       t.name,
@@ -221,7 +220,7 @@ export async function createChecklistTemplate(
     throw new Error("Debes iniciar sesión para crear checklists")
   }
 
-  const rows = await sql<{ id: number }>`
+  const rows = await sql<{ id: number }[]>`
     INSERT INTO checklist_templates (user_id, category_id, name, description, items, created_at, updated_at)
     VALUES (${userId}, NULL, ${data.name}, ${data.description || null}, ${data.items}::jsonb, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     RETURNING id
@@ -265,6 +264,14 @@ function normalizeStoredItems(raw: unknown): ChecklistItemInput[] {
     .filter((x): x is ChecklistItemInput => !!x)
 }
 
+/** Fila cruda de checklist_templates; `items` puede venir en cualquiera de sus formas históricas. */
+type StoredTemplateRow = {
+  id: number
+  name: string
+  description: string | null
+  items: unknown
+}
+
 export type ChecklistTemplateDetail = {
   id: number
   name: string
@@ -275,7 +282,7 @@ export type ChecklistTemplateDetail = {
 export async function getChecklistTemplate(id: number): Promise<ChecklistTemplateDetail | null> {
   const userId = await getCurrentUserId()
   if (!userId) return null
-  const rows = await sql`
+  const rows = await sql<StoredTemplateRow[]>`
     SELECT id, name, description, items FROM checklist_templates
     WHERE id = ${id} AND user_id = ${userId} LIMIT 1
   `
@@ -295,7 +302,7 @@ export async function updateChecklistTemplate(
 ): Promise<boolean> {
   const userId = await getCurrentUserId()
   if (!userId) return false
-  const current = await sql`
+  const current = await sql<StoredTemplateRow[]>`
     SELECT id, name, description, items FROM checklist_templates
     WHERE id = ${id} AND user_id = ${userId} LIMIT 1
   `
@@ -350,7 +357,7 @@ export async function completeChecklist(
   const tpl = await getChecklistTemplate(input.templateId)
   if (!tpl) throw new Error("Plantilla no encontrada")
 
-  const inserted = await sql<{ id: number }>`
+  const inserted = await sql<{ id: number }[]>`
     INSERT INTO completed_checklists (user_id, template_id, project_id, inspector_name, location, responses, notes, status, completed_at)
     VALUES (${userId}, ${input.templateId}, ${input.projectId || null}, ${input.inspectorName || null},
             ${input.location || null}, ${input.responses}::jsonb, ${input.notes || null}, 'completed', CURRENT_TIMESTAMP)
@@ -393,10 +400,20 @@ export type CompletedChecklistRow = {
   skipped: number
 }
 
+type CompletedChecklistDbRow = {
+  id: number
+  inspector_name: string | null
+  location: string | null
+  completed_at: string
+  responses: unknown
+  template_name: string
+  project_name: string | null
+}
+
 export async function getCompletedChecklists(limit = 12): Promise<CompletedChecklistRow[]> {
   const userId = await getCurrentUserId()
   if (!userId) return []
-  const rows = await sql`
+  const rows = await sql<CompletedChecklistDbRow[]>`
     SELECT c.id, c.inspector_name, c.location, c.completed_at::text AS completed_at, c.responses,
            COALESCE(t.name, 'Checklist eliminado') AS template_name,
            p.name AS project_name

@@ -471,7 +471,12 @@ async function existingCorrelationKeys(
  * - Un análisis que termina con reglas (sin IA, o porque la IA falló) no
  *   reemplaza las sugerencias pendientes redactadas por IA.
  */
-async function runAnalysis(access: ProjectAccess, findingId: number, useAi: boolean): Promise<FindingAnalysis> {
+async function runAnalysis(
+  access: ProjectAccess,
+  findingId: number,
+  useAi: boolean,
+  auditExtra?: Record<string, unknown>,
+): Promise<FindingAnalysis> {
   const pin = await getPin(sql, access.project_id, findingId)
   if (!pin) throw new ObraAccessError(404, NOT_FOUND)
   const correlations = await computeCorrelations(sql, access.project_id, pin)
@@ -595,6 +600,7 @@ async function runAnalysis(access: ProjectAccess, findingId: number, useAi: bool
           superseded_ids: superseded.map((r) => Number(r.id)),
           ...(alreadyTasked > 0 ? { already_tasked: alreadyTasked } : {}),
           ...(notes.length > 0 ? { notes } : {}),
+          ...(auditExtra ?? {}),
         },
       },
       tx,
@@ -826,6 +832,46 @@ export async function analyzeFinding(
   if (useAi) await assertAiQuota(access, "finding_analysis")
   const result = await runAnalysis(access, id, useAi)
   return { ...result, project_id: access.project_id }
+}
+
+/**
+ * Análisis inicial de un hallazgo ubicado, ejecutado por el sistema (p.ej. el
+ * seed demo) y no por una persona con sesión. Hace lo mismo que el análisis
+ * automático al reportar o ubicar (reportFindingOnPlan / pinExistingFinding):
+ * motor de reglas, sin IA y sin cuota, y deja sugerencias PENDIENTES (nada se
+ * aplica sin aprobación humana).
+ *
+ * - El actor es el dueño del proyecto (gerente implícito): queda como
+ *   requested_by y en la auditoría finding.analyzed, con details.via (por
+ *   defecto "seed").
+ * - Idempotente: si el hallazgo ya tiene sugerencias (en cualquier estado) no
+ *   hace nada y devuelve { created: 0 }. Re-analizar es analyzeFinding.
+ * - 404 si el proyecto no existe o el hallazgo no está ubicado en él.
+ *
+ * Sin "use server": no es un endpoint. Solo para scripts y procesos internos.
+ */
+export async function analyzeFindingAsSystem(
+  projectId: number,
+  findingId: number,
+  opts?: { via?: string },
+): Promise<{ created: number }> {
+  const pid = toPositiveInt(projectId)
+  const fid = toPositiveInt(findingId)
+  if (pid == null || fid == null) throw new ObraAccessError(404, NOT_FOUND)
+  const owners = await sql<{ user_id: number | null }[]>`SELECT user_id FROM projects WHERE id = ${pid} LIMIT 1`
+  const ownerId = owners[0]?.user_id == null ? null : Number(owners[0].user_id)
+  if (ownerId == null) throw new ObraAccessError(404, "Proyecto no encontrado.")
+  const access = await getProjectAccessForUser(ownerId, pid)
+  if (!access) throw new ObraAccessError(404, "Proyecto no encontrado.")
+  const pin = await getPin(sql, access.project_id, fid)
+  if (!pin) throw new ObraAccessError(404, NOT_FOUND)
+  const existing = await sql<{ n: number }[]>`
+    SELECT COUNT(*)::int AS n FROM obra_ai_suggestions WHERE project_id = ${access.project_id} AND finding_id = ${fid}
+  `
+  if (Number(existing[0]?.n ?? 0) > 0) return { created: 0 }
+  const via = typeof opts?.via === "string" && opts.via.trim() ? opts.via.trim().slice(0, 40) : "seed"
+  const result = await runAnalysis(access, fid, false, { via })
+  return { created: result.suggestions.length }
 }
 
 /** Contexto de un hallazgo ubicado: pin, correlaciones en vivo, sugerencias y tareas vinculadas. */

@@ -193,6 +193,60 @@ describe.skipIf(!HAS_TEST_DB)("tablero y auditoría de obra (BD real)", () => {
     expect(theirs[0]).toMatchObject({ open_findings: 1, critical_findings: 1, open_tasks: 0 })
   })
 
+  it("sin ai.review (supervisor, trabajador, visita) no reciben conteos de sugerencias pendientes; el riesgo es el mismo", async () => {
+    const { getObraDashboard } = await import("@/app/actions/obra/dashboard")
+    const { listMyObraProjects } = await import("@/app/actions/obra/projects")
+    actAs(db.users.gerente)
+    const g = unwrap(await getObraDashboard(db.projectId))
+    expect(g.counts).toMatchObject({ pending_suggestions: 2, pending_critical_suggestions: 1 })
+
+    for (const role of ["supervisor", "trabajador", "visita"] as const) {
+      actAs(db.users[role])
+      const d = unwrap(await getObraDashboard(db.projectId))
+      expect(d.counts.pending_suggestions, role).toBe(0)
+      expect(d.counts.pending_critical_suggestions, role).toBe(0)
+      expect(d.pending_suggestions, role).toEqual([])
+      // El índice de riesgo sigue usando las aprobaciones críticas reales.
+      expect(d.risk, role).toEqual(g.risk)
+      const [p] = unwrap(await listMyObraProjects())
+      expect(p, role).toMatchObject({ project_id: db.projectId, role, pending_suggestions: 0 })
+    }
+
+    for (const role of ["jefe_obra", "prevencionista"] as const) {
+      actAs(db.users[role])
+      const d = unwrap(await getObraDashboard(db.projectId))
+      expect(d.counts, role).toMatchObject({ pending_suggestions: 2, pending_critical_suggestions: 1 })
+      const [p] = unwrap(await listMyObraProjects())
+      expect(p, role).toMatchObject({ role, pending_suggestions: 2 })
+    }
+  })
+
+  it("hub con varias obras: el conteo de sugerencias solo aparece donde el rol revisa", async () => {
+    const { listMyObraProjects } = await import("@/app/actions/obra/projects")
+    const { listMyProjects } = await import("@/lib/obra/server/dashboard")
+    // El supervisor de la obra principal es prevencionista en una segunda obra con 1 pendiente.
+    const p2 = await db.sql<{ id: number }[]>`
+      INSERT INTO projects (name, user_id, status) VALUES ('Segunda obra', ${db.users.gerente}, 'active') RETURNING id`
+    const pid2 = Number(p2[0].id)
+    await db.sql`INSERT INTO obra_members (project_id, user_id, role, invited_by)
+                 VALUES (${pid2}, ${db.users.supervisor}, 'prevencionista', ${db.users.gerente})`
+    await db.sql`INSERT INTO obra_ai_suggestions (project_id, kind, status, title, severity, payload)
+                 VALUES (${pid2}, 'create_task', 'pending', 'Pendiente segunda obra', 'medium', '{"title":"z"}'::jsonb)`
+    try {
+      actAs(db.users.supervisor)
+      const list = unwrap(await listMyObraProjects())
+      const byId = new Map(list.map((p) => [p.project_id, p]))
+      expect(byId.get(db.projectId)).toMatchObject({ role: "supervisor", pending_suggestions: 0 })
+      expect(byId.get(pid2)).toMatchObject({ role: "prevencionista", pending_suggestions: 1 })
+      // La API móvil usa la misma función con el userId del token.
+      const mobile = await listMyProjects(db.users.supervisor)
+      expect(mobile.find((p) => p.project_id === db.projectId)?.pending_suggestions).toBe(0)
+      expect(mobile.find((p) => p.project_id === pid2)?.pending_suggestions).toBe(1)
+    } finally {
+      await db.sql`DELETE FROM projects WHERE id = ${pid2}`
+    }
+  })
+
   it("auditoría: visita y gerente la ven, paginada; trabajador y supervisor no", async () => {
     const { listObraAudit } = await import("@/app/actions/obra/audit")
     actAs(db.users.visita)

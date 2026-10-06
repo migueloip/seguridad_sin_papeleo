@@ -1,7 +1,8 @@
 
 "use client"
 
-import { useChat } from "@ai-sdk/react"
+import { useChat, type UIMessage } from "@ai-sdk/react"
+import type { TextUIPart, ToolUIPart, UIDataTypes } from "ai"
 import { useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -9,7 +10,37 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { ScrollArea } from "./ui/scroll-area"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Send, Bot, User, Sparkles, PlusCircle, Loader2 } from "lucide-react"
-import type { DesignerElement } from "@/lib/pdf-editor"
+import type { DesignerElement, MatrixRow } from "@/lib/pdf-editor"
+
+/** Entrada de la herramienta generateReportElement (espejo del esquema zod de app/api/chat/route.ts). */
+type ReportElementInput = {
+    type: "simple_section" | "table" | "matrix" | "list" | "heading" | "plain_text"
+    title?: string
+    content?: string
+    data?: string
+    instructions?: string
+}
+
+/** Herramientas que expone /api/chat, tipadas para las partes de mensaje de AI SDK v5. */
+type ReportChatTools = {
+    generateReportElement: {
+        input: ReportElementInput
+        output: { _action: "CREATE_ELEMENT"; elementData: ReportElementInput }
+    }
+    queryProjectData: {
+        input: { dataType: "findings" | "documents" | "workers" | "summary"; period?: "weekly" | "monthly" | "all" }
+        output: unknown
+    }
+}
+
+type ReportChatMessage = UIMessage<unknown, UIDataTypes, ReportChatTools>
+type ReportChatPart = ReportChatMessage["parts"][number]
+type ReportToolPart = ToolUIPart<ReportChatTools>
+
+const isTextPart = (part: ReportChatPart): part is TextUIPart => part.type === "text"
+
+const isReportToolPart = (part: ReportChatPart): part is ReportToolPart =>
+    part.type === "tool-generateReportElement" || part.type === "tool-queryProjectData"
 
 interface AiReportChatProps {
     projectId?: number
@@ -21,9 +52,9 @@ export function AiReportChat({ projectId, onAddElement }: AiReportChatProps) {
     const [accessType, setAccessType] = useState<null | "findings" | "documents" | "workers">(null)
     const [accessPeriod, setAccessPeriod] = useState<"weekly" | "monthly" | "all">("monthly")
 
-    const { messages, status, sendMessage } = useChat({
+    const { messages, status, sendMessage } = useChat<ReportChatMessage>({
         onFinish: ({ message }) => {
-            handleToolsFromMessage(message as any)
+            handleToolsFromMessage(message)
         }
     })
 
@@ -37,7 +68,8 @@ export function AiReportChat({ projectId, onAddElement }: AiReportChatProps) {
         }
     }, [messages])
 
-    const handleCreateElement = (data: any) => {
+    const handleCreateElement = (data: ReportElementInput | undefined) => {
+        if (!data || typeof data !== "object") return
         const now = Date.now()
         let newElement: DesignerElement | null = null
 
@@ -90,7 +122,7 @@ export function AiReportChat({ projectId, onAddElement }: AiReportChatProps) {
                 items
             }
         } else if (data.type === "matrix") {
-            let rows: any[] = []
+            let rows: MatrixRow[] = []
             try {
                 if (data.data) rows = JSON.parse(data.data)
             } catch { }
@@ -106,35 +138,14 @@ export function AiReportChat({ projectId, onAddElement }: AiReportChatProps) {
         }
     }
 
-    const handleToolsFromMessage = (message: any) => {
-        const parts = Array.isArray(message?.parts) ? message.parts : []
-        for (const part of parts) {
-            if (!part || typeof part !== "object") continue
-            const type = (part as any).type as string | undefined
-            const toolName = (part as any).toolName as string | undefined
-            const state = (part as any).state
-            if (
-                (type === "tool-generateReportElement" || toolName === "generateReportElement") &&
-                state === "result"
-            ) {
-                const result = (part as any).result ?? (part as any).output ?? (part as any).data
-                if (result && result._action === "CREATE_ELEMENT") {
-                    handleCreateElement(result.elementData)
-                }
+    // En AI SDK v5 cada llamada a herramienta llega como una parte `tool-<nombre>`
+    // cuyo resultado queda en `output` con state "output-available".
+    const handleToolsFromMessage = (message: ReportChatMessage) => {
+        for (const part of message.parts) {
+            if (part.type !== "tool-generateReportElement" || part.state !== "output-available") continue
+            if (part.output?._action === "CREATE_ELEMENT") {
+                handleCreateElement(part.output.elementData)
             }
-        }
-
-        const toolInvocations = (message as any).toolInvocations
-        if (Array.isArray(toolInvocations)) {
-            toolInvocations.forEach((tool: any) => {
-                if (!tool || typeof tool !== "object") return
-                if (tool.toolName === "generateReportElement" && tool.state === "result") {
-                    const result = tool.result as any
-                    if (result._action === "CREATE_ELEMENT") {
-                        handleCreateElement(result.elementData)
-                    }
-                }
-            })
         }
     }
 
@@ -191,25 +202,11 @@ export function AiReportChat({ projectId, onAddElement }: AiReportChatProps) {
                             </div>
                         )}
                         {messages.map((m) => {
-                            const msg = m as any
-                            const text = Array.isArray(msg.parts)
-                                ? msg.parts
-                                      .filter((p: any) => p?.type === "text")
-                                      .map((p: any) => String(p.text || ""))
-                                      .join("")
-                                : msg.content
-                            const toolParts = Array.isArray(msg.parts)
-                                ? msg.parts.filter(
-                                      (p: any) =>
-                                          p &&
-                                          typeof p === "object" &&
-                                          (p.type === "tool-generateReportElement" ||
-                                              (p as any).toolName === "generateReportElement" ||
-                                              p.type === "tool-queryProjectData" ||
-                                              (p as any).toolName === "queryProjectData"),
-                                  )
-                                : []
-                            const legacyTools = Array.isArray(msg.toolInvocations) ? msg.toolInvocations : []
+                            const text = m.parts
+                                .filter(isTextPart)
+                                .map((p) => p.text)
+                                .join("")
+                            const toolParts = m.parts.filter(isReportToolPart)
 
                             return (
                             <div key={m.id} className={`flex gap-3 ${m.role === "user" ? "justify-end" : "justify-start"}`}>
@@ -223,56 +220,24 @@ export function AiReportChat({ projectId, onAddElement }: AiReportChatProps) {
                                         }`}
                                 >
                                     <div className="whitespace-pre-wrap">{text}</div>
-                                    {toolParts.map((part: any, index: number) => {
-                                        if (!part || typeof part !== "object") return null
-                                        const anyPart = part as any
-                                        if (anyPart.state !== "result") return null
-                                        if (anyPart.toolName === "generateReportElement") {
-                                            const res = anyPart.result as any
-                                            if (res?._action === "CREATE_ELEMENT") {
-                                                return (
-                                                    <div key={`tool-part-${m.id}-${index}`} className="mt-2 rounded bg-background/50 p-2 text-xs font-medium">
-                                                        <div className="flex items-center gap-1 text-green-600">
-                                                            <PlusCircle className="h-3 w-3" />
-                                                            Elemento creado: {res.elementData?.type}
-                                                        </div>
-                                                    </div>
-                                                )
-                                            }
-                                        }
-                                        if (anyPart.toolName === "queryProjectData") {
+                                    {toolParts.map((part) => {
+                                        if (part.state !== "output-available") return null
+                                        if (part.type === "tool-generateReportElement") {
+                                            if (part.output?._action !== "CREATE_ELEMENT") return null
                                             return (
-                                                <div key={`tool-part-${m.id}-${index}`} className="mt-2 rounded bg-background/50 p-2 text-xs text-muted-foreground">
-                                                    🔍 Datos consultados
+                                                <div key={part.toolCallId} className="mt-2 rounded bg-background/50 p-2 text-xs font-medium">
+                                                    <div className="flex items-center gap-1 text-green-600">
+                                                        <PlusCircle className="h-3 w-3" />
+                                                        Elemento creado: {part.output.elementData?.type}
+                                                    </div>
                                                 </div>
                                             )
                                         }
-                                        return null
-                                    })}
-                                    {legacyTools.map((toolInvocation: any) => {
-                                        if (!toolInvocation || typeof toolInvocation !== "object") return null
-                                        if (toolInvocation.state !== "result") return null
-                                        if (toolInvocation.toolName === "generateReportElement") {
-                                            const res = toolInvocation.result as any
-                                            if (res._action === "CREATE_ELEMENT") {
-                                                return (
-                                                    <div key={toolInvocation.toolCallId} className="mt-2 rounded bg-background/50 p-2 text-xs font-medium">
-                                                        <div className="flex items-center gap-1 text-green-600">
-                                                            <PlusCircle className="h-3 w-3" />
-                                                            Elemento creado: {res.elementData.type}
-                                                        </div>
-                                                    </div>
-                                                )
-                                            }
-                                        }
-                                        if (toolInvocation.toolName === "queryProjectData") {
-                                            return (
-                                                <div key={toolInvocation.toolCallId} className="mt-2 rounded bg-background/50 p-2 text-xs text-muted-foreground">
-                                                    🔍 Datos consultados: {toolInvocation.args.dataType}
-                                                </div>
-                                            )
-                                        }
-                                        return null
+                                        return (
+                                            <div key={part.toolCallId} className="mt-2 rounded bg-background/50 p-2 text-xs text-muted-foreground">
+                                                🔍 Datos consultados
+                                            </div>
+                                        )
                                     })}
                                 </div>
                                 {m.role === "user" && (
@@ -293,7 +258,7 @@ export function AiReportChat({ projectId, onAddElement }: AiReportChatProps) {
                                 </div>
                             </div>
                         )}
-                        <div ref={scrollRef as any} />
+                        <div ref={scrollRef} />
                     </div>
                 </ScrollArea>
                 <div className="bg-background border-t p-3 space-y-2">

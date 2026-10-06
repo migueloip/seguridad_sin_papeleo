@@ -25,14 +25,21 @@
  *   rotación para probar la alineación), Eléctrico (ducto y tablero), Agua potable y Gas.
  * - El hallazgo "Grieta diagonal en muro eje B" ubicado a ~1,2 m del colector, con su pin.
  * - Una revisión programada y dos tareas manuales de ejemplo.
+ * - Las sugerencias pendientes del hallazgo (bandeja "Aprobaciones IA"), generadas por el
+ *   MISMO análisis por reglas que corre la app al reportar: analyzeFindingAsSystem de
+ *   lib/obra/server/pins.ts, empaquetado al vuelo con esbuild (sin duplicar la lógica).
+ *   Solo si el hallazgo aún no tiene sugerencias; si el empaquetado falla, el seed sigue y
+ *   explica cómo generarlas desde la app.
  *
  * Si falta la migración 006 la aplica leyendo scripts/006-obra-integral.sql (con el mismo
  * advisory lock que usa la app). Requiere el esquema base (POST /api/admin/migrate).
  */
 import crypto from "node:crypto"
 import fs from "node:fs"
+import { builtinModules, createRequire } from "node:module"
+import os from "node:os"
 import path from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import bcrypt from "bcryptjs"
 import postgres from "postgres"
 
@@ -510,6 +517,140 @@ async function seed(sql, { ownerEmail, resetPasswords }) {
 }
 
 // ---------------------------------------------------------------------------
+// Sugerencias del hallazgo: el mismo análisis por reglas que la app
+// ---------------------------------------------------------------------------
+
+function isFileUrl(url) {
+  try {
+    return fs.statSync(fileURLToPath(url)).isFile()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Plugin de esbuild: deja fuera del bundle los paquetes npm y los importa por su ruta
+ * absoluta en node_modules del repo. El bundle se escribe en os.tmpdir(), desde donde Node
+ * no encontraría node_modules; además `next` no tiene mapa de "exports" y en ESM
+ * `next/headers` sin extensión no resuelve. Se intenta la resolución ESM (condición
+ * "import") y, si no apunta a un archivo, la de CommonJS.
+ */
+function repoPackagesPlugin() {
+  const requireFromRoot = createRequire(path.join(ROOT, "package.json"))
+  const builtins = new Set(builtinModules)
+  return {
+    name: "paquetes-del-repo",
+    setup(b) {
+      b.onResolve({ filter: /^[^./]/ }, (args) => {
+        // "@/..." es el alias del repo (lo resuelve esbuild).
+        if (args.path === "@" || args.path.startsWith("@/")) return undefined
+        if (args.path.startsWith("node:") || builtins.has(args.path)) return { path: args.path, external: true }
+        let url = null
+        try {
+          url = typeof import.meta.resolve === "function" ? import.meta.resolve(args.path) : null
+        } catch {
+          url = null
+        }
+        if (!url || (url.startsWith("file:") && !isFileUrl(url))) {
+          try {
+            url = pathToFileURL(requireFromRoot.resolve(args.path)).href
+          } catch {
+            url = args.path
+          }
+        }
+        return { path: url, external: true }
+      })
+    },
+  }
+}
+
+/**
+ * Carga analyzeFindingAsSystem (lib/obra/server/pins.ts) y el `sql` de la app (lib/db.ts)
+ * empaquetándolos con esbuild (viene con vite) en un archivo temporal. lib/db lee
+ * DATABASE_URL al importarse: debe estar definido antes de llamar a esta función.
+ */
+async function loadAppAnalysis() {
+  const { build } = await import("esbuild")
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ssp-seed-obra-"))
+  const outfile = path.join(dir, "analysis.mjs")
+  try {
+    await build({
+      stdin: {
+        contents: 'export { analyzeFindingAsSystem } from "@/lib/obra/server/pins"\nexport { sql } from "@/lib/db"\n',
+        resolveDir: ROOT,
+        sourcefile: "seed-obra-analysis.ts",
+        loader: "ts",
+      },
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      target: "node20",
+      alias: { "@": ROOT },
+      plugins: [repoPackagesPlugin()],
+      outfile,
+      write: true,
+      logLevel: "silent",
+    })
+    const mod = await import(pathToFileURL(outfile).href)
+    if (typeof mod.analyzeFindingAsSystem !== "function" || typeof mod.sql?.end !== "function") {
+      throw new Error("el bundle no exporta analyzeFindingAsSystem")
+    }
+    return mod
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+function shortReason(e) {
+  const msg = e instanceof Error ? e.message : String(e)
+  return msg.split("\n")[0].slice(0, 200)
+}
+
+/**
+ * Deja las sugerencias pendientes del hallazgo demo con el análisis por reglas de la app
+ * (actor = dueño, auditado con via "seed"). Idempotente: si el hallazgo ya tiene
+ * sugerencias (en cualquier estado) no crea otras. Nunca hace fallar el seed.
+ */
+async function seedFindingSuggestions(sql, projectId, findingId) {
+  // La transacción principal ya terminó: el lock de sesión serializa seeds concurrentes.
+  await sql`SELECT pg_advisory_lock(${SEED_LOCK_KEY})`
+  try {
+    const existing = await sql`
+      SELECT COUNT(*)::int AS n FROM obra_ai_suggestions WHERE project_id = ${projectId} AND finding_id = ${findingId}
+    `
+    const n = Number(existing[0]?.n ?? 0)
+    if (n > 0) return { status: `ya tenía ${n} sugerencia${n === 1 ? "" : "s"} (no se crean otras)`, warning: null }
+
+    const howTo =
+      `Para generarlas desde la app, entra con el dueño (o como jefe de obra o prevencionista) a ` +
+      `/obra/${projectId}/planos?finding=${findingId} y pulsa «Analizar con IA» en el panel del hallazgo ` +
+      `(sin IA configurada usa el mismo motor de reglas).`
+    let app
+    try {
+      app = await loadAppAnalysis()
+    } catch (e) {
+      return { status: "no generadas", warning: `No se pudo cargar el análisis de la app (${shortReason(e)}). ${howTo}` }
+    }
+    try {
+      const { created } = await app.analyzeFindingAsSystem(projectId, findingId, { via: "seed" })
+      return {
+        status:
+          created > 0
+            ? `${created} sugerencia${created === 1 ? "" : "s"} pendiente${created === 1 ? "" : "s"} del motor de reglas`
+            : "el motor de reglas no encontró elementos cercanos (sin sugerencias)",
+        warning: null,
+      }
+    } catch (e) {
+      return { status: "no generadas", warning: `El análisis por reglas falló (${shortReason(e)}). ${howTo}` }
+    } finally {
+      await app.sql.end({ timeout: 5 }).catch(() => {})
+    }
+  } finally {
+    await sql`SELECT pg_advisory_unlock(${SEED_LOCK_KEY})`
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -534,6 +675,7 @@ async function main() {
     const migrated = await ensureObraSchema(sql)
     if (migrated) console.log("✓ Migración 006 (Obra Integral) aplicada.")
     const { projectId, report } = await seed(sql, args)
+    const suggestions = await seedFindingSuggestions(sql, projectId, report.finding.id)
 
     console.log("")
     console.log(`Obra demo: "${PROJECT_NAME}" (id ${projectId}) — ${report.projectCreated ? "creada" : "ya existía"}`)
@@ -549,10 +691,13 @@ async function main() {
     console.log("Capas del nivel 1:")
     for (const l of report.layers) console.log(`  - ${l.name}: ${l.status}`)
     console.log(`Hallazgo "${FINDING_TITLE}": ${report.finding.status} (id ${report.finding.id})`)
+    console.log(`Sugerencias del hallazgo: ${suggestions.status}`)
+    if (suggestions.warning) console.warn(`⚠ ${suggestions.warning}`)
     console.log(`Revisión: ${report.inspection.status} (id ${report.inspection.id})`)
     for (const t of report.tasks) console.log(`Tarea "${t.title}": ${t.status}`)
     console.log("")
     console.log(`Abre /obra/${projectId}/planos para ver los planos y /obra/${projectId}/planos?finding=${report.finding.id} para el hallazgo.`)
+    console.log(`La bandeja de aprobaciones está en /obra/${projectId}/aprobaciones.`)
   } finally {
     await sql.end({ timeout: 5 })
   }

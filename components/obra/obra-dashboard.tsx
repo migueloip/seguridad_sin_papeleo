@@ -311,7 +311,8 @@ function Kpis({ dashboard, base }: { dashboard: ObraDashboard; base: string }) {
           footer={<span className="text-muted-foreground">{counts.elements} elementos dibujados</span>}
         />
       )}
-      {can(role, "findings.view") ? (
+      {/* Solo quien decide las sugerencias (ai.review) ve su conteo: para los demás el servidor envía 0. */}
+      {can(role, "ai.review") ? (
         <KpiCard
           title="Aprobaciones IA pendientes"
           value={counts.pending_suggestions}
@@ -380,11 +381,13 @@ function RiskPanel({ dashboard }: { dashboard: ObraDashboard }) {
         {can(access.role, "tasks.view_all") ? (
           <RiskFactor label="Tareas vencidas" value={counts.overdue_tasks} danger={counts.overdue_tasks > 0} />
         ) : null}
-        <RiskFactor
-          label="Aprobaciones críticas"
-          value={counts.pending_critical_suggestions}
-          danger={counts.pending_critical_suggestions > 0}
-        />
+        {can(access.role, "ai.review") ? (
+          <RiskFactor
+            label="Aprobaciones críticas"
+            value={counts.pending_critical_suggestions}
+            danger={counts.pending_critical_suggestions > 0}
+          />
+        ) : null}
       </ul>
     </Panel>
   )

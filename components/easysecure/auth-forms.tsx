@@ -22,13 +22,24 @@ function ErrorBanner({ state }: { state: AuthFormState }) {
   )
 }
 
-export function LoginForm() {
+/** Link a la otra pantalla de auth conservando el retorno (?next=, ya validado en la página). */
+function authHref(path: string, next?: string | null): string {
+  return next ? `${path}?next=${encodeURIComponent(next)}` : path
+}
+
+/** Campo oculto con la ruta de retorno; el servidor la vuelve a validar (safeNextPath). */
+function NextField({ next }: { next?: string | null }) {
+  return next ? <input type="hidden" name="next" value={next} /> : null
+}
+
+export function LoginForm({ next }: { next?: string | null } = {}) {
   const [state, formAction, isPending] = useActionState(loginAction, null)
 
   return (
     <>
       <ErrorBanner state={state} />
       <form action={formAction} className="space-y-0">
+        <NextField next={next} />
         <label className="mb-1.5 block text-[13px] font-semibold text-[#4a453e]" htmlFor="email">
           Correo
         </label>
@@ -117,7 +128,7 @@ export function LoginForm() {
 
       <p className="mt-6 text-center text-[13px] text-muted-foreground">
         ¿Sin cuenta?{" "}
-        <Link href="/auth/register" className="font-semibold text-[#b8841a]">
+        <Link href={authHref("/auth/register", next)} className="font-semibold text-[#b8841a]">
           Solicita acceso
         </Link>
       </p>
@@ -125,13 +136,14 @@ export function LoginForm() {
   )
 }
 
-export function RegisterForm() {
+export function RegisterForm({ next }: { next?: string | null } = {}) {
   const [state, formAction, isPending] = useActionState(registerAction, null)
 
   return (
     <>
       <ErrorBanner state={state} />
       <form action={formAction} className="space-y-0">
+        <NextField next={next} />
         <label className="mb-1.5 block text-[13px] font-semibold text-[#4a453e]" htmlFor="name">
           Nombre
         </label>
@@ -208,7 +220,7 @@ export function RegisterForm() {
 
       <p className="mt-6 text-center text-[13px] text-muted-foreground">
         ¿Ya tienes cuenta?{" "}
-        <Link href="/auth/login" className="font-semibold text-[#b8841a]">
+        <Link href={authHref("/auth/login", next)} className="font-semibold text-[#b8841a]">
           Inicia sesión
         </Link>
       </p>

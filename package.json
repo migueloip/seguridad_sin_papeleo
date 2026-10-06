@@ -9,6 +9,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
+    "typecheck": "tsc --noEmit -p .",
     "test": "vitest run",
     "test:obra:int": "TEST_DATABASE_ADMIN_URL=${TEST_DATABASE_ADMIN_URL:-postgres://postgres:postgres@localhost:5432/postgres} vitest run tests/obra",
     "seed:obra-demo": "node scripts/seed-obra-demo.mjs"

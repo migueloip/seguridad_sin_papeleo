@@ -1,5 +1,4 @@
 // @vitest-environment node
-import bcrypt from "bcryptjs"
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import type { ActionResult } from "@/lib/obra/types"
 import { actAs, HAS_TEST_DB, setupObraTestDb, type TestDb } from "./helpers"
@@ -42,6 +41,8 @@ describe.skipIf(!HAS_TEST_DB)("equipo de obra (BD real)", () => {
 
   beforeAll(async () => {
     db = await setupObraTestDb("members_int_test")
+    // Base de los enlaces de invitación (fuera de una petición no hay headers()).
+    process.env.APP_URL = "https://easysecure.test"
   })
   afterAll(async () => {
     await db?.close()
@@ -76,68 +77,17 @@ describe.skipIf(!HAS_TEST_DB)("equipo de obra (BD real)", () => {
     expect(mine.map((p) => p.project_id)).toEqual([db.otherProjectId])
   })
 
-  it("crea un usuario nuevo con contraseña temporal (una sola vez) y email en minúsculas", async () => {
-    const { addObraMember } = await import("@/app/actions/obra/members")
-    actAs(db.users.gerente)
-    const r = unwrap(await addObraMember(db.projectId, { email: "  Nuevo.Integrante@Test.CL ", name: "Nuevo Integrante", role: "trabajador" }))
-    expect(r.member).toMatchObject({ email: "nuevo.integrante@test.cl", role: "trabajador", is_owner: false, project_id: db.projectId })
-    expect(r.temporary_password).toMatch(/^[ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789]{12}$/)
-
-    const u = await db.sql<{ email: string; name: string; password_hash: string; role: string }[]>`
-      SELECT email, name, password_hash, role FROM users WHERE id = ${r.member.user_id}`
-    expect(u[0].email).toBe("nuevo.integrante@test.cl")
-    expect(u[0].role).toBe("user")
-    expect(await bcrypt.compare(r.temporary_password as string, u[0].password_hash)).toBe(true)
-
-    // Duplicado (mismo email con otra capitalización) → error claro.
-    expectError(await addObraMember(db.projectId, { email: "NUEVO.integrante@test.cl", role: "supervisor" }), /ya es parte del equipo/)
-
-    const audit = await db.sql<{ details: { new_user: boolean; email: string } }[]>`
-      SELECT details FROM obra_audit_log WHERE project_id = ${db.projectId} AND action = 'member.added' AND entity_id = ${r.member.id}`
-    expect(audit[0].details).toMatchObject({ new_user: true, email: "nuevo.integrante@test.cl" })
-    expect(JSON.stringify(audit[0].details)).not.toContain(r.temporary_password as string)
-  })
-
-  it("reutiliza un usuario existente sin contraseña temporal y sin tocar su clave", async () => {
-    const { addObraMember } = await import("@/app/actions/obra/members")
-    const existing = await mkUser("existente")
-    actAs(db.users.jefe_obra)
-    const r = unwrap(await addObraMember(db.projectId, { email: "EXISTENTE@test.cl", role: "supervisor" }))
-    expect(r.temporary_password).toBeNull()
-    expect(r.member.user_id).toBe(existing)
-    const u = await db.sql<{ password_hash: string }[]>`SELECT password_hash FROM users WHERE id = ${existing}`
-    expect(u[0].password_hash).toBe("x")
-  })
-
-  it("no permite agregar al dueño, emails inválidos ni roles desconocidos", async () => {
-    const { addObraMember } = await import("@/app/actions/obra/members")
-    actAs(db.users.gerente)
-    expectError(await addObraMember(db.projectId, { email: "gerente@test.cl", role: "supervisor" }), /dueño/)
-    expectError(await addObraMember(db.projectId, { email: "no-es-correo", role: "supervisor" }), /correo electrónico válido/)
-    expectError(
-      await addObraMember(db.projectId, { email: "rol@test.cl", role: "admin" as never }),
-      /Rol no válido/,
-    )
-  })
-
-  it("solo members.manage agrega integrantes; solo un gerente nombra gerentes", async () => {
-    const { addObraMember } = await import("@/app/actions/obra/members")
-    for (const role of ["prevencionista", "supervisor", "trabajador", "visita"] as const) {
-      actAs(db.users[role])
-      expectError(await addObraMember(db.projectId, { email: `x-${role}@test.cl`, role: "trabajador" }), DENIED)
-    }
-    actAs(db.users.extrano)
-    expectError(await addObraMember(db.projectId, { email: "x-extrano@test.cl", role: "trabajador" }), NOT_FOUND_PROJECT)
-
-    actAs(db.users.jefe_obra)
-    expectError(await addObraMember(db.projectId, { email: "x-gerente@test.cl", role: "gerente" }), /no puede asignar el rol/)
-    actAs(db.users.gerente)
-    const g = unwrap(await addObraMember(db.projectId, { email: "segundo.gerente@test.cl", role: "gerente" }))
-    expect(g.member.role).toBe("gerente")
+  it("ya no existe el alta directa con contraseña temporal: se entra solo por invitación", async () => {
+    const actions = await import("@/app/actions/obra/members")
+    expect(Object.keys(actions)).not.toContain("addObraMember")
+    const server = await import("@/lib/obra/server/members")
+    expect(Object.keys(server)).not.toContain("addMember")
+    expect(Object.keys(server)).not.toContain("generateTemporaryPassword")
   })
 
   it("vincula solo trabajadores del dueño del proyecto", async () => {
-    const { addObraMember, listObraLinkableWorkers } = await import("@/app/actions/obra/members")
+    const { listObraLinkableWorkers } = await import("@/app/actions/obra/members")
+    const { createObraInvitation } = await import("@/app/actions/obra/invitations")
     const own = await db.sql<{ id: number }[]>`
       INSERT INTO workers (rut, first_name, last_name, user_id, project_id)
       VALUES ('11.111.111-1', 'Juan', 'Pérez', ${db.users.gerente}, ${db.projectId}) RETURNING id`
@@ -150,18 +100,21 @@ describe.skipIf(!HAS_TEST_DB)("equipo de obra (BD real)", () => {
     expect(list).toEqual([{ id: Number(own[0].id), name: "Juan Pérez", rut: "11.111.111-1" }])
 
     expectError(
-      await addObraMember(db.projectId, { email: "vinculo1@test.cl", role: "trabajador", worker_id: Number(foreign[0].id) }),
+      await createObraInvitation(db.projectId, { email: "vinculo1@test.cl", role: "trabajador", worker_id: Number(foreign[0].id) }),
       /no pertenece a esta obra/,
     )
-    const ok = unwrap(await addObraMember(db.projectId, { email: "vinculo2@test.cl", role: "trabajador", worker_id: Number(own[0].id) }))
-    expect(ok.member).toMatchObject({ worker_id: Number(own[0].id), worker_name: "Juan Pérez" })
+    const ok = unwrap(
+      await createObraInvitation(db.projectId, { email: "vinculo2@test.cl", role: "trabajador", worker_id: Number(own[0].id) }),
+    )
+    expect(ok.invitation).toMatchObject({ worker_id: Number(own[0].id), worker_name: "Juan Pérez" })
 
     actAs(db.users.trabajador)
     expectError(await listObraLinkableWorkers(db.projectId), DENIED)
   })
 
   it("un jefe de obra que no es dueño solo ve el personal de esta obra, con el RUT abreviado", async () => {
-    const { addObraMember, listObraLinkableWorkers } = await import("@/app/actions/obra/members")
+    const { listObraLinkableWorkers } = await import("@/app/actions/obra/members")
+    const { createObraInvitation } = await import("@/app/actions/obra/invitations")
     const otraObra = await db.sql<{ id: number }[]>`
       INSERT INTO projects (name, user_id, status) VALUES ('Otra obra del dueño', ${db.users.gerente}, 'active') RETURNING id`
     const deOtraObra = await db.sql<{ id: number }[]>`
@@ -179,7 +132,7 @@ describe.skipIf(!HAS_TEST_DB)("equipo de obra (BD real)", () => {
     expect(list.find((w) => w.id === Number(sinObra[0].id))?.rut).toBe("•••678-K")
     expect(JSON.stringify(list)).not.toContain("11.111.111-1")
     expectError(
-      await addObraMember(db.projectId, { email: "vinculo3@test.cl", role: "trabajador", worker_id: Number(deOtraObra[0].id) }),
+      await createObraInvitation(db.projectId, { email: "vinculo3@test.cl", role: "trabajador", worker_id: Number(deOtraObra[0].id) }),
       /no pertenece a esta obra/,
     )
 
@@ -254,5 +207,57 @@ describe.skipIf(!HAS_TEST_DB)("equipo de obra (BD real)", () => {
     const removed = await db.sql<{ details: { user_id: number } }[]>`
       SELECT details FROM obra_audit_log WHERE project_id = ${db.projectId} AND action = 'member.removed' ORDER BY id`
     expect(removed.map((r) => r.details.user_id)).toEqual([target, gerenteMiembro])
+  })
+
+  it("al quitar a un integrante sus tareas abiertas quedan sin persona (con su rol) y las hechas no cambian", async () => {
+    const { removeObraMember } = await import("@/app/actions/obra/members")
+    const target = await mkUser("con_tareas")
+    await addRawMember(target, "supervisor")
+    const mkTask = async (title: string, status: string, assignedRole: string | null, assignedUser: number | null) => {
+      const r = await db.sql<{ id: number }[]>`
+        INSERT INTO obra_tasks (project_id, title, status, assigned_role, assigned_user_id, created_by)
+        VALUES (${db.projectId}, ${title}, ${status}, ${assignedRole}, ${assignedUser}, ${db.users.gerente})
+        RETURNING id`
+      return Number(r[0].id)
+    }
+    const pendienteSinRol = await mkTask("Revisar colector", "pendiente", null, target)
+    const enProgresoConRol = await mkTask("Apuntalar muro", "en_progreso", "trabajador", target)
+    const hecha = await mkTask("Señalizar zanja", "hecha", "supervisor", target)
+    const cancelada = await mkTask("Tarea cancelada", "cancelada", null, target)
+    const ajena = await mkTask("De otra persona", "pendiente", null, db.users.trabajador)
+    // Una tarea del mismo usuario en OTRA obra no se toca.
+    await db.sql`INSERT INTO obra_members (project_id, user_id, role) VALUES (${db.otherProjectId}, ${target}, 'trabajador')`
+    const otraObra = await db.sql<{ id: number }[]>`
+      INSERT INTO obra_tasks (project_id, title, status, assigned_user_id)
+      VALUES (${db.otherProjectId}, 'En otra obra', 'pendiente', ${target}) RETURNING id`
+
+    actAs(db.users.jefe_obra)
+    unwrap(await removeObraMember(db.projectId, target))
+
+    const rows = await db.sql<{ id: number; assigned_user_id: number | null; assigned_role: string | null; status: string }[]>`
+      SELECT id, assigned_user_id, assigned_role, status FROM obra_tasks
+      WHERE id IN (${pendienteSinRol}, ${enProgresoConRol}, ${hecha}, ${cancelada}, ${ajena}, ${Number(otraObra[0].id)})`
+    const byId = new Map(rows.map((r) => [Number(r.id), r]))
+    expect(byId.get(pendienteSinRol)).toMatchObject({ assigned_user_id: null, assigned_role: "supervisor", status: "pendiente" })
+    expect(byId.get(enProgresoConRol)).toMatchObject({ assigned_user_id: null, assigned_role: "trabajador", status: "en_progreso" })
+    expect(byId.get(hecha)).toMatchObject({ assigned_user_id: target, assigned_role: "supervisor" })
+    expect(byId.get(cancelada)).toMatchObject({ assigned_user_id: target, assigned_role: null })
+    expect(byId.get(ajena)).toMatchObject({ assigned_user_id: db.users.trabajador })
+    expect(byId.get(Number(otraObra[0].id))).toMatchObject({ assigned_user_id: target })
+
+    const audit = await db.sql<{ details: { user_id: number; unassigned_tasks: number; unassigned_task_ids: number[] } }[]>`
+      SELECT details FROM obra_audit_log
+      WHERE project_id = ${db.projectId} AND action = 'member.removed' AND (details->>'user_id')::int = ${target}`
+    expect(audit).toHaveLength(1)
+    expect(audit[0].details.unassigned_tasks).toBe(2)
+    expect([...audit[0].details.unassigned_task_ids].sort((a, b) => a - b)).toEqual(
+      [pendienteSinRol, enProgresoConRol].sort((a, b) => a - b),
+    )
+
+    // Las tareas siguen visibles para su rol: un supervisor las ve como "suyas" (sin persona asignada).
+    const { listObraTasks } = await import("@/app/actions/obra/tasks")
+    actAs(db.users.supervisor)
+    const mine = unwrap(await listObraTasks(db.projectId, { mine: true }))
+    expect(mine.map((t) => t.id)).toContain(pendienteSinRol)
   })
 })

@@ -3,7 +3,7 @@
 /**
  * Tarjeta de tarea de obra (tablero, resumen, revisiones y panel del plano).
  *
- * Muestra título, prioridad, estado, origen (IA / hallazgo), persona o rol
+ * Muestra título, prioridad, estado, origen (IA / reglas / hallazgo), persona o rol
  * asignado, vencimiento, checklist con progreso y enlace al plano. Ofrece las
  * acciones de estado que el rol puede hacer (espejo de setTaskStatus en el
  * servidor; la autorización real siempre está en el servidor).
@@ -252,14 +252,40 @@ export function taskPlanHref(task: Pick<ObraTask, "id" | "project_id" | "finding
 
 const chip = "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold"
 
-/** Chip de origen de la tarea (sugerencia aprobada por una persona, o nacida de un hallazgo). */
-export function TaskOriginChip({ task, className }: { task: Pick<ObraTask, "origin" | "created_by_name">; className?: string }) {
+/**
+ * Texto del origen de una tarea nacida de una sugerencia aprobada, o null si
+ * no viene de una sugerencia.
+ * - origin "reglas": la redactó el motor de reglas.
+ * - origin "ia" con sugerencia vinculada: la redactó un modelo de IA.
+ * - origin "ia" sin sugerencia vinculada (tareas antiguas, o cuya sugerencia ya
+ *   no existe): antes "ia" también cubría las de reglas, así que no se afirma
+ *   "IA" y se mantiene el texto genérico.
+ */
+export function taskOriginText(task: Pick<ObraTask, "origin" | "suggestion_id" | "created_by_name">): string | null {
+  const reviewer = task.created_by_name || "un revisor"
+  if (task.origin === "reglas") return `Sugerencia automática (reglas) · aprobada por ${reviewer}`
   if (task.origin === "ia") {
+    return task.suggestion_id != null
+      ? `Sugerida por IA · aprobada por ${reviewer}`
+      : `Sugerencia automática · aprobada por ${reviewer}`
+  }
+  return null
+}
+
+/** Chip de origen de la tarea (sugerencia aprobada por una persona, o nacida de un hallazgo). */
+export function TaskOriginChip({
+  task,
+  className,
+}: {
+  task: Pick<ObraTask, "origin" | "suggestion_id" | "created_by_name">
+  className?: string
+}) {
+  const suggested = taskOriginText(task)
+  if (suggested) {
     return (
       <span className={cn(chip, "border border-border bg-card text-muted-foreground", className)}>
         <Sparkles className="h-3 w-3 text-brand" aria-hidden />
-        {/* Puede venir de la IA o del motor de reglas (sin IA configurada): no afirmar "IA". */}
-        Sugerencia automática · aprobada por {task.created_by_name || "un revisor"}
+        {suggested}
       </span>
     )
   }

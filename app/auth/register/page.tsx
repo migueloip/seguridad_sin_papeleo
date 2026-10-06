@@ -1,11 +1,21 @@
+import type { Metadata } from "next"
 import { AnimatedPage } from "@/components/animated-page"
 import { BrandMark } from "@/components/easysecure/brand-mark"
 import { AuthBrandPanel } from "@/components/easysecure/auth-brand-panel"
 import { RegisterForm } from "@/components/easysecure/auth-forms"
+import { safeNextPath } from "@/lib/safe-redirect"
 
-export const metadata = { title: "Crear cuenta" }
+// La URL puede traer ?next=/invitacion/<token>: no enviarla como Referer a otros sitios.
+export const metadata: Metadata = { title: "Crear cuenta", referrer: "same-origin" }
 
-export default function RegisterPage() {
+export default async function RegisterPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ next?: string | string[] }>
+}) {
+  const sp = await searchParams
+  // Retorno tras crear la cuenta; se ignora si no es una ruta relativa segura.
+  const next = safeNextPath(typeof sp.next === "string" ? sp.next : null)
   return (
     <AnimatedPage duration={400}>
       <div className="grid min-h-screen lg:grid-cols-[1.05fr_1fr]">
@@ -25,7 +35,7 @@ export default function RegisterPage() {
               Configura tu panel de prevención en menos de un minuto.
             </p>
 
-            <RegisterForm />
+            <RegisterForm next={next} />
           </div>
         </div>
       </div>

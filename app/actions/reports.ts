@@ -1,5 +1,6 @@
 "use server"
 
+import type { Row, RowList } from "postgres"
 import { sql } from "@/lib/db"
 import type { Report as DbReport } from "@/lib/db"
 import { generateText } from "ai"
@@ -9,6 +10,9 @@ import { getSetting } from "./settings"
 import { getModel } from "@/lib/ai"
 import { getCurrentUserId } from "@/lib/auth"
 import type { DesignerElement, EditorState, MatrixRow, Severity, Status } from "@/lib/pdf-editor"
+
+/** Valor aceptado por sql.json (JSONValue del driver postgres v3). */
+type JsonParam = Parameters<typeof sql.json>[0]
 
 export interface ReportData {
   period: string
@@ -95,7 +99,7 @@ export async function getReportData(period: string, projectId?: number): Promise
 
   const [documentsResult, findingsResult, workersResult, recentFindingsResult, expiringDocsResult] = await Promise.all([
     projectId
-      ? sql<{ total: number; valid: number; expiring: number; expired: number }>`SELECT 
+      ? sql<{ total: number; valid: number; expiring: number; expired: number }[]>`SELECT 
             COUNT(*) as total,
             COUNT(*) FILTER (WHERE d.status = 'valid') as valid,
             COUNT(*) FILTER (WHERE d.status = 'expiring') as expiring,
@@ -103,14 +107,14 @@ export async function getReportData(period: string, projectId?: number): Promise
           FROM documents d
           JOIN workers w ON d.worker_id = w.id
           WHERE d.user_id = ${userId} AND w.project_id = ${projectId}`
-      : sql<{ total: number; valid: number; expiring: number; expired: number }>`SELECT 
+      : sql<{ total: number; valid: number; expiring: number; expired: number }[]>`SELECT 
             COUNT(*) as total,
             COUNT(*) FILTER (WHERE status = 'valid') as valid,
             COUNT(*) FILTER (WHERE status = 'expiring') as expiring,
             COUNT(*) FILTER (WHERE status = 'expired') as expired
           FROM documents WHERE user_id = ${userId}`,
     projectId
-      ? sql<{ total: number; open: number; resolved: number; critical: number; high: number; medium: number; low: number }>`SELECT 
+      ? sql<{ total: number; open: number; resolved: number; critical: number; high: number; medium: number; low: number }[]>`SELECT 
             COUNT(*) as total,
             COUNT(*) FILTER (WHERE status = 'open') as open,
             COUNT(*) FILTER (WHERE status = 'resolved') as resolved,
@@ -120,7 +124,7 @@ export async function getReportData(period: string, projectId?: number): Promise
             COUNT(*) FILTER (WHERE severity = 'low') as low
           FROM findings
           WHERE user_id = ${userId} AND project_id = ${projectId} AND created_at >= ${dateFrom} AND created_at <= ${dateTo}`
-      : sql<{ total: number; open: number; resolved: number; critical: number; high: number; medium: number; low: number }>`SELECT 
+      : sql<{ total: number; open: number; resolved: number; critical: number; high: number; medium: number; low: number }[]>`SELECT 
             COUNT(*) as total,
             COUNT(*) FILTER (WHERE status = 'open') as open,
             COUNT(*) FILTER (WHERE status = 'resolved') as resolved,
@@ -131,14 +135,14 @@ export async function getReportData(period: string, projectId?: number): Promise
           FROM findings
           WHERE user_id = ${userId} AND created_at >= ${dateFrom} AND created_at <= ${dateTo}`,
     projectId
-      ? sql<{ total: number; with_complete_docs: number; with_expired_docs: number }>`SELECT 
+      ? sql<{ total: number; with_complete_docs: number; with_expired_docs: number }[]>`SELECT 
             COUNT(*) as total,
             COUNT(DISTINCT w.id) FILTER (WHERE d.status = 'valid') as with_complete_docs,
             COUNT(DISTINCT w.id) FILTER (WHERE d.status = 'expired') as with_expired_docs
           FROM workers w
           LEFT JOIN documents d ON w.id = d.worker_id
           WHERE w.user_id = ${userId} AND w.project_id = ${projectId}`
-      : sql<{ total: number; with_complete_docs: number; with_expired_docs: number }>`SELECT 
+      : sql<{ total: number; with_complete_docs: number; with_expired_docs: number }[]>`SELECT 
             COUNT(*) as total,
             COUNT(DISTINCT w.id) FILTER (WHERE d.status = 'valid') as with_complete_docs,
             COUNT(DISTINCT w.id) FILTER (WHERE d.status = 'expired') as with_expired_docs
@@ -146,25 +150,25 @@ export async function getReportData(period: string, projectId?: number): Promise
           LEFT JOIN documents d ON w.id = d.worker_id
           WHERE w.user_id = ${userId}`,
     projectId
-      ? sql<{ title: string; severity: string; status: string; location: string; created_at: string }>`SELECT title, severity, status, location, created_at
+      ? sql<{ title: string; severity: string; status: string; location: string; created_at: string }[]>`SELECT title, severity, status, location, created_at
           FROM findings
           WHERE user_id = ${userId} AND project_id = ${projectId} AND created_at >= ${dateFrom} AND created_at <= ${dateTo}
           ORDER BY created_at DESC
           LIMIT 10`
-      : sql<{ title: string; severity: string; status: string; location: string; created_at: string }>`SELECT title, severity, status, location, created_at
+      : sql<{ title: string; severity: string; status: string; location: string; created_at: string }[]>`SELECT title, severity, status, location, created_at
           FROM findings
           WHERE user_id = ${userId} AND created_at >= ${dateFrom} AND created_at <= ${dateTo}
           ORDER BY created_at DESC
           LIMIT 10`,
     projectId
-      ? sql<{ worker_name: string; document_type: string; expiry_date: string }>`SELECT CONCAT(w.first_name, ' ', w.last_name) as worker_name, dt.name as document_type, d.expiry_date
+      ? sql<{ worker_name: string; document_type: string; expiry_date: string }[]>`SELECT CONCAT(w.first_name, ' ', w.last_name) as worker_name, dt.name as document_type, d.expiry_date
           FROM documents d
           JOIN workers w ON d.worker_id = w.id
           LEFT JOIN document_types dt ON d.document_type_id = dt.id
           WHERE d.user_id = ${userId} AND w.project_id = ${projectId} AND d.expiry_date <= CURRENT_DATE + INTERVAL '30 days' AND d.expiry_date >= CURRENT_DATE
           ORDER BY d.expiry_date ASC
           LIMIT 10`
-      : sql<{ worker_name: string; document_type: string; expiry_date: string }>`SELECT CONCAT(w.first_name, ' ', w.last_name) as worker_name, dt.name as document_type, d.expiry_date
+      : sql<{ worker_name: string; document_type: string; expiry_date: string }[]>`SELECT CONCAT(w.first_name, ' ', w.last_name) as worker_name, dt.name as document_type, d.expiry_date
           FROM documents d
           JOIN workers w ON d.worker_id = w.id
           LEFT JOIN document_types dt ON d.document_type_id = dt.id
@@ -247,7 +251,7 @@ export async function generateAIReport(
       `- Configurar la API de IA en Configuracion para informes enriquecidos.\n\n` +
       `## Conclusion\n` +
       `Se recomienda mantener la vigilancia sobre los indicadores y ejecutar acciones correctivas oportunas.`
-    const inserted = await sql<{ id: number }>`
+    const inserted = await sql<{ id: number }[]>`
       INSERT INTO reports (report_type, title, date_from, date_to, content, generated_by, project_id)
       VALUES (${reportType}, ${title}, ${new Date(data.dateFrom)}, ${new Date(data.dateTo)}, ${sql.json({ markdown: content })}, 'Sistema (sin IA)', ${projectId || null})
       RETURNING id
@@ -315,7 +319,7 @@ El informe debe ser profesional, conciso y orientado a la accion. Usa formato Ma
     const model = getModel(ai.provider, ai.model, ai.apiKey, ai.baseUrl) as unknown as LanguageModel
     const { text } = await generateText({ model, prompt })
 
-    const inserted = await sql<{ id: number }>`
+    const inserted = await sql<{ id: number }[]>`
       INSERT INTO reports (report_type, title, date_from, date_to, content, generated_by, project_id)
       VALUES (${reportType}, ${title}, ${new Date(data.dateFrom)}, ${new Date(data.dateTo)}, ${sql.json({ markdown: text })}, 'Sistema', ${projectId || null})
       RETURNING id
@@ -775,14 +779,14 @@ export async function rewriteTextWithAI(input: string): Promise<string> {
 export async function getGeneratedReports(projectId?: number) {
   const userId = await getCurrentUserId()
   const result = projectId
-    ? await sql<GeneratedReportSummary>`
+    ? await sql<GeneratedReportSummary[]>`
         SELECT id, report_type, title, date_from, date_to, created_at
         FROM reports
         WHERE user_id = ${userId} AND project_id = ${projectId}
         ORDER BY created_at DESC
         LIMIT 20
       `
-    : await sql<GeneratedReportSummary>`
+    : await sql<GeneratedReportSummary[]>`
         SELECT id, report_type, title, date_from, date_to, created_at
         FROM reports
         WHERE user_id = ${userId}
@@ -794,14 +798,14 @@ export async function getGeneratedReports(projectId?: number) {
 
 export async function getReportById(id: number) {
   const userId = await getCurrentUserId()
-  const result = await sql<DbReport>`SELECT * FROM reports WHERE id = ${id} AND user_id = ${userId}`
+  const result = await sql<DbReport[]>`SELECT * FROM reports WHERE id = ${id} AND user_id = ${userId}`
   return result[0]
 }
 
 export async function deleteReport(id: number): Promise<boolean> {
   const userId = await getCurrentUserId()
   if (!userId) return false
-  const res = await sql`DELETE FROM reports WHERE id = ${id} AND user_id = ${userId}`
+  const res = await sql<RowList<Row[]>>`DELETE FROM reports WHERE id = ${id} AND user_id = ${userId}`
   return res.count > 0
 }
 
@@ -814,7 +818,7 @@ export async function createManualReport(
 ) {
   const userId = await getCurrentUserId()
   if (!userId) return null
-  const inserted = await sql<{ id: number }>`
+  const inserted = await sql<{ id: number }[]>`
     INSERT INTO reports (report_type, title, date_from, date_to, content, generated_by, project_id, user_id)
     VALUES ('manual', ${title}, ${new Date(dateFrom)}, ${new Date(dateTo)}, ${sql.json({ markdown })}, 'Usuario', ${projectId || null}, ${userId})
     RETURNING id
@@ -828,7 +832,7 @@ export async function updateReport(
 ) {
   const userId = await getCurrentUserId()
   if (!userId) return false
-  const current = await sql<DbReport>`SELECT * FROM reports WHERE id = ${id} AND user_id = ${userId} LIMIT 1`
+  const current = await sql<DbReport[]>`SELECT * FROM reports WHERE id = ${id} AND user_id = ${userId} LIMIT 1`
   if (!current[0]) return false
   const nextTitle = fields.title ?? current[0].title
   const nextContent =
@@ -837,14 +841,15 @@ export async function updateReport(
       : (current[0].content ?? { markdown: "" })
   await sql`
     UPDATE reports
-    SET title = ${nextTitle}, content = ${sql.json(nextContent)}
+    SET title = ${nextTitle}, content = ${sql.json(nextContent as JsonParam)}
     WHERE id = ${id} AND user_id = ${userId}
   `
   return true
 }
 
 /** Estado del diseñador que el editor persiste dentro de reports.content.designer. */
-export interface DesignerSnapshot {
+// Alias de tipo (no interface) para que sea asignable a JSONValue de sql.json.
+export type DesignerSnapshot = {
   elements: DesignerElement[]
   coverTitle: string
   coverSubtitle: string
@@ -870,7 +875,7 @@ export async function saveDesignerReport(args: {
   const title = args.title.trim() || "Informe de Seguridad"
 
   if (args.id) {
-    const current = await sql<DbReport>`
+    const current = await sql<DbReport[]>`
       SELECT * FROM reports WHERE id = ${args.id} AND user_id = ${userId} LIMIT 1
     `
     if (!current[0]) return null
@@ -887,14 +892,14 @@ export async function saveDesignerReport(args: {
     const nextContent = { ...prevContent, designer: args.designer }
     await sql`
       UPDATE reports
-      SET title = ${title}, content = ${sql.json(nextContent)}
+      SET title = ${title}, content = ${sql.json(nextContent as JsonParam)}
       WHERE id = ${args.id} AND user_id = ${userId}
     `
     return args.id
   }
 
   const today = new Date()
-  const inserted = await sql<{ id: number }>`
+  const inserted = await sql<{ id: number }[]>`
     INSERT INTO reports (report_type, title, date_from, date_to, content, generated_by, project_id, user_id)
     VALUES ('manual', ${title}, ${today}, ${today}, ${sql.json({ designer: args.designer })}, 'Editor', ${args.projectId || null}, ${userId})
     RETURNING id

@@ -14,12 +14,16 @@ const nextConfig: NextConfig = {
     },
   },
   typescript: {
-    // Necesario porque @pascal-app/editor distribuye .tsx sin compilar como
-    // entry de su package.json. Esos archivos tienen errores de tipos propios
-    // del paquete (no nuestros) que skipLibCheck no cubre porque solo aplica a
-    // .d.ts. Nuestro código sí compila limpio — verificable con `npx tsc --noEmit`
-    // filtrando node_modules.
-    ignoreBuildErrors: true,
+    // El build verifica tipos con tsconfig.json sobre TODOS los archivos de su
+    // "include" (tests incluidos), igual que `npx tsc --noEmit -p .`: cualquier
+    // error de tsc rompe el build.
+    //
+    // Ojo con @pascal-app/editor: publica su código fuente .tsx sin compilar
+    // como entry (package.json "exports" → ./src/index.tsx). Hoy ningún archivo
+    // del proyecto lo importa, así que no entra al programa de TypeScript. Si
+    // alguien lo importa, tsc revisará esos .tsx (skipLibCheck solo cubre .d.ts)
+    // y aparecen ~88 errores de tipos propios del paquete que romperán el build.
+    ignoreBuildErrors: false,
   },
   transpilePackages: ["@pascal-app/core", "@pascal-app/viewer", "@pascal-app/editor"],
 };

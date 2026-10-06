@@ -203,6 +203,9 @@ export const OBRA_SCHEMA_STATEMENTS: readonly string[] = [
   `CREATE INDEX IF NOT EXISTS idx_obra_tasks_inspection ON obra_tasks(inspection_id)`,
   // "reglas" se agregó a TASK_ORIGINS después de la primera versión de la tabla.
   syncInListCheck("obra_tasks", "obra_tasks_origin_check", "origin", TASK_ORIGINS),
+  // Antes de existir "reglas", las tareas aprobadas desde sugerencias del motor
+  // de reglas quedaban con origin 'ia'. Idempotente: su WHERE excluye lo ya corregido.
+  `UPDATE obra_tasks t SET origin = 'reglas' FROM obra_ai_suggestions s WHERE s.id = t.suggestion_id AND t.origin = 'ia' AND s.generator = 'reglas'`,
 
   `CREATE TABLE IF NOT EXISTS obra_invitations (
   id SERIAL PRIMARY KEY,

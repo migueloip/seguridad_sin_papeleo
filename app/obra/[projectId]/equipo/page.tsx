@@ -1,5 +1,6 @@
 import { notFound, redirect } from "next/navigation"
 import { TriangleAlert } from "lucide-react"
+import { listObraInvitations } from "@/app/actions/obra/invitations"
 import { listObraLinkableWorkers, listObraMembers } from "@/app/actions/obra/members"
 import { getObraAccess } from "@/app/actions/obra/projects"
 import { countObraPendingApprovals } from "@/app/actions/obra/suggestions"
@@ -24,9 +25,10 @@ export default async function ObraEquipoPage({ params }: { params: Promise<{ pro
   const pendingApprovals = await countObraPendingApprovals(id)
 
   const canManage = can(acc.data.role, "members.manage")
-  const [members, workers] = await Promise.all([
+  const [members, workers, invitations] = await Promise.all([
     listObraMembers(id),
     canManage ? listObraLinkableWorkers(id) : Promise.resolve(null),
+    canManage ? listObraInvitations(id) : Promise.resolve(null),
   ])
 
   return (
@@ -42,8 +44,11 @@ export default async function ObraEquipoPage({ params }: { params: Promise<{ pro
           projectId={id}
           role={acc.data.role}
           currentUserId={acc.data.user_id}
+          projectName={acc.data.project_name}
           initialMembers={members.data}
           linkableWorkers={workers && workers.ok ? workers.data : null}
+          // Si la lista falla en el servidor, se deja undefined para que el cliente la reintente.
+          initialInvitations={invitations && invitations.ok ? invitations.data : undefined}
         />
       ) : (
         <Alert variant="destructive">

@@ -29,6 +29,7 @@ import {
   ELEMENT_TYPES,
   FINDING_CATEGORIES,
   INSPECTION_STATUSES,
+  INVITATION_STATUSES,
   OBRA_ROLES,
   PRIORITIES,
   SEVERITIES,
@@ -44,6 +45,7 @@ import {
   type ElementGeometry,
   type FindingPin,
   type ObraInspection,
+  type ObraInvitation,
   type ObraMember,
   type ObraRole,
   type ObraTask,
@@ -503,6 +505,51 @@ export function memberSelect(q: Queryable) {
     JOIN users u ON u.id = m.user_id
     LEFT JOIN workers w ON w.id = m.worker_id
   `
+}
+
+// ---------------------------------------------------------------------------
+// Invitaciones
+// ---------------------------------------------------------------------------
+
+/**
+ * Columnas esperadas por mapInvitation: las de obra_invitations SIN token_hash
+ * (nunca se copia al DTO) más worker_name, invited_by_name y `status`, que se
+ * calcula en SQL contra la hora de la BD (ver invitationSelect en
+ * lib/obra/server/invitations.ts).
+ */
+export type InvitationRow = {
+  id: number | string
+  project_id: number | string
+  email: string
+  name: string | null
+  role: string
+  worker_id: number | string | null
+  worker_name: string | null
+  invited_by: number | string | null
+  invited_by_name: string | null
+  status: string
+  created_at: Date | string
+  expires_at: Date | string
+  accepted_at: Date | string | null
+}
+
+export function mapInvitation(r: InvitationRow): ObraInvitation {
+  return {
+    id: toNum(r.id),
+    project_id: toNum(r.project_id),
+    email: toStr(r.email),
+    name: toStrOrNull(r.name),
+    role: oneOf<ObraRole>(r.role, OBRA_ROLES, "visita"),
+    worker_id: toNumOrNull(r.worker_id),
+    worker_name: toStrOrNull(r.worker_name),
+    invited_by: toNumOrNull(r.invited_by),
+    invited_by_name: toStrOrNull(r.invited_by_name),
+    // Un estado desconocido no debe ofrecer acciones: cae a "vencida".
+    status: oneOf(r.status, INVITATION_STATUSES, "vencida"),
+    created_at: toIso(r.created_at),
+    expires_at: toIso(r.expires_at),
+    accepted_at: toIsoOrNull(r.accepted_at),
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -268,7 +268,7 @@ describe.skipIf(!HAS_TEST_DB)("caso estrella: grieta junto al colector de alcant
     expect(await taskCount(ids.grieta)).toBe(0)
   })
 
-  it("el prevencionista aprueba: se crea exactamente 1 tarea origin 'ia' en una revisión creada sola para su vencimiento", async () => {
+  it("el prevencionista aprueba: se crea exactamente 1 tarea origin 'reglas' en una revisión creada sola para su vencimiento", async () => {
     const { approveObraSuggestion } = await import("@/app/actions/obra/suggestions")
     const before = await db.sql<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM obra_inspections WHERE project_id = ${db.projectId}`
     expect(before[0].n).toBe(0)
@@ -295,7 +295,7 @@ describe.skipIf(!HAS_TEST_DB)("caso estrella: grieta junto al colector de alcant
     const t = tasks[0]
     expect(t).toMatchObject({
       id: r.applied_entity_id,
-      origin: "ia",
+      origin: "reglas",
       suggestion_id: top.id,
       finding_id: ids.grieta,
       layer_id: ids.arq,
