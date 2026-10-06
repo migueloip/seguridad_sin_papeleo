@@ -46,7 +46,7 @@ vi.mock("@/lib/auth", () => ({
   getSession: async () => (state.userId == null ? null : { user_id: state.userId }),
 }))
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn(), revalidateTag: vi.fn() }))
-vi.mock("@/app/actions/settings", () => ({ getAiSettings: state.getAiSettings }))
+vi.mock("@/lib/settings", () => ({ getAiSettings: state.getAiSettings }))
 vi.mock("@/lib/ai", () => ({ getModel: vi.fn(() => ({})) }))
 vi.mock("ai", () => ({ generateText: state.generateText }))
 

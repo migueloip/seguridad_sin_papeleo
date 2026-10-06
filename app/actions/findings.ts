@@ -5,7 +5,7 @@ import { getCurrentUserId } from "@/lib/auth"
 import { revalidatePath } from "next/cache"
 import { generateText } from "ai"
 import type { LanguageModel } from "ai"
-import { getAiSettings } from "./settings"
+import { getAiSettings } from "@/lib/settings"
 import { getModel } from "@/lib/ai"
 
 export type FindingRow = {
@@ -159,6 +159,11 @@ function serializeFindingRow(row: Record<string, unknown>): FindingRow {
       const parsed = JSON.parse(photosRaw)
       if (Array.isArray(parsed)) photos = parsed.filter((p): p is string => typeof p === "string")
     } catch {}
+  }
+  // Las fotos subidas desde Obra integral quedan en un bucket privado ("obra-storage:<ruta>"): el
+  // navegador no puede pedirlas directo, así que se sirven por /api/findings/photo con sesión.
+  if (photos && photos.some((p) => p.startsWith("obra-storage:"))) {
+    photos = photos.map((p, i) => (p.startsWith("obra-storage:") ? `/api/findings/photo?id=${Number(row.id)}&index=${i}` : p))
   }
 
   const created_at =

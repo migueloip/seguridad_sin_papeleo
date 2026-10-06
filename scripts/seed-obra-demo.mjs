@@ -8,12 +8,18 @@
  *
  * Opciones:
  *   --owner-email <email>   (obligatorio) usuario existente que será dueño (gerente) de la obra.
- *   --reset-passwords       vuelve a dejar la clave demo en los usuarios demo que ya existían.
+ *   --reset-passwords       genera claves nuevas para los usuarios demo que ya existían.
+ *   --allow-remote          permite sembrar en una BD que no es local (o con NODE_ENV=production).
+ *
+ * Seguridad: las cuentas demo (jefe de obra, prevencionista...) tienen permisos reales sobre la
+ * obra demo del dueño. Por eso cada una recibe una clave ALEATORIA que se muestra una sola vez
+ * al crearla o restablecerla (no hay una clave fija publicada), y el script se niega a correr
+ * contra una BD remota o de producción salvo con --allow-remote.
  *
  * Qué crea (solo lo que falta; nunca borra ni sobrescribe datos existentes):
  * - La obra "Edificio Demo Los Aromos" del dueño indicado.
  * - Miembros demo (jefe de obra, prevencionista, supervisor, trabajador y visita/ITO)
- *   con la clave "Demo1234!" (solo al crearlos).
+ *   con una clave aleatoria por cuenta (se muestra solo al crearlas o restablecerlas).
  * - Capas del nivel 1 sin imagen, con sus elementos dibujados: Arquitectura (muros),
  *   Alcantarillado (colector Ø160 y cámaras; esta capa tiene un pequeño desplazamiento y
  *   rotación para probar la alineación), Eléctrico (ducto y tablero), Agua potable y Gas.
@@ -23,6 +29,7 @@
  * Si falta la migración 006 la aplica leyendo scripts/006-obra-integral.sql (con el mismo
  * advisory lock que usa la app). Requiere el esquema base (POST /api/admin/migrate).
  */
+import crypto from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -33,7 +40,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(__dirname, "..")
 
 const PROJECT_NAME = "Edificio Demo Los Aromos"
-const DEMO_PASSWORD = "Demo1234!"
 const LEVEL = 1
 const LEVEL_LABEL = "Nivel 1"
 const FINDING_TITLE = "Grieta diagonal en muro eje B"
@@ -53,12 +59,13 @@ const DEMO_MEMBERS = [
 // ---------------------------------------------------------------------------
 
 function parseArgs(argv) {
-  const out = { ownerEmail: "", resetPasswords: false }
+  const out = { ownerEmail: "", resetPasswords: false, allowRemote: false }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === "--owner-email") out.ownerEmail = String(argv[++i] ?? "")
     else if (a.startsWith("--owner-email=")) out.ownerEmail = a.slice("--owner-email=".length)
     else if (a === "--reset-passwords") out.resetPasswords = true
+    else if (a === "--allow-remote") out.allowRemote = true
     else if (a === "--help" || a === "-h") out.help = true
     else throw new Error(`Argumento desconocido: ${a}`)
   }
@@ -78,6 +85,25 @@ function loadEnv() {
       // Node antiguo o archivo ilegible: se sigue sin él.
     }
   }
+}
+
+/** ¿La URL apunta a una BD local (localhost, 127.0.0.1, ::1 o un socket)? */
+function isLocalDatabase(url) {
+  try {
+    const host = new URL(url).hostname.replace(/^\[|\]$/g, "").toLowerCase()
+    return host === "" || host === "localhost" || host === "127.0.0.1" || host === "::1" || host.endsWith(".localhost")
+  } catch {
+    return false
+  }
+}
+
+/** Clave aleatoria legible (sin caracteres ambiguos), con mayúscula, minúscula y número. */
+function randomPassword() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+  const bytes = crypto.randomBytes(14)
+  let body = ""
+  for (const b of bytes) body += alphabet[b % alphabet.length]
+  return `Demo-${body.slice(0, 4)}${crypto.randomInt(10)}${body.slice(4)}`
 }
 
 function connect(url) {
@@ -252,8 +278,12 @@ async function seed(sql, { ownerEmail, resetPasswords }) {
   }
   const ownerId = Number(owners[0].id)
 
-  // bcrypt es lento: se calcula una vez fuera de la transacción.
-  const demoHash = await bcrypt.hash(DEMO_PASSWORD, 10)
+  // Una clave aleatoria por cuenta demo; bcrypt es lento, así que se calcula fuera de la transacción.
+  const credentials = {}
+  for (const m of DEMO_MEMBERS) {
+    const password = randomPassword()
+    credentials[m.key] = { password, hash: await bcrypt.hash(password, 10) }
+  }
   const report = { projectCreated: false, users: [], layers: [], finding: null, inspection: null, tasks: [] }
 
   const projectId = await sql.begin(async (tx) => {
@@ -285,14 +315,14 @@ async function seed(sql, { ownerEmail, resetPasswords }) {
       if (u[0]) {
         id = Number(u[0].id)
         if (resetPasswords && id !== ownerId) {
-          await tx`UPDATE users SET password_hash = ${demoHash} WHERE id = ${id}`
+          await tx`UPDATE users SET password_hash = ${credentials[m.key].hash} WHERE id = ${id}`
           status = "existía (clave demo restablecida)"
         } else {
           status = "existía (se mantiene su clave)"
         }
       } else {
         const r = await tx`
-          INSERT INTO users (email, name, password_hash, role) VALUES (${m.email}, ${m.name}, ${demoHash}, 'user') RETURNING id
+          INSERT INTO users (email, name, password_hash, role) VALUES (${m.email}, ${m.name}, ${credentials[m.key].hash}, 'user') RETURNING id
         `
         id = Number(r[0].id)
         status = "creado"
@@ -315,7 +345,8 @@ async function seed(sql, { ownerEmail, resetPasswords }) {
           })
         }
       }
-      report.users.push({ ...m, id, status })
+      const newPassword = status === "creado" || status === "existía (clave demo restablecida)"
+      report.users.push({ ...m, id, status, password: newPassword ? credentials[m.key].password : null })
     }
 
     // 3) Capas y elementos (una capa existente no se toca)
@@ -485,12 +516,18 @@ async function seed(sql, { ownerEmail, resetPasswords }) {
 async function main() {
   const args = parseArgs(process.argv.slice(2))
   if (args.help || !args.ownerEmail) {
-    console.log("Uso: node scripts/seed-obra-demo.mjs --owner-email <correo-del-dueño> [--reset-passwords]")
+    console.log("Uso: node scripts/seed-obra-demo.mjs --owner-email <correo-del-dueño> [--reset-passwords] [--allow-remote]")
     process.exit(args.help ? 0 : 1)
   }
   loadEnv()
   const url = process.env.DATABASE_URL || process.env.DIRECT_URL
   if (!url) throw new Error("Define DATABASE_URL (o DIRECT_URL) para conectarte a la base de datos.")
+  if (!args.allowRemote && (process.env.NODE_ENV === "production" || !isLocalDatabase(url))) {
+    throw new Error(
+      "La base de datos no es local (o NODE_ENV=production). Las cuentas demo tienen permisos reales sobre la obra: " +
+        "si de verdad quieres sembrarla ahí, agrega --allow-remote.",
+    )
+  }
 
   const sql = connect(url)
   try {
@@ -503,10 +540,11 @@ async function main() {
     console.log("")
     console.log("Equipo demo:")
     for (const u of report.users) {
-      console.log(`  - ${u.role.padEnd(15)} ${u.email.padEnd(34)} ${u.status}`)
+      console.log(`  - ${u.role.padEnd(15)} ${u.email.padEnd(34)} ${u.status}${u.password ? `  clave: ${u.password}` : ""}`)
     }
-    const anyNew = report.users.some((u) => u.status !== "existía (se mantiene su clave)")
-    if (anyNew) console.log(`  Clave de los usuarios demo creados o restablecidos: ${DEMO_PASSWORD}`)
+    if (report.users.some((u) => u.password)) {
+      console.log("  Las claves se muestran solo esta vez: guárdalas o vuelve a correr con --reset-passwords.")
+    }
     console.log("")
     console.log("Capas del nivel 1:")
     for (const l of report.layers) console.log(`  - ${l.name}: ${l.status}`)

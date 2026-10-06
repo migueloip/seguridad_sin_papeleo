@@ -487,6 +487,11 @@ export type PlanCanvasProps = {
   outlineActive?: boolean
   ariaLabel?: string
   className?: string
+  /**
+   * Espacio extra (px) bajo la escala y los botones de zoom. En el celular la hoja inferior fija
+   * del panel tapa el borde de abajo del lienzo: así "Encajar" y la escala siguen a la vista.
+   */
+  controlsBottomOffset?: number
   onPlanClick?: (info: PlanClickInfo) => void
   onPlanDoubleClick?: (info: PlanClickInfo) => void
   onSelectFinding?: (findingId: number) => void
@@ -518,6 +523,7 @@ export function PlanCanvas({
   outlineActive,
   ariaLabel = "Plano de la obra",
   className,
+  controlsBottomOffset = 0,
   onPlanClick,
   onPlanDoubleClick,
   onSelectFinding,
@@ -1228,7 +1234,8 @@ export function PlanCanvas({
       {/* Escala */}
       {scaleBar ? (
         <div
-          className="pointer-events-none absolute bottom-3 left-3 rounded-md bg-card/90 px-2 py-1 text-[11px] font-medium text-muted-foreground shadow-sm"
+          className="pointer-events-none absolute left-3 rounded-md bg-card/90 px-2 py-1 text-[11px] font-medium text-muted-foreground shadow-sm"
+          style={{ bottom: 12 + Math.max(0, controlsBottomOffset) }}
           aria-hidden
         >
           <div className="h-1.5 border-x-2 border-b-2 border-foreground/70" style={{ width: Math.round(scaleBar.px) }} />
@@ -1237,7 +1244,10 @@ export function PlanCanvas({
       ) : null}
 
       {/* Zoom */}
-      <div className="absolute bottom-3 right-3 z-10 flex flex-col overflow-hidden rounded-[10px] border border-border bg-card shadow-sm">
+      <div
+        className="absolute right-3 z-10 flex flex-col overflow-hidden rounded-[10px] border border-border bg-card shadow-sm"
+        style={{ bottom: 12 + Math.max(0, controlsBottomOffset) }}
+      >
         <button
           type="button"
           onClick={() => zoomAt(1.5, size.w / 2, size.h / 2)}

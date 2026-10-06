@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import crypto from "crypto"
 import { sql } from "@/lib/db"
+import { resolveAiSettings, type AiSettings } from "@/lib/ai-settings"
 
 /**
  * Utilidades compartidas por las rutas /api/mobile/* (autenticación Bearer):
@@ -45,28 +46,32 @@ function decryptIfNeeded(key: string, value: string | null): string | null {
   }
 }
 
-/** Configuración de IA por userId (equivalente Bearer de getAiSettings). */
-export async function getAiSettingsForUser(userId: number): Promise<{
-  provider: string
-  model: string
-  apiKey: string
-  baseUrl: string | null
-  ready: boolean
-}> {
-  const { defaultModelFor } = await import("@/lib/ai")
-  const [provider0, model0, key0, baseUrl0] = await Promise.all([
-    getSettingForUser(userId, "ai_provider"),
-    getSettingForUser(userId, "ai_model"),
-    getSettingForUser(userId, "ai_api_key"),
-    getSettingForUser(userId, "ai_base_url"),
-  ])
-  const provider = provider0 || "google"
-  const apiKey =
-    key0 || (provider === "google" ? process.env.AI_API_KEY || process.env.GOOGLE_API_KEY || "" : "")
-  const baseUrl = baseUrl0?.trim() || null
-  const model = model0?.trim() || defaultModelFor(provider)
-  const ready = provider === "custom" ? Boolean(baseUrl) : Boolean(apiKey)
-  return { provider, model, apiKey, baseUrl, ready }
+/** Valor guardado por el propio usuario o el global, por separado (sin mezclar dueños). */
+async function readOwnAndGlobal(userId: number, key: string): Promise<{ own: string | null; global: string | null }> {
+  try {
+    const [u, d] = await Promise.all([
+      sql<{ value: string | null }[]>`SELECT value FROM settings WHERE user_id = ${userId} AND key = ${key} LIMIT 1`,
+      sql<{ value: string | null }[]>`SELECT value FROM settings WHERE user_id IS NULL AND key = ${key} LIMIT 1`,
+    ])
+    return { own: decryptIfNeeded(key, u[0]?.value ?? null), global: decryptIfNeeded(key, d[0]?.value ?? null) }
+  } catch {
+    return { own: null, global: null }
+  }
+}
+
+/**
+ * Configuración de IA por userId (equivalente Bearer de getAiSettings). El
+ * módulo Obra la usa con el dueño del proyecto. Una URL base propia solo se
+ * combina con la key propia (ver lib/ai-settings.ts).
+ */
+export async function getAiSettingsForUser(userId: number): Promise<AiSettings> {
+  const [provider, model, apiKey, baseUrl] = await Promise.all(
+    (["ai_provider", "ai_model", "ai_api_key", "ai_base_url"] as const).map((k) => readOwnAndGlobal(userId, k)),
+  )
+  return resolveAiSettings(
+    { provider: provider.own, model: model.own, apiKey: apiKey.own, baseUrl: baseUrl.own },
+    { provider: provider.global, model: model.global, apiKey: apiKey.global, baseUrl: baseUrl.global },
+  )
 }
 
 /** getSetting con userId explícito (override de usuario → default global). */

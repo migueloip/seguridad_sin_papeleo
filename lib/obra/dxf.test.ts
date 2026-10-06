@@ -855,3 +855,91 @@ describe("dxfToElementDrafts", () => {
     expect(pc.y).toBeCloseTo(4)
   })
 })
+
+describe("dxfToElementDrafts — correcciones de revisión", () => {
+  const metersHeader = section("HEADER", [
+    [9, "$INSUNITS"],
+    [70, 6],
+  ])
+  const line = (layer: string, a: [number, number], b: [number, number]): Pair[] => [
+    [0, "LINE"],
+    [8, layer],
+    [10, a[0]],
+    [20, a[1]],
+    [11, b[0]],
+    [21, b[1]],
+  ]
+
+  it("devuelve el origen CAD y las unidades para alinear capas del mismo sistema de coordenadas", () => {
+    const text = dxf([
+      ...metersHeader,
+      ...section("ENTITIES", [
+        ...lwpolyline("MURO", [[0, 0], [40, 0], [40, 20], [0, 20]], true),
+        ...line("ALC-COLECTOR", [5, 10], [35, 10]),
+      ]),
+      [0, "EOF"],
+    ])
+    const parsed = parseDxf(text)
+    const arq = dxfToElementDrafts(parsed, { MURO: "muro" })
+    const alc = dxfToElementDrafts(parsed, { "ALC-COLECTOR": "tuberia_alcantarillado" })
+    expect(arq.origin).toEqual({ min_x: 0, max_y: 20 })
+    expect(alc.origin).toEqual({ min_x: 5, max_y: 10 })
+    expect(arq.unit_factor).toBe(1)
+    // Con el origen se reconstruye la posición absoluta: el colector parte en (5, 10) del CAD,
+    // es decir a 5 m del borde izquierdo y 10 m bajo el borde superior de la capa de muros.
+    const p = alc.drafts[0].geometry.points[0]
+    const absX = alc.origin!.min_x + p.x * alc.width_units
+    const absY = alc.origin!.max_y - p.y * alc.width_units * alc.aspect
+    expect(absX - arq.origin!.min_x).toBeCloseTo(5, 6)
+    expect(arq.origin!.max_y - absY).toBeCloseTo(10, 6)
+  })
+
+  it("una polilínea cerrada a mano (último = primero, sin flag) se importa como polígono", () => {
+    const text = dxf([
+      ...section("ENTITIES", lwpolyline("LOSA", [[0, 0], [20, 0], [20, 10], [0, 10], [0, 0]], false)),
+      [0, "EOF"],
+    ])
+    const r = dxfToElementDrafts(parseDxf(text), { LOSA: "losa" })
+    expect(r.drafts).toHaveLength(1)
+    expect(r.drafts[0].geometry.type).toBe("polygon")
+    expect(r.drafts[0].geometry.points).toHaveLength(4)
+  })
+
+  it("una polilínea cerrada de 2 vértices con bulge (DONUT) es un círculo completo", () => {
+    const pairs: Pair[] = [
+      [0, "LWPOLYLINE"],
+      [100, "AcDbEntity"],
+      [8, "COL"],
+      [100, "AcDbPolyline"],
+      [90, 2],
+      [70, 1],
+      [10, 0],
+      [20, 0],
+      [42, 1],
+      [10, 2],
+      [20, 0],
+      [42, 1],
+    ]
+    const text = dxf([...section("ENTITIES", pairs), [0, "EOF"]])
+    const r = dxfToElementDrafts(parseDxf(text), { COL: "columna" })
+    expect(r.drafts[0].geometry.type).toBe("polygon")
+    // Un círculo de diámetro 2: la lámina es cuadrada.
+    expect(r.aspect).toBeCloseTo(1, 2)
+    const ys = r.drafts[0].geometry.points.map((q) => q.y)
+    expect(Math.min(...ys)).toBeLessThan(0.05)
+    expect(Math.max(...ys)).toBeGreaterThan(0.95)
+  })
+
+  it("un dibujo muy angosto se ensancha en vez de deformarse: proporción ≤ 100 y ancho ≥ 1 m", () => {
+    const text = dxf([...metersHeader, ...section("ENTITIES", line("ALC", [0, 0], [0.3, 60])), [0, "EOF"]])
+    const r = dxfToElementDrafts(parseDxf(text), { ALC: "tuberia_alcantarillado" })
+    expect(r.aspect).toBeLessThanOrEqual(100)
+    expect(r.suggested_width_m).toBeGreaterThanOrEqual(1)
+    // La escala es la misma en ambos ejes: el colector mide 60 m.
+    const [a, b] = r.drafts[0].geometry.points
+    const k = r.suggested_width_m! // metros por unidad de lámina en X
+    const dx = (b.x - a.x) * k
+    const dy = (b.y - a.y) * k * r.aspect
+    expect(Math.hypot(dx, dy)).toBeCloseTo(Math.hypot(0.3, 60), 3)
+  })
+})

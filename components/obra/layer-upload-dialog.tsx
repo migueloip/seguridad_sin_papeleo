@@ -61,7 +61,7 @@ import {
 import { ElementTypeSelectItems } from "./element-tools"
 import { ElementsPreviewSvg } from "./extraction-review"
 import { formatNumberCL } from "./plan-canvas"
-import { callAction } from "./task-card"
+import { callAction, NETWORK_ERROR } from "./task-card"
 
 /** Límites (espejo de LAYER_LIMITS en lib/obra/server/layers.ts). */
 const LIMITS = { nameMax: 120, levelMin: -10, levelMax: 200, levelLabelMax: 100, widthMin: 1, widthMax: 5000 } as const
@@ -302,6 +302,7 @@ function UploadForm({
     onBusyChange(true)
     setProgress({ label: image ? "Subiendo la lámina…" : "Creando la capa…", value: 10 })
 
+    const origin = dxf?.result.origin ?? null
     const created = await callAction(() =>
       createObraLayer(projectId, {
         name: n,
@@ -310,13 +311,23 @@ function UploadForm({
         level_label: levelLabelText.trim() || null,
         image: image ? { data_url: image.dataUrl, width_px: image.width, height_px: image.height } : null,
         width_m: w,
+        // dxfToElementDrafts ya entrega la proporción entre 0,01 y 100 (ensancha la lámina si hace falta).
         aspect: dxf ? Math.min(100, Math.max(0.01, dxf.result.aspect || 0.7)) : undefined,
+        cad_origin:
+          dxf && origin && dxf.result.width_units > 0
+            ? { min_x: origin.min_x, max_y: origin.max_y, width_units: dxf.result.width_units }
+            : null,
       }),
     )
     if (created.ok === false) {
       setProgress(null)
       onBusyChange(false)
-      toast.error(created.error)
+      // Una lámina pesada puede superar el límite de envío del servidor: el error llega como falla de red.
+      toast.error(
+        created.error === NETWORK_ERROR && image
+          ? "No se pudo enviar la lámina. Si el archivo es muy pesado, prueba con una imagen de menor resolución o exporta solo la lámina necesaria; si no, revisa tu conexión."
+          : created.error,
+      )
       return
     }
     const layer = created.data
@@ -341,8 +352,13 @@ function UploadForm({
     }
     setProgress({ label: "Listo", value: 100 })
     if (!dxf || inserted === dxf.result.drafts.length) {
+      const dxfRef = dxf ? layers.find((l) => l.level === lvl && l.cad_origin) : undefined
+      const moved = layer.frame.offset_x_m !== 0 || layer.frame.offset_y_m !== 0 || layer.frame.rotation_deg !== 0
       toast.success(dxf ? `Capa «${layer.name}» creada con ${inserted} elementos.` : `Capa «${layer.name}» creada.`, {
-        description: "Si no calza con las demás capas del nivel, usa «Alinear y editar».",
+        description:
+          dxfRef && moved
+            ? "Se alineó con las demás capas DXF del nivel usando las coordenadas del dibujo. Si algo no calza, usa «Alinear y editar»."
+            : "Si no calza con las demás capas del nivel, usa «Alinear y editar».",
       })
     }
     onBusyChange(false)

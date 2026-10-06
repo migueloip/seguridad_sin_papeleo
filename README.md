@@ -62,6 +62,6 @@ Cómo empezar:
 
    DATABASE_URL=postgres://... npm run seed:obra-demo -- --owner-email tu@correo.cl
 
-   Crea la obra "Edificio Demo Los Aromos" con planos, un hallazgo junto al colector y usuarios demo (*.demo@losaromos.test, clave Demo1234!). No borra datos existentes.
+   Crea la obra "Edificio Demo Los Aromos" con planos, un hallazgo junto al colector y usuarios demo (*.demo@losaromos.test; cada cuenta recibe una clave aleatoria que el script muestra una sola vez). No borra datos existentes. Solo corre contra una BD local, salvo que agregues --allow-remote.
 
 Pruebas del módulo: npm run test (unitarias) y npm run test:obra:int (integración; necesita un Postgres local, ver AGENTS.md).

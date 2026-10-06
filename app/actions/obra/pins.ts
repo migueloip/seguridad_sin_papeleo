@@ -102,7 +102,13 @@ export async function analyzeObraFinding(
 export async function getObraFindingContext(
   findingId: number,
 ): Promise<
-  ActionResult<{ pin: FindingPin; correlations: Correlation[]; suggestions: AiSuggestion[]; tasks: ObraTask[] }>
+  ActionResult<{
+    pin: FindingPin
+    correlations: Correlation[]
+    suggestions: AiSuggestion[]
+    tasks: ObraTask[]
+    photo_indexes: number[]
+  }>
 > {
   try {
     const userId = await requireSessionUserId()

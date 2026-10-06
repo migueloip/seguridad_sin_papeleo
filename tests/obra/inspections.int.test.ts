@@ -145,18 +145,87 @@ describe.skipIf(!HAS_TEST_DB)("revisiones de obra (BD real)", () => {
     expect(rows[0].n).toBe(1)
   })
 
-  it("la próxima es la programada más cercana desde hoy (no pasadas, no cerradas, no en curso)", async () => {
+  it("la próxima usa el criterio único del módulo: en curso; luego programada desde hoy; luego atrasada", async () => {
     const { getOrCreateNextInspection } = await import("@/lib/obra/server/inspections")
     const { sql } = await import("@/lib/db")
     const pid = await freshProject("Obra con agenda")
-    await db.sql`INSERT INTO obra_inspections (project_id, title, scheduled_for) VALUES (${pid}, 'Pasada', ${addDaysISO(today, -1)}::date)`
-    await db.sql`INSERT INTO obra_inspections (project_id, title, scheduled_for, status) VALUES (${pid}, 'Cerrada', ${addDaysISO(today, 1)}::date, 'cerrada')`
-    await db.sql`INSERT INTO obra_inspections (project_id, title, scheduled_for, status) VALUES (${pid}, 'En curso', ${addDaysISO(today, 1)}::date, 'en_curso')`
-    await db.sql`INSERT INTO obra_inspections (project_id, title, scheduled_for) VALUES (${pid}, 'Lejana', ${addDaysISO(today, 20)}::date)`
-    await db.sql`INSERT INTO obra_inspections (project_id, title, scheduled_for) VALUES (${pid}, 'Hoy', ${today}::date)`
-    const next = await sql.begin((tx) => getOrCreateNextInspection(tx, pid, db.users.gerente))
-    expect(next.title).toBe("Hoy")
-    expect(next.scheduled_for).toBe(today)
+    const add = async (title: string, days: number, status = "programada") => {
+      const r = await db.sql<{ id: number }[]>`
+        INSERT INTO obra_inspections (project_id, title, scheduled_for, status)
+        VALUES (${pid}, ${title}, ${addDaysISO(today, days)}::date, ${status}) RETURNING id`
+      return Number(r[0].id)
+    }
+    const pasada = await add("Pasada", -1)
+    await add("Cerrada", 1, "cerrada")
+    const enCurso = await add("En curso", 1, "en_curso")
+    await add("Lejana", 20)
+    const hoy = await add("Hoy", 0)
+    const pick = () => sql.begin((tx) => getOrCreateNextInspection(tx, pid, db.users.gerente))
+    // Es la misma que muestran el resumen y la página Revisiones (pickNextInspection).
+    expect((await pick()).id).toBe(enCurso)
+    await db.sql`UPDATE obra_inspections SET status = 'cerrada' WHERE id = ${enCurso}`
+    expect((await pick()).id).toBe(hoy)
+    await db.sql`UPDATE obra_inspections SET status = 'cerrada' WHERE project_id = ${pid} AND id <> ${pasada}`
+    expect((await pick()).id).toBe(pasada)
+    const n = await db.sql<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM obra_inspections WHERE project_id = ${pid}`
+    expect(n[0].n).toBe(5)
+  })
+
+  it("una tarea que vence antes de la próxima revisión programada crea una revisión prioritaria para su vencimiento", async () => {
+    const { getOrCreateNextInspection } = await import("@/lib/obra/server/inspections")
+    const { sql } = await import("@/lib/db")
+    const pid = await freshProject("Obra urgente")
+    await db.sql`INSERT INTO obra_inspections (project_id, title, scheduled_for) VALUES (${pid}, 'Semanal', ${addDaysISO(today, 6)}::date)`
+    const pick = (dueBy: string | null) => sql.begin((tx) => getOrCreateNextInspection(tx, pid, db.users.gerente, { dueBy }))
+    // Vence después de la revisión: va a la programada.
+    expect((await pick(addDaysISO(today, 10))).title).toBe("Semanal")
+    // Vence hoy: no espera 6 días.
+    const urgent = await pick(today)
+    expect(urgent).toMatchObject({ title: "Revisión prioritaria", scheduled_for: today, status: "programada" })
+    // Otra tarea que vence en 2 días reutiliza la prioritaria de hoy.
+    expect((await pick(addDaysISO(today, 2))).id).toBe(urgent.id)
+    // Sin revisiones abiertas y con vencimiento a 3 días: la revisión se agenda para ese día.
+    const pid2 = await freshProject("Obra sin agenda")
+    const r = await sql.begin((tx) => getOrCreateNextInspection(tx, pid2, db.users.gerente, { dueBy: addDaysISO(today, 3) }))
+    expect(r).toMatchObject({ title: "Revisión prioritaria", scheduled_for: addDaysISO(today, 3) })
+    const audit = await db.sql<{ details: Record<string, unknown> }[]>`
+      SELECT details FROM obra_audit_log WHERE project_id = ${pid} AND action = 'inspection.created' ORDER BY id DESC LIMIT 1`
+    expect(audit[0].details).toMatchObject({ auto: true, title: "Revisión prioritaria", due_by: today })
+  })
+
+  it("cerrar una revisión espera a la aprobación en curso: la tarea nueva se traslada y no queda en una revisión cerrada", async () => {
+    const { getOrCreateNextInspection, closeInspection } = await import("@/lib/obra/server/inspections")
+    const { createTask } = await import("@/lib/obra/server/tasks")
+    const { sql } = await import("@/lib/db")
+    const pid = await freshProject("Obra carrera")
+    await db.sql`INSERT INTO obra_members (project_id, user_id, role) VALUES (${pid}, ${db.users.prevencionista}, 'prevencionista')`
+    const x = await db.sql<{ id: number }[]>`
+      INSERT INTO obra_inspections (project_id, title, scheduled_for) VALUES (${pid}, 'X', ${today}::date) RETURNING id`
+    const xId = Number(x[0].id)
+    // Una "aprobación" abre su transacción, elige la próxima (X) y aún no confirma.
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => (release = r))
+    let chosen = 0
+    const approval = sql.begin(async (tx) => {
+      const next = await getOrCreateNextInspection(tx, pid, db.users.gerente)
+      chosen = next.id
+      await gate
+      return createTask(db.users.gerente, pid, { title: "Tarea aprobada", inspection_id: next.id }, tx)
+    })
+    while (chosen === 0) await new Promise((r) => setTimeout(r, 10))
+    expect(chosen).toBe(xId)
+    // El cierre (con traslado) queda esperando el mismo lock por proyecto.
+    const closing = closeInspection(db.users.prevencionista, xId, { summary: "Cierre", carry_over_open_tasks: true })
+    await new Promise((r) => setTimeout(r, 150))
+    release()
+    const task = await approval
+    await closing
+    const row = await db.sql<{ status: string; ins_status: string; inspection_id: number }[]>`
+      SELECT t.status, i.status AS ins_status, t.inspection_id
+      FROM obra_tasks t JOIN obra_inspections i ON i.id = t.inspection_id WHERE t.id = ${task.id}`
+    expect(row[0].status).toBe("pendiente")
+    expect(row[0].ins_status).not.toBe("cerrada")
+    expect(row[0].inspection_id).not.toBe(xId)
   })
 
   it("cerrar con traslado mueve solo las tareas abiertas a la próxima revisión", async () => {

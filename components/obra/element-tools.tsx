@@ -322,12 +322,22 @@ export function ElementDrawToolbar({
       const t = e.target as HTMLElement | null
       if (t?.closest?.("[role=dialog],[role=listbox],[role=menu]")) return
       const typing = Boolean(t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable))
+      // Con el foco en un control (botón, enlace, selector, opción) Enter y Retroceso son del control:
+      // así "Cancelar", "Deshacer" o el selector de tipo funcionan con teclado.
+      const onControl = Boolean(
+        t?.closest?.(
+          "button,a[href],select,summary,[role=button],[role=combobox],[role=radio],[role=checkbox],[role=switch],[role=tab],[role=option],[role=menuitem],[role=slider]",
+        ),
+      )
       if (e.key === "Escape") {
         cancelRef.current()
-      } else if (!typing && (e.key === "Backspace" || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z"))) {
+      } else if (!typing && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
         e.preventDefault()
         undoRef.current()
-      } else if (!typing && e.key === "Enter") {
+      } else if (!typing && !onControl && e.key === "Backspace") {
+        e.preventDefault()
+        undoRef.current()
+      } else if (!typing && !onControl && e.key === "Enter") {
         e.preventDefault()
         void saveRef.current()
       }

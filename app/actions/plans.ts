@@ -7,7 +7,7 @@ import { sql } from "@/lib/db"
 import type { Plan, PlanFloor, PlanZone, PlanType } from "@/lib/db"
 import { getCurrentUserId } from "@/lib/auth"
 import { getModel } from "@/lib/ai"
-import { getAiSettings } from "./settings"
+import { getAiSettings } from "@/lib/settings"
 
 // ---------------------------------------------------------------------------
 // Validación de entradas (helpers internos, no exportados: este archivo es

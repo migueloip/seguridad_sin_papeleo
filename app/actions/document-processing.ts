@@ -2,7 +2,7 @@
 
 import { generateText } from "ai"
 import type { LanguageModel } from "ai"
-import { getAiSettings } from "./settings"
+import { getAiSettings } from "@/lib/settings"
 import { getModel } from "@/lib/ai"
 import { getCurrentUserId } from "@/lib/auth"
 import { formatRut } from "@/lib/utils"

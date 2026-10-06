@@ -90,7 +90,25 @@ export async function listMembers(userId: number, projectId: number): Promise<Ob
   return [...ownerRows.map(mapMember), ...members]
 }
 
-/** Trabajadores del dueño que se pueden vincular a un integrante (members.manage). */
+/**
+ * RUT abreviado (últimos 3 dígitos y dígito verificador: "•••678-9"): basta
+ * para distinguir a dos personas con el mismo nombre sin exponer el RUT
+ * completo a quien no es dueño de los datos.
+ */
+export function maskRut(rut: string | null | undefined): string | null {
+  if (!rut) return null
+  const clean = String(rut).replace(/[^0-9kK]/g, "")
+  if (clean.length < 2) return "•••"
+  return `•••${clean.slice(0, -1).slice(-3)}-${clean.slice(-1).toUpperCase()}`
+}
+
+/**
+ * Trabajadores que se pueden vincular a un integrante (members.manage). El
+ * dueño ve todo su personal con el RUT completo. Un gestor que no es dueño
+ * (jefe de obra, otro gerente) solo ve el personal de ESTA obra o sin obra
+ * asignada, con el RUT abreviado: no ve los datos personales de las demás
+ * obras del dueño.
+ */
 export async function listLinkableWorkers(
   userId: number,
   projectId: number,
@@ -100,13 +118,14 @@ export async function listLinkableWorkers(
     SELECT id, NULLIF(TRIM(CONCAT_WS(' ', first_name, last_name)), '') AS name, rut
     FROM workers
     WHERE user_id = ${access.owner_user_id}
+      ${access.is_owner ? sql`` : sql`AND (project_id = ${access.project_id} OR project_id IS NULL)`}
     ORDER BY CASE WHEN project_id = ${access.project_id} THEN 0 ELSE 1 END, first_name, last_name, id
     LIMIT 2000
   `
   return rows.map((r) => ({
     id: Number(r.id),
     name: r.name ?? `Trabajador ${r.id}`,
-    rut: r.rut ?? null,
+    rut: access.is_owner ? (r.rut ?? null) : maskRut(r.rut),
   }))
 }
 
@@ -149,7 +168,10 @@ export async function addMember(
     const s = asSql(tx)
     if (workerId != null) {
       const w = await s<{ id: number }[]>`
-        SELECT id FROM workers WHERE id = ${workerId} AND user_id = ${access.owner_user_id} LIMIT 1
+        SELECT id FROM workers
+        WHERE id = ${workerId} AND user_id = ${access.owner_user_id}
+          ${access.is_owner ? s`` : s`AND (project_id = ${access.project_id} OR project_id IS NULL)`}
+        LIMIT 1
       `
       if (!w[0]) throw new ObraValidationError("El trabajador indicado no pertenece a esta obra.")
     }

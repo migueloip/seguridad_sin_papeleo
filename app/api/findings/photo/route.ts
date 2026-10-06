@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { sql } from "@/lib/db"
 import { getCurrentUserId } from "@/lib/auth"
+import { OBRA_STORAGE_PREFIX, readObraStorageRef } from "@/lib/obra/server/storage"
 
 /** Tiempo máximo para descargar una foto desde Storage. */
 const FETCH_TIMEOUT_MS = 10_000
@@ -72,6 +73,11 @@ export async function GET(request: Request) {
       const b64 = m[2]
       const buf = Buffer.from(b64, "base64")
       return new NextResponse(buf, { headers: photoHeaders(mime) })
+    }
+    if (item.startsWith(OBRA_STORAGE_PREFIX)) {
+      // Foto subida desde Obra integral al bucket privado (lectura con la service key).
+      const img = await readObraStorageRef(item)
+      return new NextResponse(new Uint8Array(img.bytes), { headers: photoHeaders(img.mime) })
     }
     if (item.startsWith("http://") || item.startsWith("https://")) {
       const target = allowedRemoteUrl(item)

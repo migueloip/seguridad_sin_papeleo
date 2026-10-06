@@ -76,10 +76,19 @@ export type DxfToDraftsOptions = {
 
 export type DxfToDraftsResult = {
   drafts: PlanElementDraft[]
-  /** Alto / ancho de la lámina (para LayerFrame.aspect). */
+  /** Alto / ancho de la lámina (para LayerFrame.aspect), siempre entre 0,01 y 100. */
   aspect: number
   /** Ancho de la lámina en unidades del dibujo. */
   width_units: number
+  /**
+   * Origen CAD de la lámina, en unidades del dibujo: X mínima (borde izquierdo)
+   * e Y máxima (borde superior). Con él, dos capas importadas del mismo sistema
+   * de coordenadas (otro mapeo del mismo archivo, u otra especialidad) se
+   * alinean sin ajuste manual. null si no hay entidades.
+   */
+  origin: { min_x: number; max_y: number } | null
+  /** Metros por unidad del dibujo según $INSUNITS (null si no se declara o no se reconoce). */
+  unit_factor: number | null
   /** Ancho real sugerido en metros según $INSUNITS (null si no se puede saber). */
   suggested_width_m: number | null
   /** Elementos que no se generaron por superar maxElements. */
@@ -101,6 +110,8 @@ export const DXF_DEFAULT_MAX_ELEMENTS = 4000
 export const DXF_MAX_POINTS_PER_ELEMENT = 5000
 /** Tolerancia de Douglas-Peucker, como fracción del ancho de la lámina. */
 export const DXF_SIMPLIFY_TOLERANCE = 0.0005
+/** Proporción alto/ancho máxima de una lámina (la misma que acepta una capa). */
+export const DXF_MAX_ASPECT = 100
 /** Distancia máxima texto-elemento para usarlo como etiqueta, como fracción del ancho. */
 export const DXF_LABEL_MAX_DISTANCE = 0.02
 export const DXF_LABEL_MAX_LENGTH = 120
@@ -388,7 +399,8 @@ function expandBulges(verts: BulgeVertex[], closed: boolean): Vec2[] {
   for (let i = 0; i < n; i++) {
     const a = verts[i]
     out.push({ x: a.x, y: a.y })
-    const hasNext = i < n - 1 || (closed && n > 2)
+    // Cerrada con 2 vértices (DONUT, símbolos circulares): el tramo de cierre b→a es otro arco.
+    const hasNext = i < n - 1 || (closed && n >= 2)
     if (hasNext && Math.abs(a.b) > 1e-9) {
       const b = verts[(i + 1) % n]
       for (const p of bulgeArc(a, b, a.b)) out.push(p)
@@ -1456,6 +1468,8 @@ export function dxfToElementDrafts(
     drafts: [],
     aspect: 1,
     width_units: 0,
+    origin: null,
+    unit_factor: null,
     suggested_width_m: null,
     skipped: 0,
     per_layer: {},
@@ -1471,7 +1485,14 @@ export function dxfToElementDrafts(
   const w = maxX - minX
   const h = maxY - minY
   const eps = 1e-9 * Math.max(1, Math.abs(minX), Math.abs(maxX), Math.abs(minY), Math.abs(maxY))
-  const wEff = w > eps ? w : h > eps ? h : 1
+  const unitFactor = dxfUnitsToMeters(parsed?.insunits ?? null)
+  let wEff = w > eps ? w : h > eps ? h : 1
+  // Si se conocen las unidades, la lámina mide al menos 1 m de ancho (mínimo de una capa).
+  if (unitFactor != null && wEff * unitFactor < 1) wEff = 1 / unitFactor
+  // Dibujo muy angosto y alto (p.ej. solo un colector norte-sur): se ensancha la lámina, con el
+  // contenido anclado a la izquierda, para que alto/ancho no pase de 100. Recortar la proporción
+  // después deformaría el dibujo (distinta escala en X e Y).
+  if (h / wEff > DXF_MAX_ASPECT) wEff = h / DXF_MAX_ASPECT
   const hEff = Math.max(h, wEff * 0.01)
   const aspect = round6(hEff / wEff) || 0.01
   const tol = DXF_SIMPLIFY_TOLERANCE * wEff
@@ -1499,7 +1520,6 @@ export function dxfToElementDrafts(
     }
   }
 
-  const unitFactor = dxfUnitsToMeters(parsed?.insunits ?? null)
   const toMm = unitFactor != null ? unitFactor * 1000 : null
 
   const drafts: PlanElementDraft[] = []
@@ -1521,6 +1541,10 @@ export function dxfToElementDrafts(
     if (e.kind === "line" || e.kind === "polyline") {
       let pts = dedupeConsecutive(e.points, dedupeEps2)
       let closed = Boolean(e.closed)
+      // Contorno cerrado "a mano" (último vértice = primero, sin el flag 70&1): también es cerrado.
+      if (!closed && e.kind === "polyline" && pts.length >= 4 && dist2(pts[0], pts[pts.length - 1]) <= dedupeEps2) {
+        closed = true
+      }
       if (closed && pts.length > 1 && dist2(pts[0], pts[pts.length - 1]) <= dedupeEps2) pts.pop()
       if (closed && pts.length < 3) closed = false
       if (pts.length >= 2) {
@@ -1596,6 +1620,8 @@ export function dxfToElementDrafts(
     drafts,
     aspect,
     width_units: wEff,
+    origin: { min_x: minX, max_y: maxY },
+    unit_factor: unitFactor,
     suggested_width_m: suggested,
     skipped,
     per_layer: perLayer,

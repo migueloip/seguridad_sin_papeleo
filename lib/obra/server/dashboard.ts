@@ -4,8 +4,10 @@
  *
  * Conteos de tareas: respetan la visibilidad del rol (sin tasks.view_all solo
  * cuentan las propias). Hallazgos, sugerencias y planos son agregados del
- * proyecto. El índice de riesgo siempre se calcula con datos de todo el
- * proyecto, para que sea el mismo para todos los roles.
+ * proyecto; los hallazgos solo cuentan los del tenant (dueño del proyecto),
+ * igual que el resto del módulo, y las sugerencias huérfanas no cuentan. El
+ * índice de riesgo siempre se calcula con datos de todo el proyecto, para que
+ * sea el mismo para todos los roles.
  */
 import { sql } from "@/lib/db"
 import { listProjectAccessForUser, requireProjectPermissionForUser } from "../access"
@@ -23,10 +25,12 @@ import {
   type Severity,
   type TaskStatus,
 } from "../types"
+import { nextInspectionOrder } from "./inspections"
 import { isOwnTask, mineCondition } from "./tasks"
 import {
   auditSelect,
   inspectionSelect,
+  livePendingSuggestionCondition,
   mapAudit,
   mapInspection,
   mapSuggestion,
@@ -48,17 +52,14 @@ function normalizeSeverity(v: unknown): Severity {
 }
 
 /**
- * Próxima revisión del proyecto: la que está en curso; si no, la programada
- * más próxima desde hoy; si no, la programada atrasada más antigua.
+ * Próxima revisión del proyecto con el criterio único (nextInspectionOrder):
+ * la misma donde "Anotar en tareas de la próxima revisión" deja la tarea.
  */
 async function getNextInspection(projectId: number, today: string): Promise<ObraInspection | null> {
   const rows = await sql<InspectionRow[]>`
     ${inspectionSelect(sql)}
     WHERE i.project_id = ${projectId} AND i.status <> 'cerrada'
-    ORDER BY
-      CASE WHEN i.status = 'en_curso' THEN 0 WHEN i.scheduled_for >= ${today}::date THEN 1 ELSE 2 END,
-      i.scheduled_for ASC,
-      i.id ASC
+    ORDER BY ${nextInspectionOrder(sql, today)}
     LIMIT 1
   `
   return rows[0] ? mapInspection(rows[0]) : null
@@ -102,10 +103,14 @@ export async function getDashboard(userId: number, projectId: number): Promise<O
           WHERE t.project_id = ${pid} AND t.status IN ('pendiente', 'en_progreso')
             AND ${mineCondition(sql, access)})::int AS my_open_tasks,
         (SELECT COUNT(*) FROM obra_ai_suggestions s
-          WHERE s.project_id = ${pid} AND s.status = 'pending')::int AS pending_suggestions,
+          WHERE s.project_id = ${pid} AND ${livePendingSuggestionCondition(sql)})::int AS pending_suggestions,
         (SELECT COUNT(*) FROM obra_ai_suggestions s
-          WHERE s.project_id = ${pid} AND s.status = 'pending' AND s.severity = 'critical')::int AS pending_critical_suggestions,
-        (SELECT COUNT(*) FROM obra_finding_pins p WHERE p.project_id = ${pid})::int AS pinned_findings,
+          WHERE s.project_id = ${pid} AND ${livePendingSuggestionCondition(sql)}
+            AND s.severity = 'critical')::int AS pending_critical_suggestions,
+        (SELECT COUNT(*) FROM obra_finding_pins p
+          JOIN obra_plan_layers l ON l.id = p.layer_id AND l.deleted_at IS NULL
+          JOIN findings f ON f.id = p.finding_id AND f.project_id = p.project_id
+          WHERE p.project_id = ${pid})::int AS pinned_findings,
         (SELECT COUNT(*) FROM obra_plan_layers l WHERE l.project_id = ${pid} AND l.deleted_at IS NULL)::int AS layers,
         (SELECT COUNT(*) FROM obra_plan_elements e
           JOIN obra_plan_layers l ON l.id = e.layer_id AND l.deleted_at IS NULL
@@ -122,6 +127,7 @@ export async function getDashboard(userId: number, projectId: number): Promise<O
       SELECT f.severity, COUNT(*)::int AS n
       FROM findings f
       WHERE f.project_id = ${pid} AND f.status IN ('open', 'in_progress')
+        AND (f.user_id = ${access.owner_user_id} OR f.user_id IS NULL)
       GROUP BY f.severity
     `,
     getNextInspection(pid, today),
@@ -134,7 +140,7 @@ export async function getDashboard(userId: number, projectId: number): Promise<O
     canReview
       ? sql<SuggestionRow[]>`
           ${suggestionSelect(sql)}
-          WHERE s.project_id = ${pid} AND s.status = 'pending'
+          WHERE s.project_id = ${pid} AND ${livePendingSuggestionCondition(sql)}
           ORDER BY
             CASE s.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
             s.created_at DESC,
@@ -230,7 +236,7 @@ export async function listMyProjects(userId: number): Promise<ObraProjectSummary
     sql<{ project_id: number; n: number }[]>`
       SELECT s.project_id, COUNT(*)::int AS n
       FROM obra_ai_suggestions s
-      WHERE s.project_id IN ${sql(ids)} AND s.status = 'pending'
+      WHERE s.project_id IN ${sql(ids)} AND ${livePendingSuggestionCondition(sql)}
       GROUP BY s.project_id
     `,
     sql<{ project_id: number; open_n: number; critical_n: number }[]>`
@@ -238,18 +244,16 @@ export async function listMyProjects(userId: number): Promise<ObraProjectSummary
              COUNT(*)::int AS open_n,
              COUNT(*) FILTER (WHERE lower(f.severity) = 'critical')::int AS critical_n
       FROM findings f
+      JOIN projects p ON p.id = f.project_id
       WHERE f.project_id IN ${sql(ids)} AND f.status IN ('open', 'in_progress')
+        AND (f.user_id = p.user_id OR f.user_id IS NULL)
       GROUP BY f.project_id
     `,
     sql<{ project_id: number; scheduled_for: string | null }[]>`
       SELECT DISTINCT ON (i.project_id) i.project_id, to_char(i.scheduled_for, 'YYYY-MM-DD') AS scheduled_for
       FROM obra_inspections i
       WHERE i.project_id IN ${sql(ids)} AND i.status <> 'cerrada'
-      ORDER BY
-        i.project_id,
-        CASE WHEN i.status = 'en_curso' THEN 0 WHEN i.scheduled_for >= ${today}::date THEN 1 ELSE 2 END,
-        i.scheduled_for ASC,
-        i.id ASC
+      ORDER BY i.project_id, ${nextInspectionOrder(sql, today)}
     `,
   ])
 

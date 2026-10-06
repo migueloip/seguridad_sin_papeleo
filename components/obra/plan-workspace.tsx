@@ -87,6 +87,8 @@ const SEVERITY_RANK: Record<Severity, number> = { critical: 3, high: 2, medium: 
 // ---------------------------------------------------------------------------
 
 const DESKTOP_QUERY = "(min-width: 1024px)"
+/** Alto aproximado (px) de la hoja inferior fija del panel en el celular, cerrada. */
+const MOBILE_SHEET_PX = 64
 
 function subscribeDesktop(cb: () => void) {
   const mq = window.matchMedia(DESKTOP_QUERY)
@@ -195,6 +197,7 @@ export function PlanWorkspace({
   const [showLabels, setShowLabels] = useState(true)
   const [allLevelsFindings, setAllLevelsFindings] = useState(false)
   const [mode, setMode] = useState<PlanMode>("navegar")
+  const canvasWrapRef = useRef<HTMLDivElement>(null)
   const [selectedFindingId, setSelectedFindingId] = useState<number | null>(null)
   const [selectedElementId, setSelectedElementId] = useState<number | null>(null)
   const [focus, setFocus] = useState<PlanFocus | null>(null)
@@ -342,6 +345,16 @@ export function PlanWorkspace({
     didInit.current = true
     void init()
   }, [init])
+
+  // En el celular, al pasar a reportar o dibujar, el lienzo sube al inicio de la pantalla: así no
+  // queda bajo la hoja inferior justo donde hay que tocar (el lienzo no desplaza la página).
+  useEffect(() => {
+    if (isDesktop || (mode !== "reportar" && mode !== "dibujar")) return
+    const el = canvasWrapRef.current
+    if (!el || typeof el.scrollIntoView !== "function") return
+    const reduce = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+    el.scrollIntoView({ block: "start", behavior: reduce ? "auto" : "smooth" })
+  }, [mode, isDesktop])
 
   useEffect(() => {
     if (level != null && layers && layers.length > 0) void loadLevel(level)
@@ -520,7 +533,7 @@ export function PlanWorkspace({
       description: canViewFindings
         ? n > 0
           ? `Se generaron ${n} sugerencia${n === 1 ? "" : "s"} pendiente${n === 1 ? "" : "s"} de aprobación a partir de los planos.`
-          : "No se encontraron redes ni elementos cercanos en los planos cargados."
+          : "No se generaron tareas sugeridas: en los planos cargados no hay elementos que expliquen el hallazgo (las redes cercanas se muestran como contexto en el panel)."
         : undefined,
     })
   }
@@ -890,7 +903,10 @@ export function PlanWorkspace({
             />
           ) : null}
 
-          <div className="relative h-[58dvh] min-h-[340px] lg:h-[calc(100dvh-240px)] lg:min-h-[520px]">
+          <div
+            ref={canvasWrapRef}
+            className="relative h-[58dvh] min-h-[340px] scroll-mt-2 lg:h-[calc(100dvh-240px)] lg:min-h-[520px]"
+          >
             <PlanCanvas
               layers={visibleLayers}
               elements={levelElements}
@@ -915,6 +931,7 @@ export function PlanWorkspace({
               }}
               onSelectFinding={(id) => selectFinding(id, false)}
               onSelectElement={setSelectedElementId}
+              controlsBottomOffset={isDesktop ? 0 : MOBILE_SHEET_PX}
               ariaLabel={`Plano de ${currentLevelText}: ${visibleLayers.length} capa${visibleLayers.length === 1 ? "" : "s"} visible${visibleLayers.length === 1 ? "" : "s"} y ${levelPins.length} hallazgo${levelPins.length === 1 ? "" : "s"}`}
             >
               {visibleLayers.length === 0 ? (

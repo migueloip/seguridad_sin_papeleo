@@ -3,6 +3,7 @@ import { TriangleAlert } from "lucide-react"
 import { listObraInspections } from "@/app/actions/obra/inspections"
 import { listObraMembers } from "@/app/actions/obra/members"
 import { getObraAccess } from "@/app/actions/obra/projects"
+import { countObraPendingApprovals } from "@/app/actions/obra/suggestions"
 import { listObraTasks } from "@/app/actions/obra/tasks"
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { ObraNav } from "@/components/obra/obra-nav"
@@ -48,6 +49,7 @@ export default async function ObraTareasPage({
   if (id === null) notFound()
   const acc = await getObraAccess(id)
   if (!acc.ok) notFound()
+  const pendingApprovals = await countObraPendingApprovals(id)
 
   const [sp, tasks, members, inspections] = await Promise.all([
     searchParams,
@@ -67,7 +69,12 @@ export default async function ObraTareasPage({
 
   return (
     <DashboardLayout user={{ email: String(session.email), name: session.name ?? null, role: session.role ?? null }}>
-      <ObraNav projectId={id} projectName={acc.data.project_name} role={acc.data.role} />
+      <ObraNav
+        projectId={id}
+        projectName={acc.data.project_name}
+        role={acc.data.role}
+        pendingApprovals={pendingApprovals.ok ? pendingApprovals.data : 0}
+      />
       {tasks.ok && members.ok && inspections.ok ? (
         <TasksBoard
           projectId={id}

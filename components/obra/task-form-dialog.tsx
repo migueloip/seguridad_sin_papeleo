@@ -393,7 +393,8 @@ function TaskForm({
         </Select>
         {inspection === NEXT ? (
           <p className="text-xs text-muted-foreground">
-            Se anota en la próxima revisión programada. Si no hay ninguna, se crea una «Revisión semanal» en 7 días.
+            Se anota en la próxima revisión (la que está en curso o la siguiente programada). Si no hay ninguna, se crea
+            una «Revisión semanal» en 7 días; si la tarea vence antes, una «Revisión prioritaria» para su vencimiento.
           </p>
         ) : null}
       </div>

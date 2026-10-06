@@ -37,6 +37,9 @@ export const NEXT_INSPECTION_LOCK_NS = 7262007
 /** Título de la revisión que se crea automáticamente cuando no hay una próxima. */
 export const AUTO_INSPECTION_TITLE = "Revisión semanal"
 
+/** Título de la revisión que se crea para una tarea que vence antes de la próxima revisión programada. */
+export const URGENT_INSPECTION_TITLE = "Revisión prioritaria"
+
 const NOT_FOUND = "Revisión no encontrada."
 
 // ---------------------------------------------------------------------------
@@ -97,11 +100,37 @@ function isTransaction(q: Queryable): boolean {
 // ---------------------------------------------------------------------------
 
 /**
- * Devuelve la revisión 'programada' más próxima con fecha >= hoy; si no hay,
- * crea "Revisión semanal" para hoy + 7 días y la audita (inspection.created,
- * auto). Serializa por proyecto con pg_advisory_xact_lock para que dos
- * llamadas simultáneas no creen dos revisiones.
+ * Claves de orden del criterio único de "próxima revisión" (el mismo de
+ * pickNextInspection en lib/obra/metrics.ts): en curso; luego programadas
+ * desde hoy; luego programadas atrasadas; por fecha y luego por id. Se usa
+ * con alias `i` para obra_inspections y filtrando las cerradas.
+ */
+export function nextInspectionOrder(q: Queryable, today: string) {
+  const s = asSql(q)
+  return s`CASE WHEN i.status = 'en_curso' THEN 0 WHEN i.scheduled_for >= ${today}::date THEN 1 ELSE 2 END, i.scheduled_for ASC, i.id ASC`
+}
+
+/** Toma el lock por proyecto que serializa "próxima revisión", cierres y asignaciones de tareas a revisiones. */
+export async function lockProjectInspections(tx: Queryable, projectId: number): Promise<void> {
+  const s = asSql(tx)
+  await s`SELECT pg_advisory_xact_lock(${NEXT_INSPECTION_LOCK_NS}::int, ${projectId}::int)`
+}
+
+/**
+ * Próxima revisión abierta según el criterio único (nextInspectionOrder): la
+ * que está en curso; si no, la programada más próxima desde hoy; si no, la
+ * programada atrasada más antigua. Así la tarea aprobada queda en la misma
+ * revisión que el resumen y la página Revisiones muestran como "próxima".
  *
+ * Si no hay ninguna abierta, crea "Revisión semanal" para hoy + 7 días. Si se
+ * indica `dueBy` (vencimiento de la tarea) y la próxima es una programada
+ * POSTERIOR a ese vencimiento, crea una "Revisión prioritaria" para esa fecha:
+ * una tarea que vence hoy no puede esperar a la revisión de la semana que
+ * viene. Ambas creaciones se auditan (inspection.created, auto).
+ *
+ * Serializa por proyecto con pg_advisory_xact_lock (closeInspection toma el
+ * mismo lock), así una tarea no puede quedar abierta en una revisión que se
+ * cerró al mismo tiempo, ni dos llamadas simultáneas crean dos revisiones.
  * Debe llamarse dentro de una transacción (sql.begin); si recibe el cliente
  * global, abre una transacción propia para que el lock tenga efecto.
  * No verifica permisos: el llamador ya autorizó.
@@ -110,30 +139,36 @@ export async function getOrCreateNextInspection(
   tx: Queryable,
   projectId: number,
   actorUserId: number,
-  opts?: { excludeId?: number | null },
+  opts?: { excludeId?: number | null; dueBy?: string | null },
 ): Promise<ObraInspection> {
   if (!isTransaction(tx)) {
     return asSql(tx).begin((t) => getOrCreateNextInspection(t, projectId, actorUserId, opts)) as Promise<ObraInspection>
   }
   const s = asSql(tx)
-  await s`SELECT pg_advisory_xact_lock(${NEXT_INSPECTION_LOCK_NS}::int, ${projectId}::int)`
+  await lockProjectInspections(s, projectId)
   const today = todayISO()
   const excludeId = opts?.excludeId ?? null
+  const rawDue = typeof opts?.dueBy === "string" && /^\d{4}-\d{2}-\d{2}$/.test(opts.dueBy) ? opts.dueBy : null
+  // Un vencimiento ya pasado se atiende hoy.
+  const dueBy = rawDue == null ? null : rawDue < today ? today : rawDue
   const found = await s<InspectionRow[]>`
     ${inspectionSelect(s)}
     WHERE i.project_id = ${projectId}
-      AND i.status = 'programada'
-      AND i.scheduled_for >= ${today}::date
+      AND i.status <> 'cerrada'
       ${excludeId != null ? s`AND i.id <> ${excludeId}` : s``}
-    ORDER BY i.scheduled_for ASC, i.id ASC
+    ORDER BY ${nextInspectionOrder(s, today)}
     LIMIT 1
   `
-  if (found[0]) return mapInspection(found[0])
+  const next = found[0] ? mapInspection(found[0]) : null
+  if (next && !(dueBy != null && next.status === "programada" && next.scheduled_for > dueBy)) return next
 
-  const scheduledFor = addDaysISO(today, 7)
+  const weekly = addDaysISO(today, 7)
+  const urgent = dueBy != null && dueBy < weekly
+  const scheduledFor = urgent ? (dueBy as string) : weekly
+  const title = urgent ? URGENT_INSPECTION_TITLE : AUTO_INSPECTION_TITLE
   const ins = await s<{ id: number }[]>`
     INSERT INTO obra_inspections (project_id, title, scheduled_for, status, created_by)
-    VALUES (${projectId}, ${AUTO_INSPECTION_TITLE}, ${scheduledFor}::date, 'programada', ${actorUserId})
+    VALUES (${projectId}, ${title}, ${scheduledFor}::date, 'programada', ${actorUserId})
     RETURNING id
   `
   const id = Number(ins[0].id)
@@ -144,7 +179,12 @@ export async function getOrCreateNextInspection(
       action: "inspection.created",
       entity_type: "inspection",
       entity_id: id,
-      details: { auto: true, title: AUTO_INSPECTION_TITLE, scheduled_for: scheduledFor },
+      details: {
+        auto: true,
+        title,
+        scheduled_for: scheduledFor,
+        ...(urgent ? { due_by: dueBy, later_inspection_id: next?.id ?? null } : {}),
+      },
     },
     tx,
   )
@@ -306,7 +346,7 @@ export async function updateInspection(userId: number, inspectionId: number, pat
 
 /**
  * Cierra una revisión con su resumen. Si carry_over_open_tasks, las tareas
- * abiertas (pendiente / en_progreso) pasan a la próxima revisión programada
+ * abiertas (pendiente / en_progreso) pasan a la próxima revisión abierta
  * (se crea si no existe), excluyendo la que se cierra.
  */
 export async function closeInspection(
@@ -324,6 +364,9 @@ export async function closeInspection(
 
   return (await sql.begin(async (tx) => {
     const s = asSql(tx)
+    // Mismo lock que getOrCreateNextInspection: una aprobación en curso termina de anotar su
+    // tarea antes del cierre (y así se traslada), o ve la revisión ya cerrada y elige otra.
+    await lockProjectInspections(s, access.project_id)
     const cur = await s<{ status: string }[]>`
       SELECT status FROM obra_inspections
       WHERE id = ${id} AND project_id = ${access.project_id}

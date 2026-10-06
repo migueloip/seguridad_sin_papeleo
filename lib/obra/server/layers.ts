@@ -19,13 +19,14 @@ import {
 } from "../access"
 import { DEFAULT_FRAME } from "../geometry"
 import { can, type Permission } from "../permissions"
-import { DISCIPLINES, type Discipline, type LayerFrame, type PlanLayer, type ProjectAccess } from "../types"
+import { DISCIPLINES, type CadOrigin, type Discipline, type LayerFrame, type PlanLayer, type ProjectAccess } from "../types"
 import {
   asSql,
   cleanLine,
   hasKey,
   layerSelect,
   mapLayer,
+  parseCadOrigin,
   requireEnum,
   requireLine,
   requireObject,
@@ -70,6 +71,8 @@ export type CreateLayerInput = {
   image?: LayerImageInput | null
   width_m?: number
   aspect?: number
+  /** Solo DXF: origen CAD de la lámina (ver dxfToElementDrafts). Alinea la capa con otras DXF del nivel. */
+  cad_origin?: CadOrigin | null
 }
 
 export type UpdateLayerPatch = {
@@ -160,6 +163,51 @@ function normPx(v: unknown): number | null {
   return v
 }
 
+const CAD_COORD_MAX = 1e12
+
+/** Origen CAD de una capa DXF: números finitos y ancho positivo (o null). */
+function normCadOrigin(v: unknown): CadOrigin | null {
+  if (v === null || v === undefined) return null
+  const o = requireObject(v, "El origen del DXF no es válido.")
+  const ok = (x: unknown): x is number => finite(x) && Math.abs(x) <= CAD_COORD_MAX
+  if (!ok(o.min_x) || !ok(o.max_y) || !ok(o.width_units) || o.width_units <= 0) {
+    throw new ObraValidationError("El origen del DXF no es válido.")
+  }
+  return { min_x: o.min_x, max_y: o.max_y, width_units: o.width_units }
+}
+
+function round6(n: number): number {
+  const r = Math.round(n * 1e6) / 1e6
+  return r === 0 ? 0 : r
+}
+
+/**
+ * Marco de una capa DXF nueva para que el mismo punto CAD caiga en el mismo
+ * lugar del nivel que en la capa DXF de referencia (misma rotación; el
+ * desplazamiento es el de la referencia más la diferencia de origen, rotada).
+ * null si las escalas no coinciden (±1 %: otras unidades u otro ancho) o si el
+ * desplazamiento excede el límite: en ese caso se alinea a mano.
+ */
+export function alignCadFrame(
+  cad: CadOrigin,
+  widthM: number,
+  ref: { cad: CadOrigin; frame: Pick<LayerFrame, "width_m" | "offset_x_m" | "offset_y_m" | "rotation_deg"> },
+): { offset_x_m: number; offset_y_m: number; rotation_deg: number } | null {
+  const kRef = ref.frame.width_m / ref.cad.width_units
+  const kNew = widthM / cad.width_units
+  if (!(kRef > 0) || !Number.isFinite(kRef) || Math.abs(kNew - kRef) > 0.01 * kRef) return null
+  const dx = (cad.min_x - ref.cad.min_x) * kRef
+  const dy = (ref.cad.max_y - cad.max_y) * kRef
+  const t = (ref.frame.rotation_deg * Math.PI) / 180
+  const c = Math.cos(t)
+  const sn = Math.sin(t)
+  const ox = ref.frame.offset_x_m + dx * c - dy * sn
+  const oy = ref.frame.offset_y_m + dx * sn + dy * c
+  if (!Number.isFinite(ox) || !Number.isFinite(oy)) return null
+  if (Math.abs(ox) > LAYER_LIMITS.offsetMax || Math.abs(oy) > LAYER_LIMITS.offsetMax) return null
+  return { offset_x_m: round6(ox), offset_y_m: round6(oy), rotation_deg: ref.frame.rotation_deg }
+}
+
 type NormalizedImage = {
   bytes: Buffer
   mime: ImageMime
@@ -235,6 +283,8 @@ export async function listLayers(userId: number, projectId: number): Promise<Pla
 /**
  * Crea una capa (plans.manage). Si trae imagen, la proporción del marco es
  * alto/ancho de la imagen real; si no, `aspect` (o 0,7). Ancho por defecto 50 m.
+ * Si es DXF (`cad_origin`) y ya hay otra capa DXF en el mismo nivel, nace
+ * alineada con ella usando las coordenadas del dibujo (alignCadFrame).
  */
 export async function createLayer(userId: number, projectId: number, input: CreateLayerInput): Promise<PlanLayer> {
   const access = await requireProjectPermissionForUser(userId, projectId, "plans.manage")
@@ -249,6 +299,7 @@ export async function createLayer(userId: number, projectId: number, input: Crea
   if (image) aspect = image.height_px / image.width_px
   else aspect = o.aspect === undefined || o.aspect === null ? DEFAULT_FRAME.aspect : normAspect(o.aspect)
   aspect = normAspect(aspect)
+  const cadOrigin = normCadOrigin(o.cad_origin)
 
   // Se reserva el id antes de subir la imagen: así la subida (red) ocurre fuera
   // de la transacción y la ruta del objeto lleva el id de la capa.
@@ -259,14 +310,45 @@ export async function createLayer(userId: number, projectId: number, input: Crea
   try {
     return (await sql.begin(async (tx) => {
       const s = asSql(tx)
+      let frame = { offset_x_m: 0, offset_y_m: 0, rotation_deg: 0 }
+      let alignedWith: number | null = null
+      if (cadOrigin) {
+        const refs = await s<
+          { id: number; width_m: number; offset_x_m: number; offset_y_m: number; rotation_deg: number; cad_origin: unknown }[]
+        >`
+          SELECT id, width_m, offset_x_m, offset_y_m, rotation_deg, cad_origin
+          FROM obra_plan_layers
+          WHERE project_id = ${access.project_id} AND level = ${level} AND deleted_at IS NULL AND cad_origin IS NOT NULL
+          ORDER BY created_at ASC, id ASC
+          LIMIT 1
+        `
+        const refCad = refs[0] ? parseCadOrigin(refs[0].cad_origin) : null
+        if (refs[0] && refCad) {
+          const aligned = alignCadFrame(cadOrigin, widthM, {
+            cad: refCad,
+            frame: {
+              width_m: Number(refs[0].width_m),
+              offset_x_m: Number(refs[0].offset_x_m),
+              offset_y_m: Number(refs[0].offset_y_m),
+              rotation_deg: Number(refs[0].rotation_deg),
+            },
+          })
+          if (aligned) {
+            frame = aligned
+            alignedWith = Number(refs[0].id)
+          }
+        }
+      }
       await s`
         INSERT INTO obra_plan_layers (
           id, project_id, name, discipline, level, level_label, image_path, image_data, mime_type,
-          width_px, height_px, width_m, aspect, uploaded_by
+          width_px, height_px, width_m, aspect, offset_x_m, offset_y_m, rotation_deg, cad_origin, uploaded_by
         ) VALUES (
           ${layerId}, ${access.project_id}, ${name}, ${discipline}, ${level}, ${levelLabel},
           ${stored.image_path}, ${stored.image_data}, ${image?.mime ?? null},
-          ${image?.width_px ?? null}, ${image?.height_px ?? null}, ${widthM}, ${aspect}, ${userId}
+          ${image?.width_px ?? null}, ${image?.height_px ?? null}, ${widthM}, ${aspect},
+          ${frame.offset_x_m}, ${frame.offset_y_m}, ${frame.rotation_deg},
+          ${cadOrigin ? s.json(cadOrigin) : null}, ${userId}
         )
       `
       await writeAudit(
@@ -284,6 +366,7 @@ export async function createLayer(userId: number, projectId: number, input: Crea
             mime_type: image?.mime ?? null,
             bytes: image?.bytes.length ?? 0,
             width_m: widthM,
+            ...(cadOrigin ? { dxf: true, aligned_with_layer_id: alignedWith } : {}),
           },
         },
         tx,
@@ -405,12 +488,33 @@ export async function deleteLayer(userId: number, layerId: number): Promise<{ pr
   const { access, layerId: id } = await authorizeLayer(userId, layerId, "plans.manage")
   await sql.begin(async (tx) => {
     const s = asSql(tx)
+    // Las sugerencias pendientes de la capa (elementos detectados) y de los hallazgos ubicados en
+    // ella ya no se pueden aplicar: pasan a 'superseded'. Se bloquean ANTES que la capa, el mismo
+    // orden que approveSuggestion (sugerencia → capa), para no interbloquearse.
+    const pending = await s<{ id: number }[]>`
+      SELECT s.id FROM obra_ai_suggestions s
+      WHERE s.project_id = ${access.project_id} AND s.status = 'pending'
+        AND (
+          s.layer_id = ${id}
+          OR s.finding_id IN (SELECT p.finding_id FROM obra_finding_pins p WHERE p.layer_id = ${id})
+        )
+      ORDER BY s.id
+      FOR UPDATE OF s
+    `
     const rows = await s<{ name: string; discipline: string; level: number }[]>`
       UPDATE obra_plan_layers SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
       WHERE id = ${id} AND project_id = ${access.project_id} AND deleted_at IS NULL
       RETURNING name, discipline, level
     `
     if (!rows[0]) throw new ObraAccessError(404, NOT_FOUND)
+    const superseded =
+      pending.length > 0
+        ? await s<{ id: number }[]>`
+            UPDATE obra_ai_suggestions SET status = 'superseded', updated_at = CURRENT_TIMESTAMP
+            WHERE id IN ${s(pending.map((r) => Number(r.id)))} AND status = 'pending'
+            RETURNING id
+          `
+        : []
     await writeAudit(
       {
         project_id: access.project_id,
@@ -418,7 +522,12 @@ export async function deleteLayer(userId: number, layerId: number): Promise<{ pr
         action: "layer.deleted",
         entity_type: "layer",
         entity_id: id,
-        details: { name: rows[0].name, discipline: rows[0].discipline, level: Number(rows[0].level) },
+        details: {
+          name: rows[0].name,
+          discipline: rows[0].discipline,
+          level: Number(rows[0].level),
+          ...(superseded.length > 0 ? { superseded_suggestion_ids: superseded.map((r) => Number(r.id)) } : {}),
+        },
       },
       tx,
     )

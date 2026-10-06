@@ -31,7 +31,14 @@ export function ObraNav({
   const tabs: Tab[] = [
     { href: base, label: "Resumen", icon: Gauge, perm: "project.view" },
     { href: `${base}/planos`, label: "Planos", icon: Layers, perm: "plans.view" },
-    { href: `${base}/aprobaciones`, label: "Aprobaciones IA", icon: ShieldCheck, perm: "findings.view", badge: pendingApprovals },
+    {
+      href: `${base}/aprobaciones`,
+      label: "Aprobaciones IA",
+      icon: ShieldCheck,
+      perm: "findings.view",
+      // El contador pide una decisión: solo para quien puede aprobar o descartar.
+      badge: can(role, "ai.review") ? pendingApprovals : 0,
+    },
     { href: `${base}/tareas`, label: "Tareas", icon: ClipboardList, perm: "project.view" },
     { href: `${base}/revisiones`, label: "Revisiones", icon: CalendarCheck, perm: "project.view" },
     { href: `${base}/equipo`, label: "Equipo", icon: UsersRound, perm: "project.view" },
@@ -65,7 +72,10 @@ export function ObraNav({
               <t.icon className="h-4 w-4" />
               {t.label}
               {t.badge ? (
-                <span className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-danger px-1 text-[10px] font-semibold text-white">
+                <span
+                  className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-danger px-1 text-[10px] font-semibold text-white"
+                  aria-label={`${t.badge} pendiente${t.badge === 1 ? "" : "s"} de aprobación`}
+                >
                   {t.badge}
                 </span>
               ) : null}

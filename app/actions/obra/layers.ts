@@ -8,7 +8,7 @@
 import { revalidatePath } from "next/cache"
 import { requireSessionUserId, toActionError } from "@/lib/obra/access"
 import { createLayer, deleteLayer, listLayers, updateLayer } from "@/lib/obra/server/layers"
-import type { ActionResult, Discipline, LayerFrame, PlanLayer } from "@/lib/obra/types"
+import type { ActionResult, CadOrigin, Discipline, LayerFrame, PlanLayer } from "@/lib/obra/types"
 
 export async function listObraLayers(projectId: number): Promise<ActionResult<PlanLayer[]>> {
   try {
@@ -30,6 +30,8 @@ export async function createObraLayer(
     image?: { data_url: string; width_px: number; height_px: number } | null
     width_m?: number
     aspect?: number
+    /** Solo DXF: origen CAD de la lámina, para alinearla con las otras capas DXF del nivel. */
+    cad_origin?: CadOrigin | null
   },
 ): Promise<ActionResult<PlanLayer>> {
   try {

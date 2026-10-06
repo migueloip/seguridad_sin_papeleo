@@ -2,9 +2,17 @@
 
 import { sql } from "@/lib/db"
 import { revalidatePath } from "next/cache"
-import crypto from "crypto"
 import { getCurrentUserId } from "@/lib/auth"
-import { defaultModelFor } from "@/lib/ai"
+import {
+  decryptSettingIfNeeded as decryptIfNeeded,
+  encryptSettingIfNeeded as encryptIfNeeded,
+  readSetting,
+  SENSITIVE_SETTING_KEYS,
+} from "@/lib/settings"
+
+// IMPORTANTE: cada export de este archivo es un endpoint público (server action).
+// Nada de aquí puede devolver claves sensibles descifradas (API key de IA, clave SMTP):
+// para usarlas en el servidor, importar readSetting/getAiSettings de "@/lib/settings".
 
 export interface Setting {
   id: number
@@ -13,31 +21,11 @@ export interface Setting {
   description: string | null
 }
 
-const SENSITIVE_KEYS = new Set(["ai_api_key", "smtp_pass"])
-function getKey(): Buffer {
-  const secret = process.env.CONFIG_ENCRYPTION_SECRET || ""
-  return crypto.createHash("sha256").update(secret).digest()
-}
-function encryptIfNeeded(key: string, value: string): string {
-  if (!SENSITIVE_KEYS.has(key)) return value
-  const iv = crypto.randomBytes(12)
-  const cipher = crypto.createCipheriv("aes-256-gcm", getKey(), iv)
-  const enc = Buffer.concat([cipher.update(value, "utf8"), cipher.final()])
-  const tag = cipher.getAuthTag()
-  return `enc:gcm:${iv.toString("base64")}:${tag.toString("base64")}:${enc.toString("base64")}`
-}
-function decryptIfNeeded(key: string, value: string | null): string | null {
-  if (!value) return null
-  if (!SENSITIVE_KEYS.has(key)) return value
-  if (!value.startsWith("enc:gcm:")) return value
-  const [, , ivB64, tagB64, dataB64] = value.split(":")
-  const iv = Buffer.from(ivB64, "base64")
-  const tag = Buffer.from(tagB64, "base64")
-  const data = Buffer.from(dataB64, "base64")
-  const decipher = crypto.createDecipheriv("aes-256-gcm", getKey(), iv)
-  decipher.setAuthTag(tag)
-  const dec = Buffer.concat([decipher.update(data), decipher.final()])
-  return dec.toString("utf8")
+/** Valor que ve el navegador en lugar de una clave sensible guardada. */
+const MASKED = "__MASKED__"
+
+function maskIfSensitive(key: string, value: string | null): string | null {
+  return SENSITIVE_SETTING_KEYS.has(key) && value ? MASKED : value
 }
 
 export async function getSettings(): Promise<Setting[]> {
@@ -57,7 +45,7 @@ export async function getSettings(): Promise<Setting[]> {
       byKey.set(s.key, {
         id: s.id,
         key: s.key,
-        value: s.key === "ai_api_key" && v ? "__MASKED__" : v,
+        value: maskIfSensitive(s.key, v),
         description: s.description ?? null,
       })
     }
@@ -68,14 +56,14 @@ export async function getSettings(): Promise<Setting[]> {
         byKey.set(o.key, {
           id: ex.id,
           key: ex.key,
-          value: o.key === "ai_api_key" && v ? "__MASKED__" : v,
+          value: maskIfSensitive(o.key, v),
           description: ex.description,
         })
       } else {
         byKey.set(o.key, {
           id: o.id,
           key: o.key,
-          value: o.key === "ai_api_key" && v ? "__MASKED__" : v,
+          value: maskIfSensitive(o.key, v),
           description: o.description ?? null,
         })
       }
@@ -86,57 +74,17 @@ export async function getSettings(): Promise<Setting[]> {
   }
 }
 
-export async function getSetting(key: string): Promise<string | null> {
-  try {
-    const userId = await getCurrentUserId()
-    if (userId) {
-      const u = await Promise.resolve(sql<{ value: string | null }[]>`
-        SELECT value FROM settings WHERE user_id = ${userId} AND key = ${key} LIMIT 1
-      `)
-      if (u[0]) {
-        return decryptIfNeeded(key, u[0].value ?? null)
-      }
-    }
-    const d = await Promise.resolve(sql<{ value: string | null }[]>`
-      SELECT value FROM settings WHERE user_id IS NULL AND key = ${key} LIMIT 1
-    `)
-    const raw = d[0]?.value ?? null
-    return decryptIfNeeded(key, raw)
-  } catch {
-    return null
-  }
-}
-
-export type AiSettings = {
-  provider: string
-  model: string
-  apiKey: string
-  baseUrl: string | null
-  /** true si hay lo mínimo para llamar al proveedor (custom permite key vacía). */
-  ready: boolean
-}
-
 /**
- * Configuración de IA unificada (proveedor, modelo, key, URL base) con
- * defaults por proveedor. Único punto de verdad para todos los flujos de IA.
+ * Valor de una clave de configuración para el usuario de la sesión. Es una
+ * acción pública (la usa el sidebar): las claves sensibles no se devuelven.
  */
-export async function getAiSettings(): Promise<AiSettings> {
-  const [provider0, model0, key0, baseUrl0] = await Promise.all([
-    getSetting("ai_provider"),
-    getSetting("ai_model"),
-    getSetting("ai_api_key"),
-    getSetting("ai_base_url"),
-  ])
-  const provider = provider0 || "google"
-  const apiKey =
-    key0 || (provider === "google" ? process.env.AI_API_KEY || process.env.GOOGLE_API_KEY || "" : "")
-  const baseUrl = baseUrl0?.trim() || null
-  const model = model0?.trim() || defaultModelFor(provider)
-  const ready = provider === "custom" ? Boolean(baseUrl) : Boolean(apiKey)
-  return { provider, model, apiKey, baseUrl, ready }
+export async function getSetting(key: string): Promise<string | null> {
+  if (typeof key !== "string" || SENSITIVE_SETTING_KEYS.has(key)) return null
+  return readSetting(key)
 }
 
 export async function updateSetting(key: string, value: string): Promise<void> {
+  if (SENSITIVE_SETTING_KEYS.has(key) && value === MASKED) return
   const toStore = encryptIfNeeded(key, value)
   const userId = await getCurrentUserId()
   if (!userId) return
@@ -152,7 +100,7 @@ export async function updateSettings(settings: { key: string; value: string }[])
   const userId = await getCurrentUserId()
   if (!userId) return
   for (const setting of settings) {
-    if (setting.key === "ai_api_key" && setting.value === "__MASKED__") continue
+    if (SENSITIVE_SETTING_KEYS.has(setting.key) && setting.value === MASKED) continue
     const toStore = encryptIfNeeded(setting.key, setting.value)
     await sql`
       INSERT INTO settings (user_id, key, value, created_at, updated_at)

@@ -32,6 +32,7 @@ import {
 } from "../correlation"
 import { sanitizeFrame } from "../geometry"
 import { can } from "../permissions"
+import { isContextRule } from "../rules"
 import { parseSuggestionPayload, SuggestionPayloadError } from "../suggestions"
 import {
   DISCIPLINES,
@@ -57,6 +58,7 @@ import {
   type SuggestionPayload,
 } from "../types"
 import { ObraAiError, writeTaskSuggestionsWithAi, type AiTaskItem } from "./ai"
+import { assertAiQuota } from "./audit"
 import {
   asSql,
   cleanLine,
@@ -80,7 +82,14 @@ import {
   type SuggestionRow,
   type TaskRow,
 } from "./mappers"
-import { decodeImageDataUrl, deleteObraObject, storeFindingPhoto, type DecodedImage } from "./storage"
+import {
+  decodeImageDataUrl,
+  deleteObraObject,
+  OBRA_STORAGE_PREFIX,
+  readObraStorageRef,
+  storeFindingPhoto,
+  type DecodedImage,
+} from "./storage"
 import { mineCondition } from "./tasks"
 
 export const PIN_LIMITS = {
@@ -128,7 +137,15 @@ export type FindingContext = {
   correlations: Correlation[]
   suggestions: AiSuggestion[]
   tasks: ObraTask[]
+  /**
+   * Posiciones (en findings.photos) de las fotos que se pueden mostrar: las que guarda Obra
+   * ("obra-storage:" o data URL de imagen). Se sirven en /api/obra/findings/[id]/photo?index=i.
+   */
+  photo_indexes: number[]
 }
+
+/** Máximo de fotos de un hallazgo que se ofrecen en el panel. */
+const MAX_FINDING_PHOTOS = 10
 
 // ---------------------------------------------------------------------------
 // Utilidades
@@ -405,22 +422,77 @@ function severityDraft(pin: FindingPin, best: Correlation, notes: string[]): Sug
   }
 }
 
+/** Clave de una correlación (elemento + regla), para no repetir tareas ya anotadas o en revisión. */
+function correlationKey(c: { element_id: unknown; rule_id: unknown }): string {
+  return `${Number(c.element_id)}|${String(c.rule_id)}`
+}
+
+/**
+ * Claves de las correlaciones del hallazgo que ya tienen (a) una tarea
+ * aprobada que sigue abierta o (b) una sugerencia de IA pendiente.
+ */
+async function existingCorrelationKeys(
+  projectId: number,
+  findingId: number,
+): Promise<{ tasked: Set<string>; pendingAi: Set<string> }> {
+  const rows = await sql<{ element_id: string | null; rule_id: string | null; bucket: string }[]>`
+    SELECT c->>'element_id' AS element_id, c->>'rule_id' AS rule_id,
+           CASE WHEN s.status = 'approved' THEN 'tasked' ELSE 'pending_ai' END AS bucket
+    FROM obra_ai_suggestions s
+    CROSS JOIN LATERAL jsonb_array_elements(
+      CASE WHEN jsonb_typeof(s.evidence->'correlations') = 'array' THEN s.evidence->'correlations' ELSE '[]'::jsonb END
+    ) AS c
+    WHERE s.project_id = ${projectId} AND s.finding_id = ${findingId} AND s.kind = 'create_task'
+      AND (
+        (s.status = 'approved' AND EXISTS (
+          SELECT 1 FROM obra_tasks t WHERE t.suggestion_id = s.id AND t.status IN ('pendiente', 'en_progreso')
+        ))
+        OR (s.status = 'pending' AND s.generator = 'ia')
+      )
+  `
+  const tasked = new Set<string>()
+  const pendingAi = new Set<string>()
+  for (const r of rows) {
+    if (r.element_id == null || r.rule_id == null) continue
+    ;(r.bucket === "tasked" ? tasked : pendingAi).add(correlationKey(r))
+  }
+  return { tasked, pendingAi }
+}
+
 /**
  * Análisis interno (NO verifica permisos: el llamador ya autorizó). Reemplaza
  * las sugerencias pendientes del hallazgo y crea hasta 3 `create_task` (más
  * `update_finding_severity` si la mejor correlación es crítica y el hallazgo
  * no lo es). La llamada a la IA ocurre fuera de la transacción.
+ *
+ * - Las correlaciones de contexto (regla genérica) quedan como evidencia en
+ *   el panel, pero no se convierten en tareas.
+ * - No se repiten correlaciones que ya tienen una tarea aprobada abierta.
+ * - Un análisis que termina con reglas (sin IA, o porque la IA falló) no
+ *   reemplaza las sugerencias pendientes redactadas por IA.
  */
 async function runAnalysis(access: ProjectAccess, findingId: number, useAi: boolean): Promise<FindingAnalysis> {
   const pin = await getPin(sql, access.project_id, findingId)
   if (!pin) throw new ObraAccessError(404, NOT_FOUND)
   const correlations = await computeCorrelations(sql, access.project_id, pin)
+  const existing = await existingCorrelationKeys(access.project_id, findingId)
 
   const notes: string[] = []
+  const specific = correlations.filter((c) => !isContextRule(c.rule_id))
+  const candidates = specific.filter((c) => !existing.tasked.has(correlationKey(c)))
+  const alreadyTasked = specific.length - candidates.length
+  if (alreadyTasked > 0) {
+    notes.push(
+      alreadyTasked === 1
+        ? "Una correlación ya tiene una tarea abierta y no se volvió a sugerir."
+        : `${alreadyTasked} correlaciones ya tienen una tarea abierta y no se volvieron a sugerir.`,
+    )
+  }
+
   let generator: SuggestionGenerator = "reglas"
   let model: string | null = null
   let aiItems: AiTaskItem[] | null = null
-  if (useAi && correlations.length > 0) {
+  if (useAi && candidates.length > 0) {
     const settings = await getAiSettingsForUser(access.owner_user_id)
     if (!settings.ready) {
       notes.push("La IA no está configurada para esta obra: las sugerencias se generaron con el motor de reglas.")
@@ -432,7 +504,7 @@ async function runAnalysis(access: ProjectAccess, findingId: number, useAi: bool
         const r = await writeTaskSuggestionsWithAi(
           settings,
           { title: pin.title, description: descRows[0]?.description ?? null, category: pin.category, severity: pin.severity },
-          correlations,
+          candidates,
         )
         if (r.items.length > 0) {
           aiItems = r.items
@@ -447,17 +519,20 @@ async function runAnalysis(access: ProjectAccess, findingId: number, useAi: bool
       }
     }
   }
+  // Sin una respuesta nueva de la IA, sus sugerencias pendientes se conservan (y no se duplican).
+  const keepAi = generator !== "ia"
 
   const drafts: SuggestionDraft[] = []
   if (aiItems) {
     for (const item of aiItems.slice(0, PIN_LIMITS.maxTaskSuggestions)) {
-      drafts.push(taskDraftFromAi(pin, correlations[item.correlation_index], item, notes))
+      drafts.push(taskDraftFromAi(pin, candidates[item.correlation_index], item, notes))
     }
   } else {
-    for (const c of correlations.slice(0, PIN_LIMITS.maxTaskSuggestions)) drafts.push(taskDraftFromRules(pin, c, notes))
+    const fresh = keepAi ? candidates.filter((c) => !existing.pendingAi.has(correlationKey(c))) : candidates
+    for (const c of fresh.slice(0, PIN_LIMITS.maxTaskSuggestions)) drafts.push(taskDraftFromRules(pin, c, notes))
   }
-  const best = correlations[0]
-  if (best && best.priority === "critica" && pin.severity !== "critical") drafts.push(severityDraft(pin, best, notes))
+  const best = specific[0]
+  const wantsSeverity = Boolean(best && best.priority === "critica" && pin.severity !== "critical")
 
   const result = (await sql.begin(async (tx) => {
     const s = asSql(tx)
@@ -467,14 +542,26 @@ async function runAnalysis(access: ProjectAccess, findingId: number, useAi: bool
       FOR UPDATE
     `
     if (!locked[0]) throw new ObraAccessError(404, NOT_FOUND)
+    // Severidad y estado frescos: no proponer "subir a crítica" a un hallazgo que ya lo es o que se cerró.
+    const fresh = await s<{ severity: string | null; status: string | null }[]>`
+      SELECT severity, status FROM findings WHERE id = ${findingId} AND project_id = ${access.project_id}
+    `
+    const freshSeverity = String(fresh[0]?.severity ?? "").trim().toLowerCase()
+    const freshStatus = String(fresh[0]?.status ?? "").trim().toLowerCase()
+    const allDrafts = [...drafts]
+    if (wantsSeverity && best && freshSeverity !== "critical" && freshStatus !== "resolved" && freshStatus !== "closed") {
+      const from = (SEVERITIES as readonly string[]).includes(freshSeverity) ? (freshSeverity as Severity) : pin.severity
+      allDrafts.push(severityDraft({ ...pin, severity: from }, best, notes))
+    }
     const superseded = await s<{ id: number }[]>`
       UPDATE obra_ai_suggestions SET status = 'superseded', updated_at = CURRENT_TIMESTAMP
       WHERE project_id = ${access.project_id} AND finding_id = ${findingId} AND status = 'pending'
         AND kind IN ('create_task', 'update_finding_severity')
+        ${keepAi ? s`AND NOT (kind = 'create_task' AND generator = 'ia')` : s``}
       RETURNING id
     `
     const ids: number[] = []
-    for (const d of drafts) {
+    for (const d of allDrafts) {
       const draftGenerator: SuggestionGenerator = d.kind === "create_task" ? generator : "reglas"
       const ins = await s<{ id: number }[]>`
         INSERT INTO obra_ai_suggestions (
@@ -505,6 +592,8 @@ async function runAnalysis(access: ProjectAccess, findingId: number, useAi: bool
           correlations: correlations.length,
           suggestion_ids: ids,
           superseded: superseded.length,
+          superseded_ids: superseded.map((r) => Number(r.id)),
+          ...(alreadyTasked > 0 ? { already_tasked: alreadyTasked } : {}),
           ...(notes.length > 0 ? { notes } : {}),
         },
       },
@@ -709,9 +798,12 @@ export async function listUnpinnedFindings(userId: number, projectId: number): P
 }
 
 /**
- * Analiza un hallazgo ubicado. Con use_ai exige ai.request; sin IA basta con
- * poder ver el hallazgo (findings.view o haberlo reportado). Si la IA falla o
- * no está configurada, cae a las reglas y lo indica en evidence.notes.
+ * Vuelve a analizar un hallazgo ubicado (ai.request, con o sin IA, y poder
+ * verlo). Re-analizar escribe: reemplaza sugerencias pendientes, así que un
+ * rol de solo lectura (visita) o el trabajador que reportó no pueden hacerlo;
+ * el análisis por reglas al reportar o ubicar se ejecuta solo, sin pasar por
+ * aquí. Si la IA falla o no está configurada, cae a las reglas y lo indica en
+ * evidence.notes. Con IA aplica el límite de uso de la obra (assertAiQuota).
  */
 export async function analyzeFinding(
   userId: number,
@@ -723,9 +815,15 @@ export async function analyzeFinding(
   if (o.use_ai !== undefined && typeof o.use_ai !== "boolean") throw new ObraValidationError("Opción de IA no válida.")
   const useAi = o.use_ai === true
   if (!canSeeFinding(access, reportedBy)) throw new ObraAccessError(404, NOT_FOUND)
-  if (useAi && !can(access.role, "ai.request")) {
-    throw new ObraAccessError(403, "Tu rol en esta obra no permite pedir análisis con IA.")
+  if (!can(access.role, "ai.request")) {
+    throw new ObraAccessError(
+      403,
+      useAi
+        ? "Tu rol en esta obra no permite pedir análisis con IA."
+        : "Tu rol en esta obra no permite volver a analizar hallazgos.",
+    )
   }
+  if (useAi) await assertAiQuota(access, "finding_analysis")
   const result = await runAnalysis(access, id, useAi)
   return { ...result, project_id: access.project_id }
 }
@@ -737,7 +835,7 @@ export async function getFindingContext(userId: number, findingId: number): Prom
   const pin = await getPin(sql, access.project_id, id)
   if (!pin) throw new ObraAccessError(404, NOT_FOUND)
   const onlyOwnTasks = !can(access.role, "tasks.view_all")
-  const [correlations, suggestionRows, taskRows] = await Promise.all([
+  const [correlations, suggestionRows, taskRows, photoRows] = await Promise.all([
     computeCorrelations(sql, access.project_id, pin),
     sql<SuggestionRow[]>`
       ${suggestionSelect(sql)}
@@ -752,11 +850,55 @@ export async function getFindingContext(userId: number, findingId: number): Prom
       ${taskOrderBy(sql)}
       LIMIT ${PIN_LIMITS.contextTasks}
     `,
+    sql<{ idx: number }[]>`
+      SELECT (e.ord - 1)::int AS idx
+      FROM findings f
+      CROSS JOIN LATERAL jsonb_array_elements_text(
+        CASE WHEN jsonb_typeof(f.photos::jsonb) = 'array' THEN f.photos::jsonb ELSE '[]'::jsonb END
+      ) WITH ORDINALITY AS e(v, ord)
+      WHERE f.id = ${id} AND f.project_id = ${access.project_id}
+        AND e.ord <= ${MAX_FINDING_PHOTOS}
+        AND (e.v LIKE ${`${OBRA_STORAGE_PREFIX}%`} OR e.v LIKE 'data:image/%')
+      ORDER BY e.ord
+    `,
   ])
   return {
     pin,
     correlations,
     suggestions: suggestionRows.map(mapSuggestion),
     tasks: taskRows.map(mapTask),
+    photo_indexes: photoRows.map((r) => Number(r.idx)),
+  }
+}
+
+/**
+ * Foto de un hallazgo ubicado, con el mismo control de acceso que su contexto
+ * (findings.view, o el trabajador que lo reportó). Acepta las referencias que
+ * guarda reportFindingOnPlan ("obra-storage:<ruta>" o data URL de imagen);
+ * cualquier otra cosa responde 404.
+ */
+export async function readFindingPhoto(
+  userId: number,
+  findingId: number,
+  index: number,
+): Promise<{ bytes: Buffer; mime: string }> {
+  const { access, findingId: id, reportedBy } = await resolvePinAccess(userId, findingId)
+  if (!canSeeFinding(access, reportedBy)) throw new ObraAccessError(404, NOT_FOUND)
+  if (!Number.isInteger(index) || index < 0 || index >= MAX_FINDING_PHOTOS) {
+    throw new ObraAccessError(404, "Foto no encontrada.")
+  }
+  const rows = await sql<{ photos: unknown }[]>`
+    SELECT photos FROM findings WHERE id = ${id} AND project_id = ${access.project_id} LIMIT 1
+  `
+  const list = parseJson(rows[0]?.photos)
+  const ref: unknown = Array.isArray(list) ? list[index] : null
+  if (typeof ref !== "string" || !(ref.startsWith(OBRA_STORAGE_PREFIX) || ref.startsWith("data:"))) {
+    throw new ObraAccessError(404, "Foto no encontrada.")
+  }
+  try {
+    return await readObraStorageRef(ref)
+  } catch (e) {
+    if (e instanceof ObraValidationError) throw new ObraAccessError(404, "Foto no encontrada.")
+    throw e
   }
 }

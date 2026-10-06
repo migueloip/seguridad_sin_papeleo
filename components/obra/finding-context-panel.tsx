@@ -44,6 +44,8 @@ export type FindingContextData = {
   correlations: Correlation[]
   suggestions: AiSuggestion[]
   tasks: ObraTask[]
+  /** Posiciones de las fotos del hallazgo (se sirven con control de acceso en /api/obra/findings/[id]/photo). */
+  photo_indexes?: number[]
 }
 
 export type FindingContextState = {
@@ -199,7 +201,11 @@ export function FindingContextPanel({
     const n = res.data.suggestions.length
     const note = res.data.suggestions.flatMap((s) => (Array.isArray(s.evidence?.notes) ? s.evidence.notes : []))[0]
     if (n === 0) {
-      toast.info("El análisis no encontró elementos relacionados: no se crearon sugerencias.")
+      toast.info(
+        res.data.correlations.length > 0
+          ? "No hay sugerencias nuevas: lo relacionado ya tiene tareas abiertas o solo es contexto (se muestra en este panel)."
+          : "El análisis no encontró elementos relacionados: no se crearon sugerencias.",
+      )
     } else {
       toast.success(
         `Listo: ${n} sugerencia${n === 1 ? "" : "s"} nueva${n === 1 ? "" : "s"}, pendiente${n === 1 ? "" : "s"} de aprobación.`,
@@ -256,6 +262,27 @@ export function FindingContextPanel({
         {pin.description ? (
           <p className="mt-2 whitespace-pre-line break-words text-[13px] text-muted-foreground">{pin.description}</p>
         ) : null}
+        {data.photo_indexes && data.photo_indexes.length > 0 ? (
+          <ul className="mt-2.5 flex flex-wrap gap-2" aria-label="Fotos del hallazgo">
+            {data.photo_indexes.map((photoIndex, i) => {
+              const src = `/api/obra/findings/${pin.finding_id}/photo?index=${photoIndex}`
+              return (
+                <li key={photoIndex}>
+                  <a
+                    href={src}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="block overflow-hidden rounded-[10px] border border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    aria-label={`Abrir la foto ${i + 1} del hallazgo en otra pestaña`}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element -- imagen privada servida con sesión */}
+                    <img src={src} alt={`Foto ${i + 1} del hallazgo`} className="h-24 w-32 object-cover" loading="lazy" />
+                  </a>
+                </li>
+              )
+            })}
+          </ul>
+        ) : null}
         <p className="mt-2 text-[12px] text-muted-foreground">
           Reportado <TimeAgo iso={pin.created_at} />
           {layer ? ` · ${levelLabel(layers, pin.level)} · capa «${layer.name}»` : ` · ${levelLabel(layers, pin.level)}`}
@@ -278,15 +305,20 @@ export function FindingContextPanel({
           <ul className="space-y-2">
             {correlations.map((c) => {
               const color = DISCIPLINE_COLORS[c.discipline] ?? DISCIPLINE_COLORS.otro
+              const heading = describeCorrelation(c)
+              // La hipótesis de las reglas parte con la misma frase del encabezado: no repetirla.
+              const hypothesis = c.hypothesis?.startsWith(heading)
+                ? c.hypothesis.slice(heading.length).trim()
+                : c.hypothesis
               return (
                 <li
                   key={`${c.element_id}-${c.rule_id}`}
                   className="rounded-[12px] border border-border border-l-4 bg-card px-3 py-2.5"
                   style={{ borderLeftColor: color }}
                 >
-                  <p className="break-words text-[13px] font-medium">{describeCorrelation(c)}</p>
-                  {c.hypothesis ? (
-                    <p className="mt-1 break-words text-[12.5px] text-muted-foreground">{c.hypothesis}</p>
+                  <p className="break-words text-[13px] font-medium">{heading}</p>
+                  {hypothesis ? (
+                    <p className="mt-1 break-words text-[12.5px] text-muted-foreground">{hypothesis}</p>
                   ) : null}
                   <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px]">
                     <span className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 font-semibold">

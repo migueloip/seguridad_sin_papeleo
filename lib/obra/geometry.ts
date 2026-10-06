@@ -135,6 +135,16 @@ export function pointInPolygon(p: Vec2, poly: Vec2[]): boolean {
   return inside
 }
 
+/** Área (valor absoluto, fórmula del área de Gauss) de un polígono; 0 si tiene menos de 3 puntos. */
+export function polygonArea(poly: Vec2[]): number {
+  if (!Array.isArray(poly) || poly.length < 3) return 0
+  let twice = 0
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    twice += (poly[j].x + poly[i].x) * (poly[j].y - poly[i].y)
+  }
+  return Math.abs(twice) / 2
+}
+
 /** Geometría ya convertida a metros del nivel. */
 export type MetricGeometry = { type: ElementGeometry["type"]; points: Vec2[] }
 

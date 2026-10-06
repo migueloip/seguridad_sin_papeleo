@@ -6,7 +6,7 @@ import { getCurrentUserId } from "@/lib/auth"
 import { revalidatePath } from "next/cache"
 import { generateText } from "ai"
 import type { LanguageModel } from "ai"
-import { getAiSettings } from "./settings"
+import { getAiSettings } from "@/lib/settings"
 import { getModel } from "@/lib/ai"
 
 export type ChecklistItemInput = {

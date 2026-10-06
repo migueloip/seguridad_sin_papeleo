@@ -2,7 +2,7 @@
  * Utilidades de archivos de planos para el navegador (módulo Obra Integral).
  *
  * - Imagen (PNG/JPG/WebP...) o página de PDF → data URL acotado en lado y en
- *   peso, listo para enviarse a un server action (límite de cuerpo: 8 MB).
+ *   peso, listo para enviarse a un server action (Netlify: 6 MB por request).
  * - DXF → texto (UTF-8 o, si no es válido, Windows-1252, típico de AutoCAD).
  * - Detección del tipo de archivo por extensión y tipo MIME.
  *
@@ -17,8 +17,12 @@
 
 /** Lado mayor máximo (px) de la imagen de una capa. */
 export const PLAN_IMAGE_MAX_SIDE = 3000
-/** Largo máximo del data URL resultante (≈ bytes enviados al servidor). */
-export const PLAN_IMAGE_MAX_BYTES = 6_500_000
+/**
+ * Largo máximo del data URL resultante (≈ bytes enviados al servidor). Las
+ * funciones de Netlify (donde corren las server actions) aceptan como máximo
+ * 6 MB por request; con 4,5 MB queda margen para el resto del cuerpo.
+ */
+export const PLAN_IMAGE_MAX_BYTES = 4_500_000
 /** Al recomprimir para cumplir el peso, no se reduce por debajo de este lado (px). */
 export const PLAN_IMAGE_MIN_SIDE = 480
 /** Ancho objetivo (px) al rasterizar una página de PDF. */
@@ -33,8 +37,6 @@ export const JPEG_QUALITIES: readonly number[] = [0.85, 0.7]
 export const PLAN_FILE_MAX_BYTES = 60 * 1024 * 1024
 /** Tamaño máximo de un archivo de texto (DXF ASCII). */
 export const TEXT_FILE_MAX_BYTES = 30 * 1024 * 1024
-/** Worker de pdf.js (mismo origen que components/upload-content.tsx). */
-export const PDFJS_WORKER_SRC = "https://unpkg.com/pdfjs-dist@4/build/pdf.worker.min.mjs"
 /** Valor para el atributo accept de un <input type="file"> de planos. */
 export const PLAN_FILE_ACCEPT = ".png,.jpg,.jpeg,.webp,.gif,.bmp,.pdf,.dxf,image/png,image/jpeg,image/webp,application/pdf"
 
@@ -272,7 +274,7 @@ function encodeWithinBytes(
 /**
  * Lee una imagen y la devuelve como data URL apto para una capa de plano.
  * - Si el lado mayor supera maxSide (3000 px), la reescala con canvas.
- * - Si el resultado (data URL completo) supera maxBytes (6.500.000), la
+ * - Si el resultado (data URL completo) supera maxBytes (4.500.000), la
  *   recodifica como JPEG 0,85 y luego 0,7 y, si aún no cabe, la reduce.
  * - PNG, JPEG y WebP que ya cumplen se envían sin recomprimir. Otros formatos
  *   (GIF, BMP, SVG...) se rasterizan a PNG.
@@ -322,12 +324,22 @@ type PdfDocument = import("pdfjs-dist").PDFDocumentProxy
 
 let pdfjsPromise: Promise<PdfJs> | null = null
 
+/**
+ * URL del worker de pdf.js servido desde el propio bundle de la app (mismo
+ * origen y exactamente la versión instalada del paquete). Antes se bajaba de
+ * un CDN de terceros con versión flotante ("@4") y sin verificación de
+ * integridad, y ese código corre con el origen de la app.
+ */
+function pdfWorkerSrc(): string {
+  return new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString()
+}
+
 function loadPdfJs(): Promise<PdfJs> {
   if (!pdfjsPromise) {
     pdfjsPromise = (import("pdfjs-dist") as Promise<PdfJs>)
       .then((pdfjs) => {
         try {
-          pdfjs.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_SRC
+          pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerSrc()
         } catch {
           // ya configurado
         }

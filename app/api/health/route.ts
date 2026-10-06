@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 import { sql } from "@/lib/db"
-import { getSetting } from "@/app/actions/settings"
+import { readSetting } from "@/lib/settings"
 
 export async function GET() {
   const result: { db: "ok" | "error"; aiConfigured: boolean; admonitionsExists?: boolean } = {
@@ -25,7 +25,7 @@ export async function GET() {
     result.admonitionsExists = Boolean(rows[0]?.exists)
   } catch {}
   try {
-    const key = await getSetting("ai_api_key")
+    const key = await readSetting("ai_api_key")
     result.aiConfigured = !!key && key !== ""
   } catch {}
   return NextResponse.json(result)

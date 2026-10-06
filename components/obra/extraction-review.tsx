@@ -44,6 +44,8 @@ export type ApproveSuggestionResult = {
   suggestion: AiSuggestion
   applied_entity_type: string | null
   applied_entity_id: number | null
+  /** Revisión donde quedó anotada la tarea (solo tareas). */
+  inspection?: { id: number; title: string; scheduled_for: string } | null
 }
 
 const PREVIEW_WIDTH = 1000

@@ -1,6 +1,6 @@
 import { streamText, convertToModelMessages, type LanguageModel, type UIMessage } from "ai"
 import { getModel } from "@/lib/ai"
-import { getAiSettings } from "@/app/actions/settings"
+import { getAiSettings } from "@/lib/settings"
 import { sql } from "@/lib/db"
 import { getSession } from "@/lib/auth"
 

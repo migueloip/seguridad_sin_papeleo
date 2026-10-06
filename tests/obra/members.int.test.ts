@@ -160,6 +160,35 @@ describe.skipIf(!HAS_TEST_DB)("equipo de obra (BD real)", () => {
     expectError(await listObraLinkableWorkers(db.projectId), DENIED)
   })
 
+  it("un jefe de obra que no es dueño solo ve el personal de esta obra, con el RUT abreviado", async () => {
+    const { addObraMember, listObraLinkableWorkers } = await import("@/app/actions/obra/members")
+    const otraObra = await db.sql<{ id: number }[]>`
+      INSERT INTO projects (name, user_id, status) VALUES ('Otra obra del dueño', ${db.users.gerente}, 'active') RETURNING id`
+    const deOtraObra = await db.sql<{ id: number }[]>`
+      INSERT INTO workers (rut, first_name, last_name, user_id, project_id)
+      VALUES ('33.333.333-3', 'Pedro', 'Otraobra', ${db.users.gerente}, ${otraObra[0].id}) RETURNING id`
+    const sinObra = await db.sql<{ id: number }[]>`
+      INSERT INTO workers (rut, first_name, last_name, user_id, project_id)
+      VALUES ('12.345.678-K', 'Rosa', 'Libre', ${db.users.gerente}, NULL) RETURNING id`
+
+    actAs(db.users.jefe_obra)
+    const list = unwrap(await listObraLinkableWorkers(db.projectId))
+    const ids = list.map((w) => w.id)
+    expect(ids).not.toContain(Number(deOtraObra[0].id))
+    expect(ids).toContain(Number(sinObra[0].id))
+    expect(list.find((w) => w.id === Number(sinObra[0].id))?.rut).toBe("•••678-K")
+    expect(JSON.stringify(list)).not.toContain("11.111.111-1")
+    expectError(
+      await addObraMember(db.projectId, { email: "vinculo3@test.cl", role: "trabajador", worker_id: Number(deOtraObra[0].id) }),
+      /no pertenece a esta obra/,
+    )
+
+    // El dueño sí ve todo su personal con el RUT completo.
+    actAs(db.users.gerente)
+    const full = unwrap(await listObraLinkableWorkers(db.projectId))
+    expect(full.find((w) => w.id === Number(deOtraObra[0].id))?.rut).toBe("33.333.333-3")
+  })
+
   it("cambia roles con las reglas: no al dueño, no a sí mismo, gerentes solo por gerentes", async () => {
     const { updateObraMemberRole } = await import("@/app/actions/obra/members")
     const target = await mkUser("cambio_rol")

@@ -110,6 +110,32 @@ describe("GET /api/findings/photo", () => {
     expect(Array.from(new Uint8Array(await res.arrayBuffer()))).toEqual([1, 2, 3])
   })
 
+  it("sirve fotos de Obra integral (obra-storage:) leyendo el bucket privado con la service key", async () => {
+    const png = Buffer.alloc(8 + 25 + 12)
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(png, 0)
+    png.writeUInt32BE(13, 8)
+    png.write("IHDR", 12, "ascii")
+    png.writeUInt32BE(4, 16)
+    png.writeUInt32BE(3, 20)
+    const prevKey = process.env.SUPABASE_SERVICE_KEY
+    process.env.SUPABASE_SERVICE_KEY = "service-key"
+    try {
+      state.photos = ["obra-storage:obra/7/hallazgos/abc123.png"]
+      fetchMock.mockResolvedValue(new Response(new Uint8Array(png), { status: 200, headers: { "content-type": "image/png" } }))
+      const res = await GET(req())
+      expect(res.status).toBe(200)
+      const [calledUrl, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(calledUrl).toBe(`${SUPABASE}/storage/v1/object/authenticated/obra-planos/obra/7/hallazgos/abc123.png`)
+      expect((init.headers as Record<string, string>).Authorization).toBe("Bearer service-key")
+      expect(init.redirect).toBe("error")
+      expect(res.headers.get("content-type")).toBe("image/png")
+      expect(res.headers.get("x-content-type-options")).toBe("nosniff")
+    } finally {
+      if (prevKey === undefined) delete process.env.SUPABASE_SERVICE_KEY
+      else process.env.SUPABASE_SERVICE_KEY = prevKey
+    }
+  })
+
   it("si Storage redirige (fetch falla) responde 500 sin filtrar detalles", async () => {
     state.photos = [`${SUPABASE}/storage/v1/object/public/findings/1.png`]
     fetchMock.mockRejectedValue(new TypeError("fetch failed: redirect mode is set to error"))

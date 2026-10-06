@@ -136,3 +136,25 @@ describe("catálogo de reglas de correlación", () => {
     }
   })
 })
+
+describe("reglas agregadas en la revisión", () => {
+  it("las excavaciones participan en reglas (hundimiento, grieta, desprendimiento y la propia excavación)", () => {
+    for (const c of ["hundimiento", "grieta", "desprendimiento", "excavacion"] as const) {
+      expect(rulesFor(c, "excavacion").length, c).toBeGreaterThan(0)
+    }
+  })
+
+  it("isContextRule distingue la regla genérica de las específicas", async () => {
+    const { isContextRule } = await import("./rules")
+    expect(isContextRule("contexto_red_cercana")).toBe(true)
+    expect(isContextRule("grieta_alcantarillado")).toBe(false)
+    expect(isContextRule("no_existe")).toBe(false)
+  })
+
+  it("una grieta junto a un muro sin calificar no se trata como fisura menor", () => {
+    const r = rulesFor("grieta", "muro")[0]
+    expect(r.base_priority).toBe("media")
+    expect(r.max_distance_m).toBeGreaterThanOrEqual(1)
+    expect(r.recommended_actions[0]).toMatch(/estructural/)
+  })
+})

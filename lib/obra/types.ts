@@ -189,6 +189,14 @@ export type LayerFrame = {
   rotation_deg: number
 }
 
+/**
+ * Origen CAD de una capa importada de DXF, en unidades del dibujo: X mínima
+ * (borde izquierdo) e Y máxima (borde superior) de la lámina, y su ancho.
+ * Con él, otra capa DXF del mismo nivel y sistema de coordenadas se alinea
+ * sola (metros por unidad = width_m / width_units).
+ */
+export type CadOrigin = { min_x: number; max_y: number; width_units: number }
+
 export type PlanLayer = {
   id: number
   project_id: number
@@ -196,6 +204,8 @@ export type PlanLayer = {
   discipline: Discipline
   level: number
   level_label: string | null
+  /** Solo capas importadas de DXF (null en imágenes y PDF). */
+  cad_origin?: CadOrigin | null
   /** true si la capa tiene imagen (se sirve en /api/obra/layers/[id]/image). */
   has_image: boolean
   mime_type: string | null

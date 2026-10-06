@@ -23,7 +23,8 @@ vi.mock("@/lib/auth", () => ({
 vi.mock("@/lib/db", () => ({
   sql: (strings: TemplateStringsArray, ...values: unknown[]) => state.sql(strings, ...values),
 }))
-vi.mock("@/app/actions/settings", () => ({ getAiSettings: state.getAiSettings, getSetting: vi.fn() }))
+vi.mock("@/app/actions/settings", () => ({ getSetting: vi.fn() }))
+vi.mock("@/lib/settings", () => ({ getAiSettings: state.getAiSettings, readSetting: vi.fn() }))
 vi.mock("@/app/actions/reports", () => ({ getReportData: state.getReportData }))
 vi.mock("@/lib/ai", () => ({ getModel: state.getModel }))
 

@@ -57,7 +57,7 @@ import { GeneratorBadge, PriorityBadge, SeverityBadge, SuggestionStatusBadge } f
 import { countByType, ExtractionReviewDialog, type ApproveSuggestionResult } from "./extraction-review"
 import { elementColor } from "./plan-canvas"
 import { SuggestionEditDialog } from "./suggestion-edit-dialog"
-import { callAction, formatDateTimeCL } from "./task-card"
+import { callAction, formatDateCL, formatDateTimeCL } from "./task-card"
 
 export const RELATION_LABELS: Record<Correlation["relation"], string> = {
   mismo_nivel: "Mismo nivel",
@@ -82,7 +82,7 @@ export function suggestionPlanHref(s: Pick<AiSuggestion, "finding_id" | "layer_i
 
 /** Mensaje para quien no puede aprobar (o null si sí puede). */
 export function reviewBlockedText(role: ObraRole, s: Pick<AiSuggestion, "severity">): string | null {
-  if (!can(role, "ai.review")) return "Pendiente de aprobación por jefe de obra o prevencionista."
+  if (!can(role, "ai.review")) return "Pendiente de aprobación por gerente, jefe de obra o prevencionista."
   if (s.severity === "critical" && !can(role, "ai.review_critical")) {
     return "Es una sugerencia crítica: debe aprobarla un perfil autorizado para decisiones críticas."
   }
@@ -150,10 +150,17 @@ export function SuggestionCard({
     setS(updated)
     onChanged?.(updated, result)
     if (updated.kind === "create_task") {
-      toast.success("Tarea anotada en la próxima revisión.", {
-        description: updated.title,
-        action: { label: "Ver tareas", onClick: () => router.push(`/obra/${projectId}/tareas`) },
-      })
+      const ins = result.inspection ?? null
+      toast.success(
+        ins ? `Tarea anotada en «${ins.title}» (${formatDateCL(ins.scheduled_for)}).` : "Tarea anotada en la próxima revisión.",
+        {
+          description: updated.title,
+          action: {
+            label: "Ver tareas",
+            onClick: () => router.push(`/obra/${projectId}/tareas${ins ? `?revision=${ins.id}` : ""}`),
+          },
+        },
+      )
     } else if (updated.kind === "plan_elements") {
       const n =
         updated.payload.kind === "plan_elements" && Array.isArray(updated.payload.data.elements)

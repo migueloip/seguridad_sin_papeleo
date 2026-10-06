@@ -1,6 +1,7 @@
 /**
- * Métricas puras del módulo Obra (sin BD): índice de riesgo y utilidades de
- * fecha en formato "YYYY-MM-DD" (sin zona horaria, para columnas DATE).
+ * Métricas puras del módulo Obra (sin BD): índice de riesgo, utilidades de
+ * fecha en formato "YYYY-MM-DD" (días de la hora de Chile, para columnas DATE)
+ * y el criterio de "próxima revisión".
  */
 import type { RiskLevel, Severity } from "./types"
 
@@ -31,8 +32,31 @@ export function projectRiskIndex(input: RiskInput): { score: number; level: Risk
   return { score, level }
 }
 
-/** Fecha local de hoy como "YYYY-MM-DD". */
+/** Zona horaria de la obra: "hoy", vencimientos y revisiones se cuentan en la hora de Chile. */
+export const OBRA_TIME_ZONE = "America/Santiago"
+
+let dayFormatter: Intl.DateTimeFormat | null = null
+
+/**
+ * Día de hoy en la hora de Chile como "YYYY-MM-DD", sea cual sea la zona del
+ * proceso (Netlify corre en UTC: entre las 20:00/21:00 y la medianoche de
+ * Chile el servidor ya estaría en el día siguiente). Servidor y navegador
+ * calculan el mismo día.
+ */
 export function todayISO(now: Date = new Date()): string {
+  try {
+    dayFormatter ??= new Intl.DateTimeFormat("en-CA", {
+      timeZone: OBRA_TIME_ZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    })
+    const parts: Record<string, string> = {}
+    for (const p of dayFormatter.formatToParts(now)) parts[p.type] = p.value
+    if (parts.year && parts.month && parts.day) return `${parts.year}-${parts.month}-${parts.day}`
+  } catch {
+    // Entorno sin datos de zonas horarias: se usa la hora local del proceso.
+  }
   const y = now.getFullYear()
   const m = String(now.getMonth() + 1).padStart(2, "0")
   const d = String(now.getDate()).padStart(2, "0")
@@ -50,6 +74,41 @@ export function addDaysISO(dateISO: string, days: number): string {
 /** ¿La fecha (YYYY-MM-DD) ya pasó respecto de hoy? */
 export function isOverdue(dueISO: string | null | undefined, today: string = todayISO()): boolean {
   return Boolean(dueISO) && String(dueISO).slice(0, 10) < today
+}
+
+/** Datos mínimos de una revisión para elegir la próxima. */
+export type InspectionLike = { id: number; status: string; scheduled_for: string }
+
+/**
+ * Orden de "próxima revisión" (0 = primero): la que está en curso; luego las
+ * programadas desde hoy; luego las programadas atrasadas. Las cerradas no
+ * cuentan (null). Dentro de cada grupo, por fecha y luego por id.
+ */
+export function nextInspectionRank(i: InspectionLike, today: string): number | null {
+  if (i.status === "cerrada") return null
+  if (i.status === "en_curso") return 0
+  return String(i.scheduled_for).slice(0, 10) >= today ? 1 : 2
+}
+
+/**
+ * Próxima revisión abierta. Es el ÚNICO criterio del módulo: lo usan el
+ * resumen, el hub, la página Revisiones y el servidor al anotar una tarea
+ * aprobada ("Anotar en tareas de la próxima revisión"), para que la tarea
+ * quede en la revisión que la pantalla muestra como próxima.
+ */
+export function pickNextInspection<T extends InspectionLike>(list: readonly T[], today: string): T | null {
+  let best: { item: T; rank: number; date: string } | null = null
+  for (const item of list) {
+    const rank = nextInspectionRank(item, today)
+    if (rank == null) continue
+    const date = String(item.scheduled_for).slice(0, 10)
+    const better =
+      !best ||
+      rank < best.rank ||
+      (rank === best.rank && (date < best.date || (date === best.date && item.id < best.item.id)))
+    if (better) best = { item, rank, date }
+  }
+  return best?.item ?? null
 }
 
 export const RISK_LEVEL_LABELS: Record<RiskLevel, string> = {

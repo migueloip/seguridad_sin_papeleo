@@ -216,7 +216,9 @@ describe.skipIf(!HAS_TEST_DB)("sugerencias de IA con aprobación humana (BD real
     const d = elementsData(s)
     // El revisor desmarca la cámara.
     const edited = { layer_id: d.layer_id, elements: d.elements.filter((e) => e.element_type !== "camara_inspeccion") }
-    expectError(await approveObraSuggestion(s.id, { edited_payload: { ...edited, layer_id: ids.otherLayer } }), /no pertenece a esta obra/)
+    // Editar no puede llevar los elementos a otra capa (ni ajena ni de la misma obra).
+    expectError(await approveObraSuggestion(s.id, { edited_payload: { ...edited, layer_id: ids.otherLayer } }), /No se puede cambiar la capa/)
+    expectError(await approveObraSuggestion(s.id, { edited_payload: { ...edited, layer_id: ids.plain } }), /No se puede cambiar la capa/)
     expectError(await approveObraSuggestion(s.id, { edited_payload: { ...edited, elements: [] } }), /al menos un elemento/)
     expect(await elementCount(ids.alc)).toBe(0)
 
@@ -257,7 +259,7 @@ describe.skipIf(!HAS_TEST_DB)("sugerencias de IA con aprobación humana (BD real
     expect(bySuggestion[0].n).toBe(2)
   })
 
-  it("plan_elements sobre una capa eliminada no se aplica (la sugerencia sigue pendiente)", async () => {
+  it("plan_elements sobre una capa eliminada no se aplica: al borrar la capa la sugerencia queda sin efecto", async () => {
     const { requestObraLayerExtraction } = await import("@/app/actions/obra/elements")
     const { deleteObraLayer } = await import("@/app/actions/obra/layers")
     const { approveObraSuggestion, rejectObraSuggestion } = await import("@/app/actions/obra/suggestions")
@@ -267,10 +269,13 @@ describe.skipIf(!HAS_TEST_DB)("sugerencias de IA con aprobación humana (BD real
     actAs(db.users.prevencionista)
     const r = unwrap(await requestObraLayerExtraction(ids.alc2))
     unwrap(await deleteObraLayer(ids.alc2))
-    expectError(await approveObraSuggestion(r.suggestion_id), /fue eliminada/)
     const st = await db.sql<{ status: string }[]>`SELECT status FROM obra_ai_suggestions WHERE id = ${r.suggestion_id}`
-    expect(st[0].status).toBe("pending")
-    expect(unwrap(await rejectObraSuggestion(r.suggestion_id, "La capa se eliminó.")).status).toBe("rejected")
+    expect(st[0].status).toBe("superseded")
+    expectError(await approveObraSuggestion(r.suggestion_id), /quedó sin efecto/)
+    expectError(await rejectObraSuggestion(r.suggestion_id, "La capa se eliminó."), /quedó sin efecto/)
+    const audit = await db.sql<{ details: { superseded_suggestion_ids?: number[] } }[]>`
+      SELECT details FROM obra_audit_log WHERE action = 'layer.deleted' AND entity_id = ${ids.alc2}`
+    expect(audit[0].details.superseded_suggestion_ids).toEqual([r.suggestion_id])
   })
 
   it("update_finding_severity: aplica el cambio; no permite cambiar de hallazgo; las críticas exigen perfil autorizado", async () => {
@@ -297,12 +302,12 @@ describe.skipIf(!HAS_TEST_DB)("sugerencias de IA con aprobación humana (BD real
     expect(audit[0].details).toMatchObject({ previous_severity: "medium", new_severity: "high", edited: true })
 
     // Un payload que apunta a un hallazgo de otra obra nunca se aplica.
-    const foreign = await insertSuggestion("update_finding_severity", "high", {
-      finding_id: ids.otherFinding,
-      from: "low",
-      to: "high",
-      reason: "x",
-    })
+    const foreign = await insertSuggestion(
+      "update_finding_severity",
+      "high",
+      { finding_id: ids.otherFinding, from: "low", to: "high", reason: "x" },
+      { finding_id: ids.otherFinding },
+    )
     expectError(await approveObraSuggestion(foreign), /no pertenece a esta obra/)
     const of = await db.sql<{ severity: string }[]>`SELECT severity FROM findings WHERE id = ${ids.otherFinding}`
     expect(of[0].severity).toBe("low")
@@ -321,13 +326,55 @@ describe.skipIf(!HAS_TEST_DB)("sugerencias de IA con aprobación humana (BD real
       SELECT origin, suggestion_id, title FROM obra_tasks WHERE id = ${r.applied_entity_id}`
     expect(t[0]).toEqual({ origin: "ia", suggestion_id: broken, title: "Revisar vereda hundida" })
 
-    const foreignTask = await insertSuggestion("create_task", "low", {
-      title: "Tarea con referencias ajenas",
-      finding_id: ids.otherFinding,
-    })
+    const foreignTask = await insertSuggestion(
+      "create_task",
+      "low",
+      { title: "Tarea con referencias ajenas", finding_id: ids.otherFinding },
+      { finding_id: ids.otherFinding },
+    )
     expectError(await approveObraSuggestion(foreignTask), /hallazgo indicado no pertenece/)
     const sameId = await insertSuggestion("create_task", "low", { title: "Capa ajena", layer_id: ids.otherLayer })
     expectError(await approveObraSuggestion(sameId), /capa indicada no pertenece/)
+  })
+
+  it("update_finding_severity con datos viejos: si el hallazgo cambió o se resolvió, no se aplica", async () => {
+    const { approveObraSuggestion } = await import("@/app/actions/obra/suggestions")
+    const f = await db.sql<{ id: number }[]>`
+      INSERT INTO findings (project_id, user_id, title, severity, status)
+      VALUES (${db.projectId}, ${db.users.gerente}, 'Grieta en losa', 'medium', 'open') RETURNING id`
+    const fid = Number(f[0].id)
+    const payload = { kind: "update_finding_severity", data: { finding_id: fid, from: "medium", to: "critical", reason: "x" } }
+    const id = await insertSuggestion("update_finding_severity", "critical", payload, { finding_id: fid })
+    actAs(db.users.prevencionista)
+    await db.sql`UPDATE findings SET severity = 'low' WHERE id = ${fid}`
+    expectError(await approveObraSuggestion(id), /cambió desde que se generó/)
+    await db.sql`UPDATE findings SET severity = 'medium', status = 'resolved' WHERE id = ${fid}`
+    expectError(await approveObraSuggestion(id), /resuelto o cerrado/)
+    const row = await db.sql<{ severity: string; status: string }[]>`SELECT severity, status FROM findings WHERE id = ${fid}`
+    expect(row[0]).toEqual({ severity: "medium", status: "resolved" })
+  })
+
+  it("una tarea o un cambio de severidad cuyo hallazgo se borró queda fuera de la bandeja y no se aplica", async () => {
+    const { approveObraSuggestion, listObraSuggestions } = await import("@/app/actions/obra/suggestions")
+    const { getObraDashboard } = await import("@/app/actions/obra/dashboard")
+    const f = await db.sql<{ id: number }[]>`
+      INSERT INTO findings (project_id, user_id, title, severity, status)
+      VALUES (${db.projectId}, ${db.users.gerente}, 'Hallazgo que se borrará', 'high', 'open') RETURNING id`
+    const fid = Number(f[0].id)
+    const id = await insertSuggestion(
+      "create_task",
+      "critical",
+      { title: "Revisar algo", priority: "critica", finding_id: fid },
+      { finding_id: fid },
+    )
+    actAs(db.users.gerente)
+    const before = unwrap(await getObraDashboard(db.projectId)).counts.pending_critical_suggestions
+    await db.sql`DELETE FROM findings WHERE id = ${fid}`
+    const after = unwrap(await getObraDashboard(db.projectId)).counts.pending_critical_suggestions
+    expect(after).toBe(before - 1)
+    const pending = unwrap(await listObraSuggestions(db.projectId, { status: ["pending"] }))
+    expect(pending.some((s) => s.id === id)).toBe(false)
+    expectError(await approveObraSuggestion(id), /fue eliminado/)
   })
 
   it("subir la prioridad al editar eleva la severidad efectiva revisada (queda auditada como crítica)", async () => {
@@ -360,6 +407,50 @@ describe.skipIf(!HAS_TEST_DB)("sugerencias de IA con aprobación humana (BD real
     expectError(await listObraSuggestions(db.projectId, { limit: 0 }), /límite/)
     expectError(await listObraSuggestions(db.projectId, { limit: 1000 }), /límite/)
     expectError(await listObraSuggestions(db.projectId, { finding_id: -3 }), /Hallazgo no válido/)
+  })
+
+  it("detección con IA y aprobación simultáneas no se interbloquean (sugerencia → capa en ambos caminos)", async () => {
+    const { requestObraLayerExtraction } = await import("@/app/actions/obra/elements")
+    const g = await gen()
+    g.mockReset()
+    g.mockResolvedValue({ object: VISION_OUTPUT } as never)
+    await configureAi(true)
+    actAs(db.users.prevencionista)
+    const first = unwrap(await requestObraLayerExtraction(ids.alc))
+    // Simula approveSuggestion: bloquea la sugerencia, espera y después bloquea la capa.
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => (release = r))
+    const approval = db.sql.begin(async (t) => {
+      const q = t as unknown as typeof db.sql
+      await q`SELECT id FROM obra_ai_suggestions WHERE id = ${first.suggestion_id} FOR UPDATE`
+      await gate
+      await q`SELECT id FROM obra_plan_layers WHERE id = ${ids.alc} FOR UPDATE`
+    })
+    await new Promise((r) => setTimeout(r, 50))
+    const extraction = requestObraLayerExtraction(ids.alc)
+    await new Promise((r) => setTimeout(r, 300))
+    release()
+    await approval
+    const r = await extraction
+    expect(r.ok).toBe(true)
+    const st = await db.sql<{ status: string }[]>`SELECT status FROM obra_ai_suggestions WHERE id = ${first.suggestion_id}`
+    expect(st[0].status).toBe("superseded")
+    g.mockReset()
+  })
+
+  it("límite de uso de IA: pasado el máximo por hora no se llama al modelo", async () => {
+    const { requestObraLayerExtraction } = await import("@/app/actions/obra/elements")
+    const g = await gen()
+    g.mockReset()
+    await configureAi(true)
+    for (let k = 0; k < 10; k++) {
+      await db.sql`INSERT INTO obra_audit_log (project_id, actor_user_id, action, entity_type, entity_id)
+                   VALUES (${db.projectId}, ${db.users.supervisor}, 'layer.extraction_requested', 'layer', ${ids.alc})`
+    }
+    actAs(db.users.supervisor)
+    expectError(await requestObraLayerExtraction(ids.alc), /máximo de 10 detecciones con IA en láminas por hora/)
+    expect(g).not.toHaveBeenCalled()
+    await db.sql`DELETE FROM obra_audit_log WHERE actor_user_id = ${db.users.supervisor} AND action = 'layer.extraction_requested'`
   })
 
   it("la BD garantiza que no hay sugerencias aprobadas o rechazadas sin revisión humana", async () => {

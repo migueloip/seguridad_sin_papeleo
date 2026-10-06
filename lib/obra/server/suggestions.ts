@@ -30,11 +30,15 @@ import {
   type SuggestionStatus,
 } from "../types"
 import { insertElementsInTx, lockLayerForWrite, normalizeElementDraft } from "./elements"
+import { getInspectionById } from "./inspections"
 import {
   asSql,
   hasKey,
+  livePendingSuggestionCondition,
   mapSuggestion,
   optionalText,
+  orphanSuggestionCondition,
+  payloadReferencesFinding,
   requireEnum,
   requireObject,
   suggestionSelect,
@@ -48,6 +52,7 @@ export const SUGGESTION_LIST_LIMITS = { default: 50, max: 200, notes: 1000 } as 
 
 const NOT_FOUND = "Sugerencia no encontrada."
 const ALREADY_REVIEWED = "Esta sugerencia ya fue revisada."
+const SUPERSEDED = "Esta sugerencia quedó sin efecto (se reemplazó por un análisis más nuevo o se eliminó su capa)."
 const CRITICAL_ONLY_APPROVE = "Solo un perfil autorizado puede aprobar sugerencias críticas."
 const CRITICAL_ONLY_REJECT = "Solo un perfil autorizado puede rechazar sugerencias críticas."
 
@@ -57,6 +62,8 @@ export type ApproveResult = {
   suggestion: AiSuggestion
   applied_entity_type: string | null
   applied_entity_id: number | null
+  /** Revisión donde quedó anotada la tarea (solo create_task). */
+  inspection: { id: number; title: string; scheduled_for: string } | null
 }
 
 const SEVERITY_RANK: Record<Severity, number> = { low: 0, medium: 1, high: 2, critical: 3 }
@@ -154,12 +161,30 @@ export async function listSuggestions(userId: number, projectId: number, filter?
   const rows = await sql<SuggestionRow[]>`
     ${suggestionSelect(sql)}
     WHERE s.project_id = ${access.project_id}
+      AND NOT (s.status = 'pending' AND ${orphanSuggestionCondition(sql)})
     ${status.length > 0 ? sql`AND s.status IN ${sql(status)}` : sql``}
     ${findingId != null ? sql`AND s.finding_id = ${findingId}` : sql``}
     ORDER BY s.created_at DESC, s.id ASC
     LIMIT ${limit}
   `
   return rows.map(mapSuggestion)
+}
+
+/**
+ * Cantidad de sugerencias pendientes que el usuario puede decidir (para el
+ * contador de la pestaña "Aprobaciones IA"). 0 si su rol no revisa: no tiene
+ * sentido pedirle una acción que no puede hacer. Las huérfanas no cuentan.
+ */
+export async function countPendingSuggestions(userId: number, projectId: number): Promise<number> {
+  const access = await requireProjectPermissionForUser(userId, projectId, "project.view")
+  if (!can(access.role, "ai.review")) return 0
+  const critical = can(access.role, "ai.review_critical")
+  const rows = await sql<{ n: number }[]>`
+    SELECT COUNT(*)::int AS n FROM obra_ai_suggestions s
+    WHERE s.project_id = ${access.project_id} AND ${livePendingSuggestionCondition(sql)}
+    ${critical ? sql`` : sql`AND s.severity <> 'critical'`}
+  `
+  return Number(rows[0]?.n ?? 0)
 }
 
 /**
@@ -180,10 +205,14 @@ export async function approveSuggestion(
   return (await sql.begin(async (tx) => {
     const s = asSql(tx)
     const row = await lockSuggestion(s, access.project_id, id)
+    if (row.status === "superseded") throw new ObraValidationError(SUPERSEDED)
     if (row.status !== "pending") throw new ObraValidationError(ALREADY_REVIEWED)
     const kind = requireEnum(row.kind, SUGGESTION_KINDS, "Tipo de sugerencia desconocido.")
     const storedSeverity = requireEnum(row.severity, SEVERITIES, "Severidad de la sugerencia no válida.")
     if (!canReviewSuggestion(access.role, storedSeverity)) throw new ObraAccessError(403, CRITICAL_ONLY_APPROVE)
+    if ((kind === "create_task" || kind === "update_finding_severity") && row.finding_id == null && payloadReferencesFinding(row.payload)) {
+      throw new ObraValidationError("El hallazgo de esta sugerencia fue eliminado: ya no se puede aplicar.")
+    }
 
     // Payload guardado (validado otra vez). Si quedó inválido solo se puede aprobar editándolo.
     let stored: SuggestionPayload | null = null
@@ -203,10 +232,15 @@ export async function approveSuggestion(
 
     let appliedType: string | null = null
     let appliedId: number | null = null
+    let inspection: ApproveResult["inspection"] = null
     const applyDetails: Record<string, unknown> = {}
 
     if (final.kind === "create_task") {
       const d = final.data
+      // Editar no puede mover la tarea a otro hallazgo ni desvincularla del revisado.
+      if (row.finding_id != null && d.finding_id !== Number(row.finding_id)) {
+        throw new ObraValidationError("No se puede cambiar el hallazgo de una tarea sugerida.")
+      }
       const task = await createTaskInTx(
         s,
         access,
@@ -230,8 +264,18 @@ export async function approveSuggestion(
       appliedId = task.id
       applyDetails.inspection_id = task.inspection_id
       applyDetails.due_date = task.due_date
+      if (task.inspection_id != null) {
+        const ins = await getInspectionById(s, access.project_id, task.inspection_id)
+        if (ins) inspection = { id: ins.id, title: ins.title, scheduled_for: ins.scheduled_for }
+      }
     } else if (final.kind === "plan_elements") {
       const d = final.data
+      // Los elementos se detectaron en la lámina de UNA capa: no se pueden incorporar en otra.
+      const reviewedLayerId =
+        row.layer_id != null ? Number(row.layer_id) : stored && stored.kind === "plan_elements" ? stored.data.layer_id : null
+      if (reviewedLayerId != null && d.layer_id !== reviewedLayerId) {
+        throw new ObraValidationError("No se puede cambiar la capa de una sugerencia de elementos.")
+      }
       const layer = await lockLayerForWrite(s, access.project_id, d.layer_id)
       const drafts = d.elements.map((e, i) => normalizeElementDraft(e, i))
       const inserted = await insertElementsInTx(s, access.project_id, layer.id, drafts, {
@@ -248,13 +292,26 @@ export async function approveSuggestion(
       if (storedFindingId != null && d.finding_id !== Number(storedFindingId)) {
         throw new ObraValidationError("No se puede cambiar el hallazgo de una sugerencia de severidad.")
       }
-      const f = await s<{ id: number; severity: string }[]>`
-        SELECT id, severity FROM findings
+      const f = await s<{ id: number; severity: string | null; status: string | null }[]>`
+        SELECT id, severity, status FROM findings
         WHERE id = ${d.finding_id} AND project_id = ${access.project_id}
           AND (user_id = ${access.owner_user_id} OR user_id IS NULL)
         FOR UPDATE
       `
       if (!f[0]) throw new ObraValidationError("El hallazgo indicado no pertenece a esta obra.")
+      // Se aprueba con datos frescos: si el hallazgo cambió desde que se generó la sugerencia
+      // (otra severidad, o ya se resolvió), aplicarla pisaría una decisión posterior.
+      const currentSeverity = String(f[0].severity ?? "").trim().toLowerCase()
+      const currentStatus = String(f[0].status ?? "").trim().toLowerCase()
+      const expectedFrom = stored && stored.kind === "update_finding_severity" ? stored.data.from : d.from
+      if (currentStatus === "resolved" || currentStatus === "closed") {
+        throw new ObraValidationError("El hallazgo ya está resuelto o cerrado: no corresponde cambiar su severidad.")
+      }
+      if (currentSeverity !== expectedFrom) {
+        throw new ObraValidationError(
+          "La severidad del hallazgo cambió desde que se generó la sugerencia. Vuelve a analizarlo antes de decidir.",
+        )
+      }
       await s`
         UPDATE findings SET severity = ${d.to}, updated_at = CURRENT_TIMESTAMP
         WHERE id = ${d.finding_id} AND project_id = ${access.project_id}
@@ -303,7 +360,7 @@ export async function approveSuggestion(
     )
     const suggestion = await getSuggestionById(s, access.project_id, id)
     if (!suggestion) throw new ObraAccessError(404, NOT_FOUND)
-    return { suggestion, applied_entity_type: appliedType, applied_entity_id: appliedId }
+    return { suggestion, applied_entity_type: appliedType, applied_entity_id: appliedId, inspection }
   })) as ApproveResult
 }
 
@@ -315,6 +372,7 @@ export async function rejectSuggestion(userId: number, suggestionId: number, rea
   return (await sql.begin(async (tx) => {
     const s = asSql(tx)
     const row = await lockSuggestion(s, access.project_id, id)
+    if (row.status === "superseded") throw new ObraValidationError(SUPERSEDED)
     if (row.status !== "pending") throw new ObraValidationError(ALREADY_REVIEWED)
     const severity = requireEnum(row.severity, SEVERITIES, "Severidad de la sugerencia no válida.")
     if (!canReviewSuggestion(access.role, severity)) throw new ObraAccessError(403, CRITICAL_ONLY_REJECT)

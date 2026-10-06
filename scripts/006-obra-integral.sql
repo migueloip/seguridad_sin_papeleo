@@ -49,6 +49,8 @@ CREATE TABLE IF NOT EXISTS obra_plan_layers (
 
 CREATE INDEX IF NOT EXISTS idx_obra_layers_project_level ON obra_plan_layers(project_id, level) WHERE deleted_at IS NULL;
 
+ALTER TABLE obra_plan_layers ADD COLUMN IF NOT EXISTS cad_origin JSONB;
+
 CREATE TABLE IF NOT EXISTS obra_ai_suggestions (
   id SERIAL PRIMARY KEY,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

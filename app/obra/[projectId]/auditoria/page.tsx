@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation"
 import { Lock, TriangleAlert } from "lucide-react"
 import { listObraAudit } from "@/app/actions/obra/audit"
 import { getObraAccess } from "@/app/actions/obra/projects"
+import { countObraPendingApprovals } from "@/app/actions/obra/suggestions"
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { AuditContent } from "@/components/obra/audit-content"
 import { ObraNav } from "@/components/obra/obra-nav"
@@ -23,13 +24,19 @@ export default async function ObraAuditoriaPage({ params }: { params: Promise<{ 
   if (id === null) notFound()
   const acc = await getObraAccess(id)
   if (!acc.ok) notFound()
+  const pendingApprovals = await countObraPendingApprovals(id)
 
   const allowed = can(acc.data.role, "audit.view")
   const entries = allowed ? await listObraAudit(id, { limit: PAGE_SIZE }) : null
 
   return (
     <DashboardLayout user={{ email: String(session.email), name: session.name ?? null, role: session.role ?? null }}>
-      <ObraNav projectId={id} projectName={acc.data.project_name} role={acc.data.role} />
+      <ObraNav
+        projectId={id}
+        projectName={acc.data.project_name}
+        role={acc.data.role}
+        pendingApprovals={pendingApprovals.ok ? pendingApprovals.data : 0}
+      />
       {!allowed ? (
         <Alert>
           <Lock />

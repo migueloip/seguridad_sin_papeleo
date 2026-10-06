@@ -39,6 +39,7 @@ import {
   TASK_STATUSES,
   type AiSuggestion,
   type AuditEntry,
+  type CadOrigin,
   type ElementAttributes,
   type ElementGeometry,
   type FindingPin,
@@ -636,6 +637,36 @@ export function suggestionSelect(q: Queryable) {
   `
 }
 
+/**
+ * Sugerencia huérfana (alias s): una tarea o un cambio de severidad cuyo
+ * payload apunta a un hallazgo, pero finding_id quedó en NULL porque el
+ * hallazgo se borró (ON DELETE SET NULL). No se puede aplicar, así que no
+ * cuenta como pendiente ni aparece en la bandeja.
+ */
+export function orphanSuggestionCondition(q: Queryable) {
+  const s = asSql(q)
+  return s`(
+    s.kind IN ('create_task', 'update_finding_severity') AND s.finding_id IS NULL
+    AND COALESCE(s.payload #> '{data,finding_id}', s.payload -> 'finding_id', 'null'::jsonb) <> 'null'::jsonb
+  )`
+}
+
+/** ¿El payload guardado de una sugerencia apunta a un hallazgo? (mismo criterio que orphanSuggestionCondition). */
+export function payloadReferencesFinding(payload: unknown): boolean {
+  const p = parseJson(payload)
+  if (!p || typeof p !== "object" || Array.isArray(p)) return false
+  const o = p as { data?: unknown; finding_id?: unknown }
+  const data = o.data && typeof o.data === "object" && !Array.isArray(o.data) ? (o.data as { finding_id?: unknown }) : null
+  const ref = data && data.finding_id != null ? data.finding_id : o.finding_id
+  return ref !== null && ref !== undefined
+}
+
+/** Pendiente que todavía se puede revisar (alias s): status 'pending' y no huérfana. */
+export function livePendingSuggestionCondition(q: Queryable) {
+  const s = asSql(q)
+  return s`(s.status = 'pending' AND NOT ${orphanSuggestionCondition(s)})`
+}
+
 // ---------------------------------------------------------------------------
 // Capas de plano
 // ---------------------------------------------------------------------------
@@ -665,9 +696,21 @@ export type LayerRow = {
   rotation_deg: number | string
   opacity: number | string
   element_count?: number | string | null
+  cad_origin?: unknown
   uploaded_by: number | string | null
   created_at: Date | string
   updated_at: Date | string
+}
+
+/** Origen CAD guardado (JSONB) → CadOrigin válido o null. */
+export function parseCadOrigin(v: unknown): CadOrigin | null {
+  const o = parseJson(v)
+  if (!o || typeof o !== "object" || Array.isArray(o)) return null
+  const { min_x, max_y, width_units } = o as Record<string, unknown>
+  if (typeof min_x !== "number" || !Number.isFinite(min_x)) return null
+  if (typeof max_y !== "number" || !Number.isFinite(max_y)) return null
+  if (typeof width_units !== "number" || !Number.isFinite(width_units) || width_units <= 0) return null
+  return { min_x, max_y, width_units }
 }
 
 export function mapLayer(r: LayerRow): PlanLayer {
@@ -683,6 +726,7 @@ export function mapLayer(r: LayerRow): PlanLayer {
     discipline: oneOf(r.discipline, DISCIPLINES, "otro"),
     level: toNum(r.level),
     level_label: toStrOrNull(r.level_label),
+    cad_origin: parseCadOrigin(r.cad_origin),
     has_image: hasImage,
     mime_type: toStrOrNull(r.mime_type),
     width_px: toNumOrNull(r.width_px),
@@ -716,7 +760,7 @@ export function layerSelect(q: Queryable) {
       l.mime_type, l.width_px, l.height_px, l.width_m, l.aspect, l.offset_x_m, l.offset_y_m,
       l.rotation_deg, l.opacity,
       (SELECT COUNT(*) FROM obra_plan_elements le WHERE le.layer_id = l.id)::int AS element_count,
-      l.uploaded_by, l.created_at, l.updated_at
+      l.cad_origin, l.uploaded_by, l.created_at, l.updated_at
     FROM obra_plan_layers l
   `
 }

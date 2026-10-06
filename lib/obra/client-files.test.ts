@@ -68,7 +68,9 @@ describe("readTextFile", () => {
 describe("readImageFileAsDataUrl", () => {
   it("expone límites por defecto razonables", () => {
     expect(PLAN_IMAGE_MAX_SIDE).toBe(3000)
-    expect(PLAN_IMAGE_MAX_BYTES).toBe(6_500_000)
+    // Bajo el límite de 6 MB por request de las funciones de Netlify, con margen para el resto del cuerpo.
+    expect(PLAN_IMAGE_MAX_BYTES).toBe(4_500_000)
+    expect(PLAN_IMAGE_MAX_BYTES).toBeLessThan(6 * 1024 * 1024 * 0.8)
   })
 
   it("rechaza archivos que no son imágenes", async () => {

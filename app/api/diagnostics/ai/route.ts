@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { generateText } from "ai"
 import type { LanguageModel } from "ai"
-import { getAiSettings } from "@/app/actions/settings"
+import { getAiSettings } from "@/lib/settings"
 import { getModel } from "@/lib/ai"
 import { getSession } from "@/lib/auth"
 

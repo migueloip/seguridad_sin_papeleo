@@ -28,7 +28,9 @@ describe("classifyFindingText", () => {
     // Olor a gas o alcantarilla
     ["Olor a gas en sala de calderas", "olor_gas"],
     ["Mal olor en el baño", "olor_gas"],
-    ["Medidor de gas golpeado", "olor_gas"],
+    ["Medidor de gas con fuga", "olor_gas"],
+    ["Huele a gas en la bodega", "olor_gas"],
+    ["Escape de gas en la cocina del casino", "olor_gas"],
     ["Olor a alcantarillado en subterráneo", "olor_gas"],
     // Falla eléctrica
     ["Chispa en enchufe del comedor", "falla_electrica"],
@@ -72,6 +74,17 @@ describe("classifyFindingText", () => {
     expect(classifyFindingText("Olor a quemado en tablero")).toBe("falla_electrica")
     // "excavación" gana a "gas".
     expect(classifyFindingText("Excavación junto a red de gas")).toBe("excavacion")
+    // El daño observado gana al contexto: la excavación cercana la aporta el plano.
+    expect(classifyFindingText("Grieta en muro junto a la excavación")).toBe("grieta")
+    // "Fuga de agua" no es olor a gas aunque se mencione el medidor.
+    expect(classifyFindingText("Fuga de agua junto al medidor de gas")).toBe("humedad_filtracion")
+  })
+
+  it("«gas» o «alcantarillado» sueltos no bastan para olor a gas", () => {
+    expect(classifyFindingText("Cilindro de gas sin cadena")).toBe("otro")
+    expect(classifyFindingText("Falta extintor en bodega de gases")).toBe("otro")
+    expect(classifyFindingText("Tapa de cámara de alcantarillado rota")).toBe("otro")
+    expect(classifyFindingText("Medidor de gas golpeado")).toBe("otro")
   })
 
   it("a igual peso gana lo que aparece primero", () => {

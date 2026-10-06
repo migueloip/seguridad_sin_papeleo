@@ -255,3 +255,18 @@ describe("validación y normalización de geometrías", () => {
     expect(g).toEqual({ type: "point", points: [{ x: 0.123457, y: 0.5 }] })
   })
 })
+
+describe("polygonArea", () => {
+  it("calcula el área sin importar el sentido de los vértices", async () => {
+    const { polygonArea } = await import("./geometry")
+    const sq = [
+      { x: 0, y: 0 },
+      { x: 4, y: 0 },
+      { x: 4, y: 3 },
+      { x: 0, y: 3 },
+    ]
+    expect(polygonArea(sq)).toBe(12)
+    expect(polygonArea([...sq].reverse())).toBe(12)
+    expect(polygonArea(sq.slice(0, 2))).toBe(0)
+  })
+})

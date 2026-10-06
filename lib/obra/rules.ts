@@ -90,18 +90,19 @@ export const CORRELATION_RULES: CorrelationRule[] = [
     id: "grieta_tabique",
     categories: ["grieta"],
     element_types: ["muro"],
-    max_distance_m: 0.5,
+    max_distance_m: 1,
     relations: MISMO_NIVEL,
-    base_priority: "baja",
+    base_priority: "media",
     hypothesis:
-      "A {distancia}, {relacion}, {verbo} {elemento} (capa {capa}). Si es un tabique no estructural, la fisura suele deberse a retracción, dilatación o falta de junta; conviene descartar que se repita en elementos estructurales cercanos.",
+      "A {distancia}, {relacion}, {verbo} {elemento} (capa {capa}). La capa no indica si el muro es estructural: si es un tabique, la fisura suele deberse a retracción, dilatación o falta de junta; si es un muro de hormigón armado o de albañilería estructural, puede indicar un daño que debe evaluar el ingeniero calculista.",
     recommended_actions: [
-      "Verificar si la fisura es solo de terminación (estuco, pintura) o atraviesa el tabique.",
+      "Confirmar en los planos de estructura si el muro es estructural (hormigón armado o albañilería); si lo es, pedir la evaluación del ingeniero calculista.",
+      "Verificar si la fisura es solo de terminación (estuco, pintura) o atraviesa el muro.",
       "Revisar si hay grietas similares en losas, vigas o muros de carga cercanos.",
       "Marcar la fisura con fecha y revisarla en la próxima visita antes de reparar.",
     ],
-    suggested_role: "supervisor",
-    due_in_days: 7,
+    suggested_role: "jefe_obra",
+    due_in_days: 5,
   },
   {
     id: "grieta_agua",
@@ -453,6 +454,44 @@ export const CORRELATION_RULES: CorrelationRule[] = [
     due_in_days: 1,
   },
 
+  {
+    id: "excavacion_inestabilidad",
+    categories: ["hundimiento", "grieta", "desprendimiento"],
+    element_types: ["excavacion"],
+    max_distance_m: 3,
+    relations: MISMO_E_INFERIOR,
+    base_priority: "alta",
+    hypothesis:
+      "A {distancia}, {relacion}, {verbo} {elemento} (capa {capa}). Una excavación sin entibación suficiente, con talud inestable o con sobrecarga en su borde puede provocar el derrumbe de sus paredes o descalzar el terreno y las fundaciones vecinas, lo que explicaría el hallazgo.",
+    recommended_actions: [
+      "Alejar a las personas del borde de la excavación y prohibir el ingreso a la zanja hasta evaluarla.",
+      "Retirar acopios, escombros, maquinaria y vehículos del borde (franja mínima según NCh 349).",
+      "Verificar la entibación o el talud según NCh 349 y reforzarlos si hay grietas, desprendimientos o filtraciones en las paredes.",
+      "Revisar grietas o asentamientos en estructuras, pavimentos y redes vecinas e instalar testigos para seguir su evolución.",
+      "Informar al ingeniero calculista o al mecánico de suelos si el hundimiento o las grietas progresan.",
+    ],
+    suggested_role: "jefe_obra",
+    due_in_days: 1,
+  },
+  {
+    id: "excavacion_condicion",
+    categories: ["excavacion"],
+    element_types: ["excavacion"],
+    max_distance_m: 2,
+    relations: MISMO_NIVEL,
+    base_priority: "alta",
+    hypothesis:
+      "A {distancia}, {relacion}, {verbo} {elemento} (capa {capa}). El hallazgo corresponde a esa excavación: conviene verificar que cumpla las condiciones de seguridad de NCh 349 (entibación o talud, bordes y accesos).",
+    recommended_actions: [
+      "Verificar la entibación o el talud estable según el tipo de suelo y la profundidad (NCh 349).",
+      "Instalar barandas y señalización en todo el borde y mantener despejada una franja sin acopios ni maquinaria.",
+      "Habilitar escaleras de acceso y salida a distancias adecuadas dentro de la excavación.",
+      "Revisar el permiso de trabajo de excavación y que la supervisión esté presente durante la faena.",
+    ],
+    suggested_role: "prevencionista",
+    due_in_days: 1,
+  },
+
   // -------------------------------------------------------------------------
   // Desprendimientos
   // -------------------------------------------------------------------------
@@ -640,3 +679,12 @@ export const CORRELATION_RULES: CorrelationRule[] = [
     due_in_days: 14,
   },
 ]
+
+/**
+ * ¿Es una regla de contexto (categoría "*")? Sus correlaciones solo informan:
+ * se muestran como evidencia en el panel del hallazgo, pero no generan tareas
+ * sugeridas ni suben su prioridad por la severidad del hallazgo.
+ */
+export function isContextRule(ruleId: string): boolean {
+  return CORRELATION_RULES.some((r) => r.id === ruleId && r.categories.includes("*"))
+}

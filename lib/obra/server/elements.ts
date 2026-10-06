@@ -29,6 +29,7 @@ import {
   type ProjectAccess,
 } from "../types"
 import { extractElementsFromImage, ObraAiError } from "./ai"
+import { assertAiQuota } from "./audit"
 import { authorizeLayer, LAYER_LIMITS } from "./layers"
 import {
   asSql,
@@ -463,6 +464,7 @@ export async function requestLayerExtraction(
   const discipline = requireEnum(layer.discipline, DISCIPLINES, "Especialidad no válida.")
   const settings = await getAiSettingsForUser(access.owner_user_id)
   if (!settings.ready) throw new ObraValidationError(AI_NOT_CONFIGURED)
+  await assertAiQuota(access, "layer_extraction")
 
   const image = await readStoredImage({ image_path: layer.image_path, image_data: layer.image_data })
   let extracted: { elements: PlanElementDraft[]; model: string }
@@ -501,12 +503,23 @@ export async function requestLayerExtraction(
 
   const suggestionId = (await sql.begin(async (tx) => {
     const s = asSql(tx)
-    await lockLayerForWrite(s, access.project_id, id)
-    const superseded = await s<{ id: number }[]>`
-      UPDATE obra_ai_suggestions SET status = 'superseded', updated_at = CURRENT_TIMESTAMP
+    // Orden de bloqueo: primero las sugerencias y después la capa, igual que approveSuggestion
+    // (sugerencia → capa). Con el orden inverso, una aprobación simultánea se interbloqueaba.
+    const pending = await s<{ id: number }[]>`
+      SELECT id FROM obra_ai_suggestions
       WHERE project_id = ${access.project_id} AND layer_id = ${id} AND kind = 'plan_elements' AND status = 'pending'
-      RETURNING id
+      ORDER BY id
+      FOR UPDATE
     `
+    await lockLayerForWrite(s, access.project_id, id)
+    const superseded =
+      pending.length > 0
+        ? await s<{ id: number }[]>`
+            UPDATE obra_ai_suggestions SET status = 'superseded', updated_at = CURRENT_TIMESTAMP
+            WHERE id IN ${s(pending.map((r) => Number(r.id)))} AND status = 'pending'
+            RETURNING id
+          `
+        : []
     const ins = await s<{ id: number }[]>`
       INSERT INTO obra_ai_suggestions (
         project_id, kind, status, title, rationale, severity, confidence, generator, model,

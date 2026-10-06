@@ -7,7 +7,13 @@
  */
 import { revalidatePath } from "next/cache"
 import { requireSessionUserId, toActionError } from "@/lib/obra/access"
-import { approveSuggestion, listSuggestions, rejectSuggestion } from "@/lib/obra/server/suggestions"
+import {
+  approveSuggestion,
+  countPendingSuggestions,
+  listSuggestions,
+  rejectSuggestion,
+  type ApproveResult,
+} from "@/lib/obra/server/suggestions"
 import type { ActionResult, AiSuggestion, SuggestionStatus } from "@/lib/obra/types"
 
 export async function listObraSuggestions(
@@ -23,12 +29,21 @@ export async function listObraSuggestions(
   }
 }
 
+/** Pendientes que el usuario puede decidir (contador de la pestaña "Aprobaciones IA"; 0 si su rol no revisa). */
+export async function countObraPendingApprovals(projectId: number): Promise<ActionResult<number>> {
+  try {
+    const userId = await requireSessionUserId()
+    const data = await countPendingSuggestions(userId, projectId)
+    return { ok: true, data }
+  } catch (e) {
+    return toActionError(e)
+  }
+}
+
 export async function approveObraSuggestion(
   suggestionId: number,
   opts?: { edited_payload?: unknown; notes?: string },
-): Promise<
-  ActionResult<{ suggestion: AiSuggestion; applied_entity_type: string | null; applied_entity_id: number | null }>
-> {
+): Promise<ActionResult<ApproveResult>> {
   try {
     const userId = await requireSessionUserId()
     const data = await approveSuggestion(userId, suggestionId, opts)

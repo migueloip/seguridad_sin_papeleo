@@ -12,6 +12,7 @@ import {
   distancePointToGeometryMeters,
   geometryToMeters,
   isValidGeometry,
+  polygonArea,
   sanitizeFrame,
   toLevelMeters,
 } from "./geometry"
@@ -278,7 +279,8 @@ function matchRule(
   if (!rule.relations.includes(relation)) return null
   const maxD = Number(rule.max_distance_m)
   if (!Number.isFinite(maxD) || maxD < 0 || distance > maxD) return null
-  const priority = combinePriority(rule.base_priority, severity)
+  // Las reglas de contexto (categoría "*") solo informan: la severidad del hallazgo no las sube.
+  const priority = rule.categories.includes("*") ? rule.base_priority : combinePriority(rule.base_priority, severity)
   const proximity = maxD > 0 ? Math.pow(Math.max(0, 1 - distance / maxD), DISTANCE_EXPONENT) : 1
   const levelFactor = relation === "mismo_nivel" ? 1 : ADJACENT_LEVEL_FACTOR
   const score = (PRIORITY_WEIGHT[priority] ?? 0) * proximity * levelFactor
@@ -319,12 +321,40 @@ const LINEAR_ELEMENT_TYPES: ReadonlySet<ElementType> = new Set<ElementType>([
   "red_incendio",
 ])
 
+/**
+ * Superficies que suelen dibujarse cubriendo toda la planta (la losa de un
+ * nivel, una platea de fundación). Si su polígono es grande, estar "dentro"
+ * no prueba nada (todo hallazgo del nivel quedaría a 0 m): se mide a su
+ * contorno (bordes, vanos, apoyos). Las piezas chicas (una zapata, un balcón)
+ * siguen usando 0 m dentro.
+ */
+const AREA_SURFACE_TYPES: ReadonlySet<ElementType> = new Set<ElementType>(["losa", "fundacion"])
+
+/** Área (m²) desde la cual una losa o fundación se trata como "toda la planta". */
+export const LARGE_SURFACE_AREA_M2 = 50
+
 function elementDistanceMeters(origin: Vec2, element: CorrelationElementInput, frame: LayerFrame): number {
   const g = geometryToMeters(element.geometry, frame)
-  if (g.type === "polygon" && g.points.length >= 3 && LINEAR_ELEMENT_TYPES.has(element.element_type)) {
-    return distancePointToGeometryMeters(origin, { type: "polyline", points: [...g.points, g.points[0]] })
+  if (g.type === "polygon" && g.points.length >= 3) {
+    const contourOnly =
+      LINEAR_ELEMENT_TYPES.has(element.element_type) ||
+      (AREA_SURFACE_TYPES.has(element.element_type) && polygonArea(g.points) > LARGE_SURFACE_AREA_M2)
+    if (contourOnly) {
+      return distancePointToGeometryMeters(origin, { type: "polyline", points: [...g.points, g.points[0]] })
+    }
   }
   return distancePointToGeometryMeters(origin, g)
+}
+
+/** Etiqueta normalizada para agrupar tramos de una misma red ("C-3", "c 3" → "c3"). */
+function labelKey(label: string | null | undefined): string {
+  return typeof label === "string"
+    ? label
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "")
+    : ""
 }
 
 type Candidate = {
@@ -402,7 +432,19 @@ export function correlateFinding(
       a.element.id - b.element.id,
   )
 
-  return sorted.slice(0, maxResults).map((c): CorrelationWithDescription => {
+  // Una red partida en varios tramos (típico de las LINE de un DXF) es UNA hipótesis: queda el
+  // tramo más relevante por capa, tipo y etiqueta (el orden ya pone primero la regla específica
+  // y el tramo más cercano), para que las primeras correlaciones cubran hipótesis distintas y
+  // no tres tareas iguales ni un "contexto" repetido del mismo colector.
+  const seen = new Set<string>()
+  const distinct = sorted.filter((c) => {
+    const key = `${c.layer.id}|${c.element.element_type}|${labelKey(c.element.label)}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+
+  return distinct.slice(0, maxResults).map((c): CorrelationWithDescription => {
     const { rule, priority, score } = c.match
     const distance_m = Math.round(c.distance * 100) / 100
     const element_description = describeElement(c.element)

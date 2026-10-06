@@ -1,6 +1,6 @@
 import { notFound, redirect } from "next/navigation"
-import { listObraSuggestions } from "@/app/actions/obra/suggestions"
 import { getObraAccess } from "@/app/actions/obra/projects"
+import { countObraPendingApprovals } from "@/app/actions/obra/suggestions"
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { ObraNav } from "@/components/obra/obra-nav"
 import { PlanWorkspace } from "@/components/obra/plan-workspace"
@@ -44,9 +44,8 @@ export default async function ObraPlanosPage({
 
   const sp = await searchParams
   const reportar = first(sp.reportar)
-  const showApprovals = can(acc.data.role, "findings.view")
-  const pending = showApprovals ? await listObraSuggestions(id, { status: ["pending"], limit: 200 }) : null
-  const pendingApprovals = pending && pending.ok ? pending.data.length : 0
+  const pending = await countObraPendingApprovals(id)
+  const pendingApprovals = pending.ok ? pending.data : 0
 
   return (
     <DashboardLayout user={{ email: String(session.email), name: session.name ?? null, role: session.role ?? null }}>

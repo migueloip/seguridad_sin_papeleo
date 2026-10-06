@@ -100,7 +100,7 @@ function ProjectCard({ project: p, today }: { project: ObraProjectSummary; today
             />
             <span className={cn(p.critical_findings > 0 ? "font-semibold text-danger" : "text-muted-foreground")}>
               {p.critical_findings} hallazgo{p.critical_findings === 1 ? "" : "s"} crítico{p.critical_findings === 1 ? "" : "s"}
-              <span className="font-normal text-muted-foreground"> · {p.open_findings} abiertos</span>
+              <span className="font-normal text-muted-foreground"> · {p.open_findings} abierto{p.open_findings === 1 ? "" : "s"}</span>
             </span>
           </li>
         ) : null}

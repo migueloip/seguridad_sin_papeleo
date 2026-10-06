@@ -29,7 +29,7 @@ import {
   type TaskOrigin,
   type TaskStatus,
 } from "../types"
-import { assertProjectUser, getOrCreateNextInspection } from "./inspections"
+import { assertProjectUser, getOrCreateNextInspection, lockProjectInspections } from "./inspections"
 import {
   asSql,
   cleanLine,
@@ -317,13 +317,23 @@ async function assertInspectionUsable(q: Queryable, projectId: number, inspectio
   if (rows[0].status === "cerrada") throw new ObraValidationError("La revisión indicada ya está cerrada.")
 }
 
+/**
+ * Revisión de la tarea: "next" = la próxima abierta (o una nueva; si la tarea
+ * vence antes de la próxima programada, una para su vencimiento). Un id
+ * explícito se valida bajo el mismo lock que closeInspection, para no anotar
+ * una tarea en una revisión que se está cerrando.
+ */
 async function resolveInspection(
   q: Queryable,
   access: ProjectAccess,
   ref: number | null | "next",
+  dueBy?: string | null,
 ): Promise<number | null> {
-  if (ref === "next") return (await getOrCreateNextInspection(q, access.project_id, access.user_id)).id
-  if (ref != null) await assertInspectionUsable(q, access.project_id, ref)
+  if (ref === "next") return (await getOrCreateNextInspection(q, access.project_id, access.user_id, { dueBy })).id
+  if (ref != null) {
+    await lockProjectInspections(q, access.project_id)
+    await assertInspectionUsable(q, access.project_id, ref)
+  }
   return ref
 }
 
@@ -372,7 +382,7 @@ export async function createTaskInTx(
     `
     if (!sg[0]) throw new ObraValidationError("La sugerencia indicada no pertenece a esta obra.")
   }
-  const inspectionId = await resolveInspection(s, access, n.inspection_id)
+  const inspectionId = await resolveInspection(s, access, n.inspection_id, n.due_date)
   const checklist = n.checklist.map((text) => ({ text, done: false }))
 
   let id: number
@@ -477,6 +487,9 @@ export async function updateTask(userId: number, taskId: number, patch: Partial<
 
   return (await sql.begin(async (tx) => {
     const s = asSql(tx)
+    // Si cambia la revisión, el lock por proyecto va ANTES que el de la tarea (mismo orden que
+    // closeInspection, que traslada tareas): así no se interbloquean.
+    if (p.inspection_id !== undefined) await lockProjectInspections(s, access.project_id)
     const rows = await s<TaskRow[]>`
       ${taskSelect(s)}
       WHERE t.id = ${id} AND t.project_id = ${access.project_id}
@@ -529,7 +542,7 @@ export async function updateTask(userId: number, taskId: number, patch: Partial<
     if (p.y !== undefined) next.y = p.y
     assertCoordPair(next)
     if (p.inspection_id !== undefined && p.inspection_id !== cur.inspection_id) {
-      next.inspection_id = await resolveInspection(s, access, p.inspection_id)
+      next.inspection_id = await resolveInspection(s, access, p.inspection_id, next.due_date)
     }
     if (p.checklist !== undefined) {
       // Conserva "hecho" de los ítems cuyo texto no cambió.

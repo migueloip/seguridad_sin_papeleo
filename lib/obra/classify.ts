@@ -28,13 +28,16 @@ const k = (pattern: string, category: FindingCategory, weight: number): Keyword 
 })
 
 const KEYWORDS: Keyword[] = [
-  // Olor a gas o alcantarilla (lo más específico primero)
+  // Olor a gas o alcantarilla (lo más específico primero). "Gas" o "alcantarillado" sueltos no
+  // bastan: "cilindro de gas sin cadena" o "tapa de cámara de alcantarillado rota" no son un olor
+  // ni una fuga, y clasificarlos así dispararía "evacuar el sector" junto a la red de gas.
   k("olor(?:es)? a gas\\b", "olor_gas", 10),
-  k("fugas? de gas\\b", "olor_gas", 10),
+  k("(?:fugas?|escapes?) de gas\\b", "olor_gas", 10),
+  k("huele a (?:gas|alcantarill\\w*|desague\\w*|huevo podrido|azufre)", "olor_gas", 10),
   k("olor(?:es)? a (?:alcantarill\\w*|desague\\w*|huevo podrido|azufre)", "olor_gas", 10),
+  k("gas(?:es)?\\b.{0,40}\\b(?:fugas?|escapes?|olor\\w*|huele|hedor)", "olor_gas", 8),
+  k("(?:fugas?|escapes?|olor\\w*|huele|hedor)\\b.{0,40}\\bgas(?:es)?\\b", "olor_gas", 8),
   k("(?:metano|acido sulfhidrico|h2s)\\b", "olor_gas", 6),
-  k("gas(?:es)?\\b", "olor_gas", 4),
-  k("alcantarill\\w*", "olor_gas", 4),
   k("(?:mal )?olor(?:es)?\\b|hedor\\w*|pestilencia", "olor_gas", 3),
 
   // Falla eléctrica
@@ -93,11 +96,12 @@ const KEYWORDS: Keyword[] = [
   k("tapad[oa]s?\\b", "obstruccion", 6),
   k("(?:atascad|atochad)[oa]s?\\b|no (?:escurre|drena)\\b", "obstruccion", 6),
 
-  // Excavación
-  k("excava\\w*", "excavacion", 7),
-  k("zanjas?\\b", "excavacion", 7),
-  k("calicatas?\\b", "excavacion", 6),
-  k("talud\\w*", "excavacion", 5),
+  // Excavación (pesa menos que el daño observado: "grieta junto a la excavación" es una grieta,
+  // y la excavación cercana la aporta el plano)
+  k("excava\\w*", "excavacion", 5),
+  k("zanjas?\\b", "excavacion", 5),
+  k("calicatas?\\b", "excavacion", 5),
+  k("talud\\w*", "excavacion", 4),
 ]
 
 /**

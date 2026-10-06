@@ -2,7 +2,7 @@ import { streamText, tool, convertToModelMessages, type LanguageModel, type UIMe
 import { z } from "zod"
 import { getModel } from "@/lib/ai"
 import { getSession } from "@/lib/auth"
-import { getAiSettings } from "@/app/actions/settings"
+import { getAiSettings } from "@/lib/settings"
 import { getReportData } from "@/app/actions/reports"
 
 const queryProjectDataParams = z.object({

@@ -213,4 +213,33 @@ describe.skipIf(!HAS_TEST_DB)("tablero y auditoría de obra (BD real)", () => {
     actAs(db.users.extrano)
     expectError(await listObraAudit(db.projectId), /Proyecto no encontrado/)
   })
+  it("los hallazgos de otra cuenta con el mismo project_id no inflan el riesgo; pines de capas borradas no cuentan", async () => {
+    const { getObraDashboard } = await import("@/app/actions/obra/dashboard")
+    const { listMyObraProjects } = await import("@/app/actions/obra/projects")
+    actAs(db.users.gerente)
+    const before = unwrap(await getObraDashboard(db.projectId))
+    const hubBefore = unwrap(await listMyObraProjects()).find((p) => p.project_id === db.projectId)!
+    // Lo mismo que permite el createFinding heredado: otra cuenta inserta críticos en un proyecto ajeno.
+    for (let k = 0; k < 4; k++) {
+      await db.sql`INSERT INTO findings (project_id, user_id, title, severity, status)
+                   VALUES (${db.projectId}, ${db.users.extrano}, 'Intruso', 'critical', 'open')`
+    }
+    const after = unwrap(await getObraDashboard(db.projectId))
+    expect(after.counts.open_findings).toBe(before.counts.open_findings)
+    expect(after.findings_by_severity).toEqual(before.findings_by_severity)
+    expect(after.risk).toEqual(before.risk)
+    const hubAfter = unwrap(await listMyObraProjects()).find((p) => p.project_id === db.projectId)!
+    expect(hubAfter).toMatchObject({ open_findings: hubBefore.open_findings, critical_findings: hubBefore.critical_findings })
+
+    // Un pin en una capa borrada lógicamente deja de contar como "ubicado".
+    const gone = await db.sql<{ id: number }[]>`
+      INSERT INTO obra_plan_layers (project_id, name, discipline, level, deleted_at)
+      VALUES (${db.projectId}, 'Capa borrada con pin', 'otro', 0, CURRENT_TIMESTAMP) RETURNING id`
+    const f = await db.sql<{ id: number }[]>`
+      INSERT INTO findings (project_id, user_id, title, severity, status)
+      VALUES (${db.projectId}, ${db.users.gerente}, 'Ubicado en capa borrada', 'low', 'resolved') RETURNING id`
+    await db.sql`INSERT INTO obra_finding_pins (finding_id, project_id, layer_id, level, x, y, category)
+                 VALUES (${f[0].id}, ${db.projectId}, ${gone[0].id}, 0, 0.5, 0.5, 'otro')`
+    expect(unwrap(await getObraDashboard(db.projectId)).counts.pinned_findings).toBe(before.counts.pinned_findings)
+  })
 })

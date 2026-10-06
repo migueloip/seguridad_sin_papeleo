@@ -9,8 +9,9 @@
 import Link from "next/link"
 import { useMemo, useState } from "react"
 import { toast } from "sonner"
-import { Inbox, Loader2, RefreshCw, ShieldCheck } from "lucide-react"
+import { Inbox, Loader2, RefreshCw, ShieldCheck, TriangleAlert } from "lucide-react"
 import { listObraSuggestions } from "@/app/actions/obra/suggestions"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -79,6 +80,7 @@ export function ApprovalsContent({ projectId, role, initialSuggestions, layers }
     all: null,
   })
   const [loading, setLoading] = useState<Tab | null>(null)
+  const [errors, setErrors] = useState<Record<Tab, string | null>>({ pending: null, approved: null, rejected: null, all: null })
   const [kind, setKind] = useState<string>(ALL_KINDS)
   const canReview = can(role, "ai.review")
   const layersById = useMemo(() => new Map(layers.map((l) => [l.id, l])), [layers])
@@ -86,12 +88,15 @@ export function ApprovalsContent({ projectId, role, initialSuggestions, layers }
   async function load(t: Tab) {
     const def = TABS.find((x) => x.value === t)
     setLoading(t)
+    setErrors((prev) => ({ ...prev, [t]: null }))
     const res = await callAction(() =>
       listObraSuggestions(projectId, def?.status ? { status: def.status, limit: LIST_LIMIT } : { limit: LIST_LIMIT }),
     )
     setLoading((cur) => (cur === t ? null : cur))
     if (res.ok === false) {
       toast.error(res.error)
+      // Sin lista que mostrar, la pestaña muestra el error y "Reintentar" (no un "Cargando…" eterno).
+      setErrors((prev) => ({ ...prev, [t]: res.error }))
       return
     }
     setLists((prev) => ({ ...prev, [t]: res.data }))
@@ -100,7 +105,7 @@ export function ApprovalsContent({ projectId, role, initialSuggestions, layers }
   function changeTab(v: string) {
     const t = v as Tab
     setTab(t)
-    if (lists[t] === null) void load(t)
+    if (lists[t] === null && loading !== t) void load(t)
   }
 
   function onChanged(updated: AiSuggestion) {
@@ -163,7 +168,7 @@ export function ApprovalsContent({ projectId, role, initialSuggestions, layers }
             )}
             .{" "}
             {canReview
-              ? "Al aprobar una tarea, se anota en la próxima revisión programada (si no hay, se crea una a 7 días)."
+              ? "Al aprobar una tarea, se anota en la próxima revisión (la que está en curso o la siguiente programada). Si no hay ninguna, o si la tarea vence antes, se crea una revisión para la fecha que corresponde."
               : "Puedes ver las sugerencias, pero solo el gerente, el jefe de obra o el prevencionista pueden aprobarlas o descartarlas."}
           </p>
         </div>
@@ -210,7 +215,19 @@ export function ApprovalsContent({ projectId, role, initialSuggestions, layers }
           const filtered = list ? sortSuggestions(kind === ALL_KINDS ? list : list.filter((s) => s.kind === (kind as SuggestionKind))) : null
           return (
             <TabsContent key={t.value} value={t.value} className="space-y-3">
-              {filtered === null ? (
+              {filtered === null && errors[t.value] && loading !== t.value ? (
+                <Alert variant="destructive">
+                  <TriangleAlert />
+                  <AlertTitle>No se pudieron cargar las sugerencias</AlertTitle>
+                  <AlertDescription>
+                    <p>{errors[t.value]}</p>
+                    <Button type="button" variant="outline" className="mt-2 h-10" onClick={() => void load(t.value)}>
+                      <RefreshCw className="h-4 w-4" aria-hidden />
+                      Reintentar
+                    </Button>
+                  </AlertDescription>
+                </Alert>
+              ) : filtered === null ? (
                 <div
                   className="flex items-center justify-center gap-2 rounded-[14px] border border-border bg-card px-4 py-10 text-sm text-muted-foreground"
                   role="status"

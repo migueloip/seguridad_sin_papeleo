@@ -224,9 +224,9 @@ describe.skipIf(!HAS_TEST_DB)("IDOR: planos, hallazgos y sugerencias entre obras
     expect(r2).toEqual({ ok: false, error: "El hallazgo indicado no pertenece a esta obra." })
     const r3 = await pinExistingObraFinding(db.projectId, { finding_id: mine.unpinned, layer_id: theirs.layer, x: 0.1, y: 0.1 })
     expect(r3).toEqual({ ok: false, error: "La capa indicada no pertenece a esta obra o fue eliminada." })
-    // Editar la sugerencia propia para que apunte al hallazgo ajeno: rechazado.
+    // Editar la sugerencia propia para que apunte al hallazgo ajeno: rechazado (no se puede cambiar el hallazgo).
     const r4 = await approveObraSuggestion(mine.suggestion, { edited_payload: { title: "Revisar", finding_id: theirs.finding } })
-    expect(r4).toEqual({ ok: false, error: "El hallazgo indicado no pertenece a esta obra." })
+    expect(r4).toEqual({ ok: false, error: "No se puede cambiar el hallazgo de una tarea sugerida." })
     // Filtros con ids ajenos dentro de la obra propia no filtran datos ajenos.
     const els = await listObraElements(db.projectId, { layer_id: theirs.layer })
     expect(els).toEqual({ ok: true, data: [] })

@@ -44,3 +44,55 @@ export async function listAudit(
   `
   return rows.map(mapAudit)
 }
+
+// ---------------------------------------------------------------------------
+// Límite de uso de IA (protege la API key y la cuota del dueño del proyecto)
+// ---------------------------------------------------------------------------
+
+export type AiQuotaKind = "finding_analysis" | "layer_extraction"
+
+/**
+ * Máximos de llamadas a IA, contadas en la bitácora (las acciones que la IA
+ * respondió y quedaron registradas): por persona y hora, y por obra y día.
+ */
+export const AI_QUOTA: Record<AiQuotaKind, { action: string; perUserHour: number; perProjectDay: number; noun: string }> = {
+  finding_analysis: { action: "finding.analyzed", perUserHour: 20, perProjectDay: 200, noun: "análisis de hallazgos con IA" },
+  layer_extraction: { action: "layer.extraction_requested", perUserHour: 10, perProjectDay: 60, noun: "detecciones con IA en láminas" },
+}
+
+/**
+ * Lanza ObraValidationError si la persona o la obra superaron el límite de
+ * llamadas a IA. Cada llamada usa la configuración (y la API key) del dueño
+ * del proyecto, así que sin este tope un integrante con ai.request podría
+ * generarle un costo arbitrario. Es un límite blando: dos pedidos simultáneos
+ * pueden pasar a la vez, pero no un bucle.
+ */
+export async function assertAiQuota(
+  access: { project_id: number; user_id: number },
+  kind: AiQuotaKind,
+): Promise<void> {
+  const q = AI_QUOTA[kind]
+  const rows = await sql<{ user_hour: number; project_day: number }[]>`
+    SELECT
+      COUNT(*) FILTER (
+        WHERE a.actor_user_id = ${access.user_id} AND a.created_at > LOCALTIMESTAMP - interval '1 hour'
+      )::int AS user_hour,
+      COUNT(*)::int AS project_day
+    FROM obra_audit_log a
+    WHERE a.project_id = ${access.project_id}
+      AND a.action = ${q.action}
+      AND a.created_at > LOCALTIMESTAMP - interval '1 day'
+      ${kind === "finding_analysis" ? sql`AND (a.details->>'use_ai') = 'true'` : sql``}
+  `
+  const r = rows[0]
+  if (Number(r?.user_hour ?? 0) >= q.perUserHour) {
+    throw new ObraValidationError(
+      `Alcanzaste el máximo de ${q.perUserHour} ${q.noun} por hora en esta obra. Intenta de nuevo más tarde.`,
+    )
+  }
+  if (Number(r?.project_day ?? 0) >= q.perProjectDay) {
+    throw new ObraValidationError(
+      `Esta obra alcanzó el máximo diario de ${q.perProjectDay} ${q.noun}. Intenta de nuevo mañana.`,
+    )
+  }
+}

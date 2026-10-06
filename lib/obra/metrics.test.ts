@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { addDaysISO, isOverdue, projectRiskIndex, todayISO } from "./metrics"
+import { addDaysISO, isOverdue, pickNextInspection, projectRiskIndex, todayISO } from "./metrics"
 
 describe("índice de riesgo", () => {
   it("obra sin hallazgos es de riesgo bajo", () => {
@@ -35,6 +35,36 @@ describe("fechas", () => {
   })
 
   it("todayISO usa formato YYYY-MM-DD", () => {
-    expect(todayISO(new Date(2026, 9, 5))).toBe("2026-10-05")
+    expect(todayISO(new Date("2026-10-05T15:00:00Z"))).toBe("2026-10-05")
+  })
+
+  it("todayISO cuenta el día en la hora de Chile aunque el servidor esté en UTC", () => {
+    // 01:30 UTC del 7 de octubre = 22:30 del 6 de octubre en Santiago (UTC−3).
+    expect(todayISO(new Date("2026-10-07T01:30:00Z"))).toBe("2026-10-06")
+    // Invierno (UTC−4): 03:59 UTC del 15 de junio = 23:59 del 14 de junio.
+    expect(todayISO(new Date("2026-06-15T03:59:00Z"))).toBe("2026-06-14")
+    expect(todayISO(new Date("2026-06-15T04:00:00Z"))).toBe("2026-06-15")
+    // Una tarea que vence "hoy" en Chile no aparece vencida de noche.
+    expect(isOverdue("2026-10-06", todayISO(new Date("2026-10-07T01:30:00Z")))).toBe(false)
+  })
+})
+
+describe("próxima revisión (criterio único)", () => {
+  const today = "2026-10-06"
+  const ins = (id: number, status: string, scheduled_for: string) => ({ id, status, scheduled_for })
+
+  it("prefiere la que está en curso", () => {
+    const list = [ins(1, "programada", "2026-10-07"), ins(2, "en_curso", "2026-10-01"), ins(3, "cerrada", "2026-10-06")]
+    expect(pickNextInspection(list, today)?.id).toBe(2)
+  })
+
+  it("luego la programada más próxima desde hoy", () => {
+    const list = [ins(1, "programada", "2026-10-20"), ins(2, "programada", "2026-10-06"), ins(3, "programada", "2026-09-01")]
+    expect(pickNextInspection(list, today)?.id).toBe(2)
+  })
+
+  it("si solo hay atrasadas, la más antigua; sin abiertas, null", () => {
+    expect(pickNextInspection([ins(1, "programada", "2026-09-20"), ins(2, "programada", "2026-09-01")], today)?.id).toBe(2)
+    expect(pickNextInspection([ins(1, "cerrada", "2026-10-07")], today)).toBeNull()
   })
 })

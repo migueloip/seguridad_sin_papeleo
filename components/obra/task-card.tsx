@@ -238,22 +238,28 @@ export function assigneeLabel(task: Pick<ObraTask, "assigned_user_id" | "assigne
   return "Sin responsable asignado"
 }
 
-/** Enlace al plano: el hallazgo de origen o, si tiene ubicación propia, la tarea. */
+/**
+ * Enlace al plano. Si la tarea tiene ubicación propia se abre por la tarea
+ * (?task): el plano muestra el hallazgo de origen si la persona puede verlo y,
+ * si no (un trabajador no ve hallazgos ajenos), marca la ubicación de la
+ * tarea. Sin ubicación propia, el hallazgo de origen.
+ */
 export function taskPlanHref(task: Pick<ObraTask, "id" | "project_id" | "finding_id" | "layer_id" | "x" | "y">): string | null {
-  if (task.finding_id != null) return `/obra/${task.project_id}/planos?finding=${task.finding_id}`
   if (task.layer_id != null && task.x != null && task.y != null) return `/obra/${task.project_id}/planos?task=${task.id}`
+  if (task.finding_id != null) return `/obra/${task.project_id}/planos?finding=${task.finding_id}`
   return null
 }
 
 const chip = "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold"
 
-/** Chip de origen de la tarea (IA aprobada por una persona, o nacida de un hallazgo). */
+/** Chip de origen de la tarea (sugerencia aprobada por una persona, o nacida de un hallazgo). */
 export function TaskOriginChip({ task, className }: { task: Pick<ObraTask, "origin" | "created_by_name">; className?: string }) {
   if (task.origin === "ia") {
     return (
       <span className={cn(chip, "border border-border bg-card text-muted-foreground", className)}>
         <Sparkles className="h-3 w-3 text-brand" aria-hidden />
-        Sugerida por IA · aprobada por {task.created_by_name || "un revisor"}
+        {/* Puede venir de la IA o del motor de reglas (sin IA configurada): no afirmar "IA". */}
+        Sugerencia automática · aprobada por {task.created_by_name || "un revisor"}
       </span>
     )
   }

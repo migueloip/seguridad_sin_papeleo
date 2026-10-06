@@ -83,7 +83,8 @@ Fuente: `lib/obra/permissions.ts`.
 2. Indica disciplina, nivel (0 = primer piso, −1 = subterráneo) y ancho real de
    la lámina en metros. Si varias capas del mismo nivel no calzan, se alinean
    con desplazamiento y rotación (`LayerFrame`), usando una vista superpuesta
-   con opacidad.
+   con opacidad. Las capas DXF guardan su origen CAD (`cad_origin`): una nueva
+   capa DXF del mismo nivel y escala nace alineada con la primera.
 3. Los elementos (tuberías, ductos, muros...) se obtienen así:
    - **DXF:** se importan directamente tras una vista previa que confirma un
      humano.
@@ -100,17 +101,28 @@ Fuente: `lib/obra/permissions.ts`.
    nivel y en los adyacentes, y aplica las reglas de `lib/obra/rules.ts`
    (grieta + alcantarillado, humedad + eléctrico, olor + gas, etc.). Ya en ese
    momento genera sugerencias `create_task` con `generator='reglas'`.
-3. Quien tenga `ai.request` puede pedir **"Analizar con IA"**: el LLM recibe las
-   correlaciones (no el plano libre), redacta hipótesis y checklist y propone
-   prioridad. Esto reemplaza las sugerencias pendientes anteriores
-   (`superseded`).
+3. Quien tenga `ai.request` puede pedir **"Analizar con IA"** (o volver a
+   analizar con reglas; re-analizar escribe, así que exige `ai.request`): el LLM
+   recibe las correlaciones (no el plano libre), redacta hipótesis y checklist y
+   propone prioridad. Esto reemplaza las sugerencias pendientes anteriores
+   (`superseded`), salvo que el análisis termine con reglas: entonces se
+   conservan las pendientes redactadas por IA. No se vuelven a sugerir
+   correlaciones que ya tienen una tarea abierta, y la regla de contexto (redes
+   cercanas a cualquier hallazgo) solo se muestra como evidencia, sin tarea.
+   Hay un límite de uso de IA por persona y hora y por obra y día.
 4. En el panel del hallazgo, cada sugerencia muestra la evidencia (elemento,
    distancia, capa, relación de nivel) y tres botones:
    **Anotar en tareas de la próxima revisión** (aprueba), **Editar y aprobar**
    y **Descartar** (pide motivo).
-5. Al aprobar se crea la tarea en la **próxima revisión programada**. Si no
-   existe, se crea una "Revisión semanal" a 7 días. La tarea lleva vencimiento,
-   rol sugerido y checklist, y queda auditada.
+5. Al aprobar se crea la tarea en la **próxima revisión**, con el mismo
+   criterio que muestran el resumen y la página Revisiones (en curso → programada
+   desde hoy → programada atrasada; `pickNextInspection`). Si no existe, se crea
+   una "Revisión semanal" a 7 días; si la tarea vence antes que la próxima
+   programada, una "Revisión prioritaria" para su vencimiento. La tarea lleva
+   vencimiento (contado en la hora de Chile), rol sugerido y checklist, y queda
+   auditada. Al aprobar se valida con datos frescos: un cambio de severidad no
+   se aplica si el hallazgo cambió o se resolvió, y editar no puede cambiar el
+   hallazgo de una tarea ni la capa de unos elementos.
 
 ### 4.3 Revisiones
 Las revisiones (`obra_inspections`) agrupan las tareas a verificar en terreno.
@@ -173,6 +185,7 @@ lib/obra/
     layers.ts elements.ts pins.ts suggestions.ts ai.ts storage.ts
 app/actions/obra/   acciones "use server" finas (sesión → lib/obra/server)
 app/api/obra/layers/[id]/image/route.ts   imagen de capa con control de acceso
+app/api/obra/findings/[id]/photo/route.ts foto de hallazgo con control de acceso
 app/api/mobile/obra/...                   tareas para la app de terreno (Bearer)
 app/obra/...                              páginas
 components/obra/...                       UI
@@ -209,14 +222,14 @@ Todas lanzan `ObraAccessError` (401, 403 o 404) u `ObraValidationError`
 - `listInspections(userId, projectId): ObraInspection[]`
 - `createInspection(userId, projectId, { title, scheduled_for, lead_user_id?, notes? })` (`inspections.manage`)
 - `updateInspection(userId, inspectionId, patch)` y `closeInspection(userId, inspectionId, { summary, carry_over_open_tasks })`
-- `getOrCreateNextInspection(tx, projectId, actorUserId): ObraInspection` (interna, se usa al aprobar)
+- `getOrCreateNextInspection(tx, projectId, actorUserId, { excludeId?, dueBy? }): ObraInspection` (interna, se usa al aprobar y al trasladar; con `dueBy` crea una "Revisión prioritaria" si la próxima programada es posterior)
 
 **dashboard.ts / audit.ts**
 - `getDashboard(userId, projectId): ObraDashboard`
 - `listAudit(userId, projectId, { limit?, before_id? }): AuditEntry[]` (`audit.view`)
 
 **layers.ts / elements.ts / storage.ts**
-- `listLayers(userId, projectId)`, `createLayer(userId, projectId, { name, discipline, level, level_label?, image?, width_m?, aspect? })`,
+- `listLayers(userId, projectId)`, `createLayer(userId, projectId, { name, discipline, level, level_label?, image?, width_m?, aspect?, cad_origin? })`,
   `updateLayer(userId, layerId, patch)`, `deleteLayer(userId, layerId)` (borrado lógico) y `readLayerImage(userId, layerId): { bytes, mime }`
 - `listElements(userId, projectId, { level?, layer_id? })`, `createElements(userId, layerId, drafts, source)`,
   `updateElement(userId, elementId, patch)`, `deleteElement(userId, elementId)` y `requestLayerExtraction(userId, layerId)` (crea una sugerencia `plan_elements`)
@@ -226,11 +239,12 @@ Todas lanzan `ObraAccessError` (401, 403 o 404) u `ObraValidationError`
 - `reportFindingOnPlan(userId, projectId, { layer_id, x, y, title, description?, severity, category?, photo_data_url? })`
   crea el finding y el pin, y ejecuta el análisis por reglas
 - `pinExistingFinding(userId, projectId, { finding_id, layer_id, x, y, category? })`
-- `analyzeFinding(userId, findingId, { use_ai })` reemplaza las pendientes y crea hasta 3 `create_task` (más `update_finding_severity` si corresponde)
+- `analyzeFinding(userId, findingId, { use_ai })` (`ai.request`) reemplaza las pendientes y crea hasta 3 `create_task` (más `update_finding_severity` si corresponde)
 - `getFindingContext(userId, findingId): { pin, correlations, suggestions, tasks }`
 
 **suggestions.ts**
-- `listSuggestions(userId, projectId, { status?, finding_id?, limit? })`
+- `listSuggestions(userId, projectId, { status?, finding_id?, limit? })` (las huérfanas, cuyo hallazgo se borró, no aparecen como pendientes)
+- `countPendingSuggestions(userId, projectId): number` (contador de la pestaña; 0 si el rol no revisa)
 - `approveSuggestion(userId, suggestionId, { edited_payload?, notes? })`: transacción con `FOR UPDATE`; aplica según el tipo y audita
 - `rejectSuggestion(userId, suggestionId, reason?)`
 
@@ -244,7 +258,18 @@ Además del módulo nuevo se corrigen los hallazgos del análisis previo:
   de `document-processing.ts` y `ocr.ts` exigen sesión válida. Antes bastaba una
   cookie cualquiera y se podía gastar la cuota de IA o pedir tokens de Autodesk.
 - `/api/findings/photo` solo descarga del origen de Supabase configurado (sin
-  SSRF) y responde con `Cache-Control: private`.
+  SSRF) y responde con `Cache-Control: private`. También sirve las fotos que
+  Obra guarda en el bucket privado (`obra-storage:<ruta>`).
+- `app/actions/settings.ts` ya no devuelve claves sensibles: `getSetting`
+  rechaza `ai_api_key`/`smtp_pass` y `getSettings` las enmascara. La lectura
+  en servidor (y `getAiSettings`) vive en `lib/settings.ts`, fuera de
+  `"use server"`. Las rutas `/api/settings/*` exigen sesión y no devuelven
+  mensajes internos.
+- La configuración de IA se resuelve en `lib/ai-settings.ts`: una URL base
+  propia (`ai_base_url` del usuario) solo se usa con la API key propia, nunca
+  con la global ni con la del entorno (antes un usuario podía apuntarla a un
+  servidor suyo y recibir la key del servidor), y en producción debe ser https
+  hacia un host público (sin SSRF a la red interna).
 
 ## 8. Hoja de ruta
 

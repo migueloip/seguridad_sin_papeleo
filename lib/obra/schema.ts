@@ -71,6 +71,9 @@ export const OBRA_SCHEMA_STATEMENTS: readonly string[] = [
   deleted_at TIMESTAMP
 )`,
   `CREATE INDEX IF NOT EXISTS idx_obra_layers_project_level ON obra_plan_layers(project_id, level) WHERE deleted_at IS NULL`,
+  // Origen CAD de una capa importada de DXF ({min_x, max_y, width_units} en unidades del dibujo):
+  // permite alinear sola otra capa DXF del mismo nivel y sistema de coordenadas.
+  `ALTER TABLE obra_plan_layers ADD COLUMN IF NOT EXISTS cad_origin JSONB`,
 
   `CREATE TABLE IF NOT EXISTS obra_ai_suggestions (
   id SERIAL PRIMARY KEY,
@@ -218,6 +221,8 @@ export const OBRA_MIGRATION_LOCK_KEY = 7262006
 export async function applyObraSchema(sql: Sql): Promise<void> {
   await sql.begin(async (tx) => {
     await tx.unsafe(`SELECT pg_advisory_xact_lock(${OBRA_MIGRATION_LOCK_KEY})`)
+    // Sin esto, cada arranque llena el log con un NOTICE "already exists, skipping" por sentencia.
+    await tx.unsafe("SET LOCAL client_min_messages = warning")
     for (const stmt of OBRA_SCHEMA_STATEMENTS) {
       await tx.unsafe(stmt)
     }

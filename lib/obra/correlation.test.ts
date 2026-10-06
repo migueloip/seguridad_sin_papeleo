@@ -442,3 +442,57 @@ describe("correlationToTaskPayload", () => {
     expect(p.title.startsWith("Revisar grieta junto a colector de alcantarillado")).toBe(true)
   })
 })
+
+describe("correlateFinding — correcciones de revisión", () => {
+  const ARQ = layer(1, "Arquitectura N1", "arquitectura", 1, ARQ_FRAME)
+  /** Polígono (en metros del nivel) guardado en coordenadas normalizadas de la capa. */
+  const polygonIn = (frame: LayerFrame, pts: Vec2[]): ElementGeometry => ({
+    type: "polygon",
+    points: pts.map((p) => fromLevelMeters(p, frame)),
+  })
+
+  it("una losa que cubre toda la planta no queda a 0 m de todo hallazgo: se mide a su contorno", () => {
+    const losaGrande = polygonIn(ARQ_FRAME, [
+      { x: 1, y: 1 },
+      { x: 39, y: 1 },
+      { x: 39, y: 29 },
+      { x: 1, y: 29 },
+    ])
+    // El hallazgo (10, 15) está dentro de la losa, a 9 m de su borde: sin correlación estructural.
+    expect(correlateFinding(grieta(), [ARQ], [el(1, 1, "losa", losaGrande)])).toEqual([])
+    // Una pieza chica (un balcón de 2 × 2 m) sí cuenta "dentro = 0 m".
+    const balcon = polygonIn(ARQ_FRAME, [
+      { x: 9, y: 14 },
+      { x: 11, y: 14 },
+      { x: 11, y: 16 },
+      { x: 9, y: 16 },
+    ])
+    const res = correlateFinding(grieta(), [ARQ], [el(2, 1, "losa", balcon)])
+    expect(res[0]).toMatchObject({ rule_id: "grieta_estructural", distance_m: 0 })
+  })
+
+  it("los tramos de una misma red cuentan una sola vez (queda el más cercano)", () => {
+    const tramo = (id: number, y0: number, y1: number, dx: number) =>
+      el(id, 2, "tuberia_alcantarillado", polylineIn(ALC_FRAME, [{ x: 10 + dx, y: y0 }, { x: 10 + dx, y: y1 }]), "C-3")
+    const res = correlateFinding(grieta(), LAYERS, [tramo(101, 5, 14, 1.5), tramo(102, 14, 20, 1), tramo(103, 20, 25, 1.4)])
+    expect(res.map((c) => c.element_id)).toEqual([102])
+    // Una red distinta (otra etiqueta) sí aparece aparte.
+    const otra = el(104, 2, "tuberia_alcantarillado", verticalLineAt(ALC_FRAME, 2), "C-4")
+    expect(correlateFinding(grieta(), LAYERS, [tramo(102, 14, 20, 1), otra]).map((c) => c.element_id)).toEqual([102, 104])
+  })
+
+  it("la regla de contexto no sube su prioridad por la severidad del hallazgo", () => {
+    const finding: CorrelationFindingInput = { ...grieta("critical"), category: "otro" }
+    const gasLayer = layer(4, "Gas N1", "gas", 1, AGUA_FRAME)
+    const res = correlateFinding(finding, [gasLayer], [el(30, 4, "linea_gas", verticalLineAt(AGUA_FRAME, 1))])
+    expect(res[0]).toMatchObject({ rule_id: "contexto_red_cercana", priority: "baja" })
+  })
+
+  it("un hundimiento junto a una excavación se correlaciona (NCh 349)", () => {
+    const finding: CorrelationFindingInput = { ...grieta("high"), category: "hundimiento" }
+    const zanja = el(40, 1, "excavacion", polylineIn(ARQ_FRAME, [{ x: 11.2, y: 5 }, { x: 11.2, y: 25 }]), "Zanja Z-1")
+    const res = correlateFinding(finding, [ARQ], [zanja])
+    expect(res[0]).toMatchObject({ rule_id: "excavacion_inestabilidad", element_id: 40 })
+    expect(res[0].recommended_actions.join(" ")).toContain("NCh 349")
+  })
+})

@@ -234,7 +234,8 @@ describe.skipIf(!HAS_TEST_DB)("caso estrella: grieta junto al colector de alcant
     // La mejor correlación aparece primero.
     expect(r.suggestions[0].id).toBe(top.id)
     const muro = r.suggestions.find((s) => s.evidence.correlations?.[0]?.element_id === ids.muro)!
-    expect(muro.evidence.correlations![0]).toMatchObject({ rule_id: "grieta_tabique", priority: "baja" })
+    // "Muro" sin calificar puede ser estructural: prioridad media (no fisura menor).
+    expect(muro.evidence.correlations![0]).toMatchObject({ rule_id: "grieta_tabique", priority: "media" })
 
     // Nada se aplicó: no hay tareas.
     expect(await taskCount(r.finding_id)).toBe(0)
@@ -267,7 +268,7 @@ describe.skipIf(!HAS_TEST_DB)("caso estrella: grieta junto al colector de alcant
     expect(await taskCount(ids.grieta)).toBe(0)
   })
 
-  it("el prevencionista aprueba: se crea exactamente 1 tarea origin 'ia' en la próxima revisión, creada sola", async () => {
+  it("el prevencionista aprueba: se crea exactamente 1 tarea origin 'ia' en una revisión creada sola para su vencimiento", async () => {
     const { approveObraSuggestion } = await import("@/app/actions/obra/suggestions")
     const before = await db.sql<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM obra_inspections WHERE project_id = ${db.projectId}`
     expect(before[0].n).toBe(0)
@@ -308,10 +309,19 @@ describe.skipIf(!HAS_TEST_DB)("caso estrella: grieta junto al colector de alcant
     expect(t.checklist.length).toBe(taskData(top).checklist.length)
     expect(t.checklist.every((i) => i.done === false)).toBe(true)
     expect(t.x).toBeCloseTo(0.28, 6)
-    const ins = await db.sql<{ id: number; title: string; status: string }[]>`
-      SELECT id, title, status FROM obra_inspections WHERE project_id = ${db.projectId}`
+    // No había revisiones y la tarea vence en 3 días: no espera a una "Revisión semanal" a 7 días.
+    const ins = await db.sql<{ id: number; title: string; status: string; scheduled_for: string }[]>`
+      SELECT id, title, status, to_char(scheduled_for, 'YYYY-MM-DD') AS scheduled_for
+      FROM obra_inspections WHERE project_id = ${db.projectId}`
     expect(ins).toHaveLength(1)
-    expect(ins[0]).toMatchObject({ id: t.inspection_id, title: "Revisión semanal", status: "programada" })
+    expect(ins[0]).toMatchObject({
+      id: t.inspection_id,
+      title: "Revisión prioritaria",
+      status: "programada",
+      scheduled_for: addDaysISO(todayISO(), 3),
+    })
+    // La respuesta nombra la revisión elegida (el aviso la muestra y enlaza a sus tareas).
+    expect(r.inspection).toEqual({ id: t.inspection_id, title: "Revisión prioritaria", scheduled_for: addDaysISO(todayISO(), 3) })
 
     const audit = await db.sql<{ action: string; details: Record<string, unknown> }[]>`
       SELECT action, details FROM obra_audit_log
@@ -345,18 +355,37 @@ describe.skipIf(!HAS_TEST_DB)("caso estrella: grieta junto al colector de alcant
     const n = await db.sql<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM obra_tasks WHERE suggestion_id = ${pending.id}`
     expect(n[0].n).toBe(1)
     expect(await taskCount(ids.grieta)).toBe(2)
-    // Siguen en la misma revisión: no se creó una segunda "Revisión semanal".
+    // Siguen en la misma revisión (vence en 5 días, después de la de 3): no se creó otra.
     const ins = await db.sql<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM obra_inspections WHERE project_id = ${db.projectId}`
     expect(ins[0].n).toBe(1)
+  })
+
+  it("re-analizar no repite correlaciones que ya tienen una tarea abierta", async () => {
+    const { analyzeObraFinding } = await import("@/app/actions/obra/pins")
+    actAs(db.users.prevencionista)
+    const a = unwrap(await analyzeObraFinding(ids.grieta))
+    expect(a.correlations.map((c) => c.element_id)).toEqual([ids.colector, ids.muro])
+    expect(a.suggestions).toEqual([])
+    const audit = await db.sql<{ details: { already_tasked?: number } }[]>`
+      SELECT details FROM obra_audit_log WHERE action = 'finding.analyzed' AND entity_id = ${ids.grieta} ORDER BY id DESC LIMIT 1`
+    expect(audit[0].details.already_tasked).toBe(2)
+    expect(await taskCount(ids.grieta)).toBe(2)
   })
 
   it("rechazar una pendiente registra el motivo y es definitivo", async () => {
     const { analyzeObraFinding } = await import("@/app/actions/obra/pins")
     const { rejectObraSuggestion, approveObraSuggestion } = await import("@/app/actions/obra/suggestions")
+    // La tarea del muro se cerró: su correlación vuelve a sugerirse.
+    await db.sql`
+      UPDATE obra_tasks SET status = 'hecha' WHERE finding_id = ${ids.grieta}
+        AND suggestion_id IN (
+          SELECT id FROM obra_ai_suggestions WHERE (evidence->'correlations'->0->>'element_id')::int = ${ids.muro}
+        )`
     actAs(db.users.prevencionista)
     const a = unwrap(await analyzeObraFinding(ids.grieta))
-    expect(a.suggestions).toHaveLength(2)
+    expect(a.suggestions).toHaveLength(1)
     const target = a.suggestions[0]
+    expect(target.evidence.correlations![0].element_id).toBe(ids.muro)
 
     actAs(db.users.jefe_obra)
     expectError(await rejectObraSuggestion(target.id, "x".repeat(1001)), /como máximo 1000/)
@@ -377,12 +406,14 @@ describe.skipIf(!HAS_TEST_DB)("caso estrella: grieta junto al colector de alcant
 
   it("el re-análisis marca como 'superseded' las pendientes anteriores", async () => {
     const { analyzeObraFinding } = await import("@/app/actions/obra/pins")
+    actAs(db.users.supervisor)
+    unwrap(await analyzeObraFinding(ids.grieta, { use_ai: false }))
     const old = await pendingFor(ids.grieta)
     expect(old).toHaveLength(1)
     actAs(db.users.supervisor)
     const a = unwrap(await analyzeObraFinding(ids.grieta, { use_ai: false }))
     expect(a.correlations.map((c) => c.element_id)).toEqual([ids.colector, ids.muro])
-    expect(a.suggestions).toHaveLength(2)
+    expect(a.suggestions).toHaveLength(1)
     const st = await db.sql<{ status: string }[]>`SELECT status FROM obra_ai_suggestions WHERE id = ${old[0].id}`
     expect(st[0].status).toBe("superseded")
     const now = await pendingFor(ids.grieta)
@@ -391,18 +422,24 @@ describe.skipIf(!HAS_TEST_DB)("caso estrella: grieta junto al colector de alcant
     const counts = await db.sql<{ status: string; n: number }[]>`
       SELECT status, COUNT(*)::int AS n FROM obra_ai_suggestions WHERE finding_id = ${ids.grieta} GROUP BY status`
     const by = Object.fromEntries(counts.map((c) => [c.status, c.n]))
-    expect(by).toMatchObject({ approved: 2, rejected: 1, pending: 2 })
-    const audit = await db.sql<{ details: { superseded: number } }[]>`
+    expect(by).toMatchObject({ approved: 2, rejected: 1, pending: 1 })
+    const audit = await db.sql<{ details: { superseded: number; superseded_ids: number[] } }[]>`
       SELECT details FROM obra_audit_log WHERE action = 'finding.analyzed' AND entity_id = ${ids.grieta} ORDER BY id DESC LIMIT 1`
     expect(audit[0].details.superseded).toBe(1)
+    expect(audit[0].details.superseded_ids).toEqual([old[0].id])
   })
 
-  it("el trabajador puede re-analizar con reglas su propio hallazgo, pero no pedir IA", async () => {
+  it("re-analizar escribe: la visita y el trabajador que reportó no pueden (ni con reglas ni con IA)", async () => {
     const { analyzeObraFinding } = await import("@/app/actions/obra/pins")
-    actAs(db.users.trabajador)
-    expectError(await analyzeObraFinding(ids.grieta, { use_ai: true }), DENIED)
-    const a = unwrap(await analyzeObraFinding(ids.grieta))
-    expect(a.suggestions.every((s) => s.generator === "reglas")).toBe(true)
+    const before = await pendingFor(ids.grieta)
+    for (const role of ["trabajador", "visita"] as const) {
+      actAs(db.users[role])
+      expectError(await analyzeObraFinding(ids.grieta, { use_ai: true }), DENIED)
+      expectError(await analyzeObraFinding(ids.grieta), DENIED)
+      expectError(await analyzeObraFinding(ids.grieta, { use_ai: false }), DENIED)
+    }
+    // Nada cambió: las pendientes siguen igual.
+    expect((await pendingFor(ids.grieta)).map((s) => s.id)).toEqual(before.map((s) => s.id))
     actAs(db.users.extrano)
     expectError(await analyzeObraFinding(ids.grieta), /no encontrado/)
   })
@@ -413,6 +450,8 @@ describe.skipIf(!HAS_TEST_DB)("caso estrella: grieta junto al colector de alcant
     const gen = vi.mocked(ai.generateObject)
     gen.mockReset()
     await configureAi(true)
+    // La tarea del colector se cerró: su correlación vuelve a estar disponible para la IA.
+    await db.sql`UPDATE obra_tasks SET status = 'hecha' WHERE finding_id = ${ids.grieta}`
     const old = await pendingFor(ids.grieta)
     gen.mockResolvedValueOnce({
       object: {
@@ -475,11 +514,13 @@ describe.skipIf(!HAS_TEST_DB)("caso estrella: grieta junto al colector de alcant
     }
   })
 
-  it("si la IA falla o no está configurada, cae a reglas y lo indica en la evidencia", async () => {
+  it("si la IA falla o no está configurada, cae a reglas, lo indica y conserva lo que la IA ya redactó", async () => {
     const { analyzeObraFinding } = await import("@/app/actions/obra/pins")
     const ai = await import("ai")
     const gen = vi.mocked(ai.generateObject)
     gen.mockReset()
+    const aiPending = (await pendingFor(ids.grieta)).filter((s) => s.generator === "ia")
+    expect(aiPending).toHaveLength(1)
     gen.mockRejectedValueOnce(new Error("401: API key sk-SECRETA inválida; body {...}"))
     const spy = vi.spyOn(console, "error").mockImplementation(() => {})
     actAs(db.users.prevencionista)
@@ -488,9 +529,13 @@ describe.skipIf(!HAS_TEST_DB)("caso estrella: grieta junto al colector de alcant
     expect(JSON.stringify(r)).not.toContain("SECRETA")
     expect(JSON.stringify(spy.mock.calls)).not.toContain("SECRETA")
     spy.mockRestore()
-    expect(a.suggestions).toHaveLength(2)
+    // La correlación del colector ya tiene una sugerencia de IA pendiente: las reglas no la repiten.
+    expect(a.suggestions).toHaveLength(1)
+    expect(a.suggestions[0].evidence.correlations![0].element_id).toBe(ids.muro)
     expect(a.suggestions.every((s) => s.generator === "reglas" && s.model === null)).toBe(true)
     expect(a.suggestions[0].evidence.notes?.join(" ")).toMatch(/La IA no respondió/)
+    const kept = await db.sql<{ status: string }[]>`SELECT status FROM obra_ai_suggestions WHERE id = ${aiPending[0].id}`
+    expect(kept[0].status).toBe("pending")
 
     await configureAi(false)
     gen.mockReset()
@@ -498,6 +543,8 @@ describe.skipIf(!HAS_TEST_DB)("caso estrella: grieta junto al colector de alcant
     expect(gen).not.toHaveBeenCalled()
     expect(b.suggestions.every((s) => s.generator === "reglas")).toBe(true)
     expect(b.suggestions[0].evidence.notes?.join(" ")).toMatch(/no está configurada/)
+    const still = await db.sql<{ status: string }[]>`SELECT status FROM obra_ai_suggestions WHERE id = ${aiPending[0].id}`
+    expect(still[0].status).toBe("pending")
   })
 
   it("olor a gas junto a la red: sugerencia crítica y cambio de severidad; el supervisor no puede aprobarlas", async () => {
@@ -544,8 +591,9 @@ describe.skipIf(!HAS_TEST_DB)("caso estrella: grieta junto al colector de alcant
     actAs(db.users.prevencionista)
     expectError(
       await approveObraSuggestion(s.id, { edited_payload: { ...data, finding_id: ids.otherFinding } }),
-      /hallazgo indicado no pertenece/,
+      /No se puede cambiar el hallazgo/,
     )
+    expectError(await approveObraSuggestion(s.id, { edited_payload: { ...data, finding_id: null } }), /No se puede cambiar el hallazgo/)
     expectError(
       await approveObraSuggestion(s.id, { edited_payload: { ...data, layer_id: ids.otherLayer } }),
       /capa indicada no pertenece/,

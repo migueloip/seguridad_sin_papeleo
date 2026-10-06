@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation"
 import { TriangleAlert } from "lucide-react"
 import { listObraLinkableWorkers, listObraMembers } from "@/app/actions/obra/members"
 import { getObraAccess } from "@/app/actions/obra/projects"
+import { countObraPendingApprovals } from "@/app/actions/obra/suggestions"
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { ObraNav } from "@/components/obra/obra-nav"
 import { TeamContent } from "@/components/obra/team-content"
@@ -20,6 +21,7 @@ export default async function ObraEquipoPage({ params }: { params: Promise<{ pro
   if (id === null) notFound()
   const acc = await getObraAccess(id)
   if (!acc.ok) notFound()
+  const pendingApprovals = await countObraPendingApprovals(id)
 
   const canManage = can(acc.data.role, "members.manage")
   const [members, workers] = await Promise.all([
@@ -29,7 +31,12 @@ export default async function ObraEquipoPage({ params }: { params: Promise<{ pro
 
   return (
     <DashboardLayout user={{ email: String(session.email), name: session.name ?? null, role: session.role ?? null }}>
-      <ObraNav projectId={id} projectName={acc.data.project_name} role={acc.data.role} />
+      <ObraNav
+        projectId={id}
+        projectName={acc.data.project_name}
+        role={acc.data.role}
+        pendingApprovals={pendingApprovals.ok ? pendingApprovals.data : 0}
+      />
       {members.ok ? (
         <TeamContent
           projectId={id}

@@ -119,7 +119,7 @@ export function describeAuditEntry(e: AuditEntry): { text: string; detail: strin
 
   switch (e.action) {
     case "task.created":
-      if (d.origin === "ia") text = "anotó una tarea sugerida por IA"
+      if (d.origin === "ia") text = "anotó una tarea sugerida"
       else if (d.origin === "hallazgo") text = "creó una tarea desde un hallazgo"
       if (title) parts.push(`«${title}»`)
       break
@@ -185,6 +185,7 @@ export function describeAuditEntry(e: AuditEntry): { text: string; detail: strin
       break
     }
     case "suggestion.rejected": {
+      if (d.generator === "reglas") text = "descartó una sugerencia automática (reglas)"
       if (title) parts.push(`«${title}»`)
       const reason = str(d.reason) ?? str(d.notes)
       if (reason) parts.push(`Motivo: ${reason}`)
@@ -202,6 +203,9 @@ export function describeAuditEntry(e: AuditEntry): { text: string; detail: strin
       else {
         const name = str(d.name)
         if (name) parts.push(`«${name}»`)
+      }
+      if (e.action === "suggestion.approved" && d.generator === "reglas") {
+        text = "aprobó una sugerencia automática (reglas)"
       }
       if (e.action === "suggestion.approved" && d.edited === true) parts.push("con cambios")
       const count = num(d.count) ?? num(d.inserted)

@@ -249,6 +249,67 @@ describe.skipIf(!HAS_TEST_DB)("capas de plano, imágenes y elementos (BD real)",
     expect(audit[0].details.changes).toEqual(expect.arrayContaining(["name", "frame.offset_x_m", "frame.rotation_deg", "opacity"]))
   })
 
+  it("capas DXF del mismo nivel y sistema de coordenadas nacen alineadas por su origen CAD", async () => {
+    const { createObraLayer, updateObraLayer } = await import("@/app/actions/obra/layers")
+    const { toLevelMeters } = await import("@/lib/obra/geometry")
+    actAs(db.users.jefe_obra)
+    // Muros: lámina de 40 × 20 unidades (metros) con origen CAD (0, 20); luego se alinea a mano.
+    const a = unwrap(
+      await createObraLayer(db.projectId, {
+        name: "Muros DXF",
+        discipline: "arquitectura",
+        level: 5,
+        width_m: 40,
+        aspect: 0.5,
+        cad_origin: { min_x: 0, max_y: 20, width_units: 40 },
+      }),
+    )
+    expect(a.cad_origin).toEqual({ min_x: 0, max_y: 20, width_units: 40 })
+    expect(a.frame).toMatchObject({ offset_x_m: 0, offset_y_m: 0, rotation_deg: 0 })
+    const aMoved = unwrap(await updateObraLayer(a.id, { frame: { offset_x_m: 3, rotation_deg: 90 } }))
+    // Colector del mismo DXF: su lámina empieza en (5, 10) del CAD.
+    const b = unwrap(
+      await createObraLayer(db.projectId, {
+        name: "Alcantarillado DXF",
+        discipline: "alcantarillado",
+        level: 5,
+        width_m: 30,
+        aspect: 0.01,
+        cad_origin: { min_x: 5, max_y: 10, width_units: 30 },
+      }),
+    )
+    expect(b.frame.rotation_deg).toBe(90)
+    // El punto CAD (5, 10) cae en el mismo lugar del nivel en ambas capas.
+    const inA = toLevelMeters({ x: 5 / 40, y: (20 - 10) / 20 }, aMoved.frame)
+    const inB = toLevelMeters({ x: 0, y: 0 }, b.frame)
+    expect(inB.x).toBeCloseTo(inA.x, 6)
+    expect(inB.y).toBeCloseTo(inA.y, 6)
+    const audit = await db.sql<{ details: { aligned_with_layer_id: number | null } }[]>`
+      SELECT details FROM obra_audit_log WHERE action = 'layer.created' AND entity_id = ${b.id}`
+    expect(audit[0].details.aligned_with_layer_id).toBe(a.id)
+
+    // Otra escala (otras unidades u otro ancho): no se alinea sola.
+    const c = unwrap(
+      await createObraLayer(db.projectId, {
+        name: "Otra escala",
+        discipline: "electrico",
+        level: 5,
+        width_m: 60,
+        cad_origin: { min_x: 5, max_y: 10, width_units: 30 },
+      }),
+    )
+    expect(c.frame).toMatchObject({ offset_x_m: 0, offset_y_m: 0, rotation_deg: 0 })
+    expectError(
+      await createObraLayer(db.projectId, {
+        name: "Origen inválido",
+        discipline: "otro",
+        level: 5,
+        cad_origin: { min_x: Number.NaN, max_y: 0, width_units: 1 },
+      }),
+      /origen del DXF/,
+    )
+  })
+
   it("ruta de imagen: bytes reales con cabeceras seguras; sesión ajena o sin sesión no accede", async () => {
     actAs(db.users.trabajador)
     const res = await imageRoute(layer.id)

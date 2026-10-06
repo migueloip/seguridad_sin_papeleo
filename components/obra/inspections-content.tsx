@@ -42,7 +42,7 @@ import { Label } from "@/components/ui/label"
 import { Progress } from "@/components/ui/progress"
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
-import { addDaysISO, todayISO } from "@/lib/obra/metrics"
+import { addDaysISO, pickNextInspection as pickNextInspectionShared, todayISO } from "@/lib/obra/metrics"
 import { can } from "@/lib/obra/permissions"
 import {
   INSPECTION_STATUS_LABELS,
@@ -66,18 +66,12 @@ export function isInspectionLate(i: Pick<ObraInspection, "status" | "scheduled_f
 }
 
 /**
- * Próxima revisión (mismo criterio que el servidor): la que está en curso; si
- * no, la programada más próxima desde hoy; si no, la atrasada más antigua.
+ * Próxima revisión: el criterio único del módulo (lib/obra/metrics.ts), el
+ * mismo que usa el servidor al anotar una tarea aprobada en "la próxima
+ * revisión".
  */
 export function pickNextInspection(list: ObraInspection[], today: string): ObraInspection | null {
-  const open = list.filter((i) => i.status !== "cerrada")
-  const byDate = (a: ObraInspection, b: ObraInspection) => a.scheduled_for.localeCompare(b.scheduled_for) || a.id - b.id
-  return (
-    open.find((i) => i.status === "en_curso") ??
-    open.filter((i) => i.scheduled_for >= today).sort(byDate)[0] ??
-    [...open].sort(byDate)[0] ??
-    null
-  )
+  return pickNextInspectionShared(list, today)
 }
 
 /** Texto corto de cuándo es la revisión: "hoy", "mañana", "en 5 días", "hace 2 días". */
@@ -234,7 +228,7 @@ export function InspectionsContent({
           <p className="font-display text-lg font-semibold">Aún no hay revisiones</p>
           <p className="mt-1 max-w-md text-sm text-muted-foreground">
             {canManage
-              ? "Programa la primera revisión para agrupar las tareas que se verificarán en terreno. Si apruebas una sugerencia de IA sin revisión programada, se crea una «Revisión semanal» automáticamente."
+              ? "Programa la primera revisión para agrupar las tareas que se verificarán en terreno. Si apruebas una sugerencia sin revisiones abiertas, se crea una automáticamente."
               : "Cuando el equipo programe una revisión, aparecerá aquí con sus tareas."}
           </p>
           {canManage ? (
@@ -794,7 +788,7 @@ function CloseInspectionForm({
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
             {carryOver
-              ? "Si no hay una próxima revisión programada, se crea una «Revisión semanal» en 7 días."
+              ? "Pasan a la próxima revisión abierta. Si no hay ninguna, se crea una «Revisión semanal» en 7 días."
               : "Las tareas abiertas quedarán asociadas a esta revisión cerrada."}
           </p>
         </div>

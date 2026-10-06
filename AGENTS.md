@@ -68,7 +68,11 @@ OBRA_AUTO_MIGRATE=
 
 ## Codebase Structure
 - Components: `components/` + `components/ui/` (shadcn)
-- Server Actions: `app/actions/`
+- Server Actions: `app/actions/` — cada export de un archivo `"use server"` es
+  un endpoint público invocable sin pasar por la UI. Nunca exportar desde ahí
+  algo que devuelva secretos: la configuración sensible (API key de IA, clave
+  SMTP) se lee en servidor con `readSetting`/`getAiSettings` de
+  `lib/settings.ts`; las acciones de `app/actions/settings.ts` la enmascaran.
 - Core logic: `src/`
 - Database: `lib/db.ts`
 - Auth: `lib/auth.ts`, `lib/mobile-auth.ts`
@@ -93,8 +97,9 @@ Plan y contratos completos: `docs/PLAN-OBRA-INTEGRAL.md`. Resumen para agentes:
   `ActionResult<T>` con `toActionError`). Cada export es un endpoint público:
   solo funciones async.
 - Rutas: `app/obra/**` (páginas), `components/obra/**` (UI),
-  `app/api/obra/layers/[id]/image` (imagen de capa con control de acceso),
-  `app/api/mobile/obra/**` (tareas con Bearer).
+  `app/api/obra/layers/[id]/image` (imagen de capa) y
+  `app/api/obra/findings/[id]/photo?index=N` (foto de hallazgo), ambas con
+  control de acceso de obra; `app/api/mobile/obra/**` (tareas con Bearer).
 - Componentes cliente: nunca importar `lib/obra/server/*`, `lib/obra/access.ts`,
   `lib/db` ni `lib/auth` (rompe el build).
 
@@ -123,8 +128,19 @@ Plan y contratos completos: `docs/PLAN-OBRA-INTEGRAL.md`. Resumen para agentes:
   auditada. La BD lo refuerza: CHECK `obra_suggestion_reviewed_by_human` y
   `obra_tasks.suggestion_id UNIQUE`.
 - "Anotar en tareas de la próxima revisión" crea la tarea en la próxima
-  revisión abierta (o una "Revisión semanal" a 7 días si no hay).
-- La IA usa la configuración de IA del dueño del proyecto (`/configuracion`).
+  revisión abierta, con el criterio único `pickNextInspection`
+  (`lib/obra/metrics.ts`, espejo SQL `nextInspectionOrder`): en curso → programada
+  desde hoy → programada atrasada. Si no hay, una "Revisión semanal" a 7 días; si
+  la tarea vence antes que la próxima programada, una "Revisión prioritaria" para
+  su vencimiento. Cerrar una revisión toma el mismo advisory lock (`7262007`).
+- Re-analizar un hallazgo (`analyzeFinding`) exige `ai.request` aunque sea sin
+  IA (reemplaza pendientes). No repite correlaciones con tarea abierta, no crea
+  tareas desde la regla de contexto y un análisis por reglas no reemplaza las
+  pendientes redactadas por IA.
+- "Hoy" es el día de Chile (`todayISO`, America/Santiago), no el del proceso.
+- La IA usa la configuración de IA del dueño del proyecto (`/configuracion`),
+  con límite de uso por persona/hora y obra/día (`assertAiQuota`). Una URL base
+  de IA propia solo se combina con la key propia (`lib/ai-settings.ts`).
 
 ### Migración 006
 - Automática: `ensureObraSchema()` la aplica una vez por proceso al primer uso
@@ -151,6 +167,8 @@ Plan y contratos completos: `docs/PLAN-OBRA-INTEGRAL.md`. Resumen para agentes:
 - `DATABASE_URL=... npm run seed:obra-demo -- --owner-email <correo>` crea
   (idempotente, sin borrar nada) la obra "Edificio Demo Los Aromos" para ese
   usuario (debe existir), con miembros demo `*.demo@losaromos.test` (clave
-  `Demo1234!`, solo al crearlos; `--reset-passwords` la restablece), capas del
-  nivel 1 con elementos, un hallazgo junto al colector, una revisión y tareas.
+  aleatoria por cuenta que se muestra solo al crearlas; `--reset-passwords`
+  genera otras), capas del nivel 1 con elementos, un hallazgo junto al colector,
+  una revisión y tareas. Se niega a correr contra una BD no local o con
+  `NODE_ENV=production` salvo con `--allow-remote`.
 
