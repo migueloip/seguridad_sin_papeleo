@@ -14,11 +14,11 @@
     "seed:obra-demo": "node scripts/seed-obra-demo.mjs"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^4.0.7",
+    "@ai-sdk/anthropic": "^2.0.108",
     "@ai-sdk/google": "^2.0.46",
-    "@ai-sdk/openai": "^4.0.7",
-    "@ai-sdk/openai-compatible": "^3.0.5",
-    "@ai-sdk/react": "^3.0.6",
+    "@ai-sdk/openai": "^2.0.133",
+    "@ai-sdk/openai-compatible": "^1.0.58",
+    "@ai-sdk/react": "^2.0.275",
     "@hookform/resolvers": "^3.10.0",
     "@pascal-app/core": "^0.5.1",
     "@pascal-app/editor": "^0.5.1",
