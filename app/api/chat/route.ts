@@ -1,4 +1,4 @@
-import { streamText, tool, convertToModelMessages, type LanguageModel, type UIMessage } from "ai"
+import { streamText, tool, convertToModelMessages, stepCountIs, type LanguageModel, type UIMessage } from "ai"
 import { z } from "zod"
 import { getModel } from "@/lib/ai"
 import { getSession } from "@/lib/auth"
@@ -73,6 +73,9 @@ export async function POST(req: Request) {
     model,
     system: systemPrompt,
     messages: convertToModelMessages(messages),
+    // ai v5 corta tras el primer paso por defecto (stepCountIs(1)): sin esto, después de
+    // consultar datos con una herramienta el modelo nunca redacta ni crea el elemento.
+    stopWhen: stepCountIs(5),
     tools: {
       queryProjectData: tool({
         description: "Obtener datos reales del proyecto actual: Hallazgos, Documentos, Trabajadores o Resumen General.",

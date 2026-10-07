@@ -28,6 +28,11 @@ export function DashboardLayout({ children, user, project, openFindings }: Dashb
   const [curProject, setCurProject] = useState<DashboardLayoutProps["project"]>(project)
   const pathname = usePathname()
   const showSidebar = !pathname.startsWith("/admin") && !pathname.startsWith("/auth")
+  // El asistente general responde con los datos propios de quien pregunta (hallazgos con su
+  // user_id) y no conoce la obra: dentro de /obra/<id> respondería sin los datos de la obra
+  // (o con los de todas las del dueño), así que ahí no se ofrece. La IA de la obra está en sus
+  // hallazgos y planos (sugerencias con aprobación humana).
+  const assistantAvailable = !/^\/obra\/\d+(?:\/|$)/.test(pathname)
 
   // En rutas /proyectos/[id]/* carga el proyecto activo para mostrar su nombre y código.
   useEffect(() => {
@@ -73,13 +78,13 @@ export function DashboardLayout({ children, user, project, openFindings }: Dashb
       <div className="flex min-w-0 flex-1 flex-col">
         <HeaderClient
           onMenuClick={() => setSidebarOpen(true)}
-          onOpenAI={() => setAiOpen(true)}
+          onOpenAI={assistantAvailable ? () => setAiOpen(true) : undefined}
           user={user}
           project={curProject}
         />
         <main className="flex-1 p-4 md:p-6 lg:p-8">{children}</main>
       </div>
-      <AiAssistantDrawer open={aiOpen} onClose={() => setAiOpen(false)} />
+      {assistantAvailable ? <AiAssistantDrawer open={aiOpen} onClose={() => setAiOpen(false)} /> : null}
     </div>
   )
 }

@@ -32,7 +32,7 @@ export async function POST(req: Request) {
 
   const ai = await getAiSettings()
   if (!ai.ready) {
-    return new Response("Configura tu API Key de Google AI en Configuración para usar el asistente.", {
+    return new Response("Configura la IA (proveedor y API key) en Configuración para usar el asistente.", {
       status: 400,
     })
   }

@@ -11,6 +11,12 @@
  *   de corta duración, para no pasar hasta 25 MB por la función (memoria y
  *   límite de tamaño de respuesta del hosting). El objeto se validó al crear la
  *   capa (tipo declarado y magic bytes) y no se puede sobrescribir.
+ *   La URL firmada es un permiso al portador: dura SIGNED_URL_TTL_S y la
+ *   redirección se cachea aún menos, así que quien sale del equipo o cierra
+ *   sesión deja de ver la lámina en ~2 min. La URL contiene la ruta del objeto:
+ *   esa ruta NO es secreta ni da acceso por sí sola (/api/findings/photo solo
+ *   sirve fotos de hallazgos de un proyecto propio, y createLayer exige un
+ *   permiso de subida propio).
  * - Lámina inline (sin Supabase) o si la firma falla: devuelve los bytes, con el
  *   Content-Type detectado en ellos (solo PNG, JPEG o WebP) y sin "sniffing".
  */
@@ -20,9 +26,12 @@ import { ObraAccessError, ObraValidationError } from "@/lib/obra/access"
 import { getLayerImageSignedUrl, readLayerImage } from "@/lib/obra/server/layers"
 import { parseIntId } from "@/lib/route"
 
-/** Vigencia de la URL firmada; la redirección se cachea menos tiempo para que nunca apunte a una vencida. */
-const SIGNED_URL_TTL_S = 900
-const REDIRECT_MAX_AGE_S = 600
+/**
+ * Vigencia de la URL firmada (corta: no depende de la sesión ni del equipo); la
+ * redirección se cachea menos tiempo para que nunca apunte a una vencida.
+ */
+const SIGNED_URL_TTL_S = 120
+const REDIRECT_MAX_AGE_S = 60
 
 function errorResponse(status: number, message: string) {
   return NextResponse.json(

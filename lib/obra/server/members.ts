@@ -7,13 +7,16 @@
  * - El dueño del proyecto (projects.user_id) es gerente implícito: no está en
  *   obra_members y no se puede agregar, cambiar ni quitar.
  * - Las personas entran al equipo SOLO aceptando una invitación
- *   (lib/obra/server/invitations.ts): nadie queda agregado sin su
- *   consentimiento ni con una contraseña elegida por otro.
+ *   (lib/obra/server/invitations.ts): nadie queda agregado sin aceptar y quien
+ *   crea la cuenta elige su contraseña. El enlace es un token al portador (no
+ *   se verifica el correo): ver el comentario de invitations.ts.
  * - Asignar un rol exige canAssignRole (solo un gerente nombra gerentes).
  * - Solo un gerente puede cambiar o quitar a un miembro gerente.
  * - Nadie se cambia el rol ni se quita a sí mismo.
  * - Al quitar a alguien, sus tareas abiertas quedan sin persona asignada (pero
- *   con su rol, para que la cuadrilla las siga viendo).
+ *   con su rol, para que la cuadrilla las siga viendo) y se revocan las
+ *   invitaciones abiertas que envió. Al bajarle el rol se revocan las que ya
+ *   no podría enviar (revokeInvitationsSentBy).
  */
 import { sql } from "@/lib/db"
 import { ObraAccessError, ObraValidationError, requireProjectPermissionForUser, writeAudit } from "../access"
@@ -170,6 +173,47 @@ async function lockTargetMember(
   return cur
 }
 
+/**
+ * Revoca, en la transacción de quien llama, las invitaciones abiertas que
+ * envió `inviterUserId` en el proyecto y cuyo rol ya no puede otorgar con
+ * `newRole` (null = salió del equipo: todas). Audita cada una con `reason`.
+ * La usan removeMember y updateMemberRole.
+ */
+export async function revokeInvitationsSentBy(
+  q: Queryable,
+  args: {
+    project_id: number
+    inviter_user_id: number
+    new_role: ObraRole | null
+    actor_user_id: number
+    reason: "inviter_removed" | "inviter_role_changed"
+  },
+): Promise<number[]> {
+  const s = asSql(q)
+  const keep = args.new_role ? OBRA_ROLES.filter((r) => canAssignRole(args.new_role, r)) : []
+  const rows = await s<{ id: number; email: string; role: string }[]>`
+    UPDATE obra_invitations SET revoked_at = LOCALTIMESTAMP
+    WHERE project_id = ${args.project_id} AND invited_by = ${args.inviter_user_id}
+      AND accepted_at IS NULL AND revoked_at IS NULL
+      ${keep.length > 0 ? s`AND role NOT IN ${s(keep)}` : s``}
+    RETURNING id, email, role
+  `
+  for (const r of rows) {
+    await writeAudit(
+      {
+        project_id: args.project_id,
+        actor_user_id: args.actor_user_id,
+        action: "invitation.revoked",
+        entity_type: "invitation",
+        entity_id: Number(r.id),
+        details: { email: String(r.email), role: r.role, invited_by: args.inviter_user_id, reason: args.reason },
+      },
+      q,
+    )
+  }
+  return rows.map((r) => Number(r.id))
+}
+
 /** Cambia el rol de un integrante (members.manage + canAssignRole). */
 export async function updateMemberRole(
   userId: number,
@@ -188,6 +232,14 @@ export async function updateMemberRole(
     if (!canAssignRole(access.role, newRole)) throw roleDenied(newRole)
     if (cur.role !== newRole) {
       await s`UPDATE obra_members SET role = ${newRole}, updated_at = CURRENT_TIMESTAMP WHERE id = ${cur.id}`
+      // Sus invitaciones abiertas con un rol que el rol nuevo ya no puede otorgar dejan de servir.
+      const revoked = await revokeInvitationsSentBy(s, {
+        project_id: access.project_id,
+        inviter_user_id: target,
+        new_role: newRole,
+        actor_user_id: userId,
+        reason: "inviter_role_changed",
+      })
       await writeAudit(
         {
           project_id: access.project_id,
@@ -195,7 +247,13 @@ export async function updateMemberRole(
           action: "member.role_changed",
           entity_type: "member",
           entity_id: Number(cur.id),
-          details: { user_id: target, email: cur.email, from: cur.role, to: newRole },
+          details: {
+            user_id: target,
+            email: cur.email,
+            from: cur.role,
+            to: newRole,
+            ...(revoked.length > 0 ? { revoked_invitations: revoked.length, revoked_invitation_ids: revoked.slice(0, 100) } : {}),
+          },
         },
         tx,
       )
@@ -206,11 +264,14 @@ export async function updateMemberRole(
 }
 
 /**
- * Quita a un integrante del equipo (members.manage). En la misma transacción
- * sus tareas abiertas (pendiente / en progreso) del proyecto quedan sin
- * persona asignada: conservan el rol asignado (o toman el que tenía el
- * integrante) para que su cuadrilla las siga viendo. Las hechas y canceladas
- * no se tocan (registro histórico).
+ * Quita a un integrante del equipo (members.manage). En la misma transacción:
+ * - sus tareas abiertas (pendiente / en progreso) del proyecto quedan sin
+ *   persona asignada: conservan el rol asignado (o toman el que tenía el
+ *   integrante) para que su cuadrilla las siga viendo;
+ * - las hechas y canceladas conservan a la persona (registro histórico) y
+ *   reciben su rol si no tenían: si alguien las reabre, setTaskStatus las deja
+ *   sin persona y siguen visibles para ese rol;
+ * - se revocan las invitaciones abiertas que envió.
  */
 export async function removeMember(userId: number, projectId: number, memberUserId: number): Promise<null> {
   const access = await requireProjectPermissionForUser(userId, projectId, "members.manage")
@@ -231,6 +292,21 @@ export async function removeMember(userId: number, projectId: number, memberUser
         AND status IN ('pendiente', 'en_progreso')
       RETURNING id
     `
+    await s`
+      UPDATE obra_tasks
+      SET assigned_role = ${cur.role}, updated_at = CURRENT_TIMESTAMP
+      WHERE project_id = ${access.project_id}
+        AND assigned_user_id = ${target}
+        AND assigned_role IS NULL
+        AND status IN ('hecha', 'cancelada')
+    `
+    const revoked = await revokeInvitationsSentBy(s, {
+      project_id: access.project_id,
+      inviter_user_id: target,
+      new_role: null,
+      actor_user_id: userId,
+      reason: "inviter_removed",
+    })
     await writeAudit(
       {
         project_id: access.project_id,
@@ -244,6 +320,7 @@ export async function removeMember(userId: number, projectId: number, memberUser
           role: cur.role,
           unassigned_tasks: unassigned.length,
           unassigned_task_ids: unassigned.slice(0, 100).map((t) => Number(t.id)),
+          ...(revoked.length > 0 ? { revoked_invitations: revoked.length, revoked_invitation_ids: revoked.slice(0, 100) } : {}),
         },
       },
       tx,

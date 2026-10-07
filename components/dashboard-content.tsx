@@ -338,7 +338,9 @@ export function DashboardContent({ stats, userName, projectName, obraMemberships
 }
 
 function Panel({ children }: { children: React.ReactNode }) {
-  return <div className="rounded-2xl border border-border bg-card p-5">{children}</div>
+  // min-w-0: como ítem de grilla, sin esto un título largo (truncate = nowrap) ensancha la columna
+  // hasta su largo completo y la página se desborda en el celular.
+  return <div className="min-w-0 rounded-2xl border border-border bg-card p-5">{children}</div>
 }
 
 function LegendDot({ color, label }: { color: string; label: string }) {

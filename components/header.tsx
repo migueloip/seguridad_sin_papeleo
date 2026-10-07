@@ -71,15 +71,17 @@ export function Header({ onMenuClick, onOpenAI, project }: HeaderComponentProps)
       {/* Buscador global (Ctrl+K) */}
       <GlobalSearch />
 
-      {/* Asistente IA */}
-      <button
-        type="button"
-        onClick={onOpenAI}
-        className="flex h-10 items-center gap-2 rounded-[11px] bg-primary px-[15px] text-[13px] font-semibold text-white transition-colors hover:bg-[#241f17]"
-      >
-        <Sparkles className="h-4 w-4 text-brand" />
-        <span className="hidden sm:inline">Asistente IA</span>
-      </button>
+      {/* Asistente IA (no se ofrece donde no aplica: ver DashboardLayout) */}
+      {onOpenAI ? (
+        <button
+          type="button"
+          onClick={onOpenAI}
+          className="flex h-10 items-center gap-2 rounded-[11px] bg-primary px-[15px] text-[13px] font-semibold text-white transition-colors hover:bg-[#241f17]"
+        >
+          <Sparkles className="h-4 w-4 text-brand" />
+          <span className="hidden sm:inline">Asistente IA</span>
+        </button>
+      ) : null}
 
       {/* Notificaciones */}
       <DropdownMenu>

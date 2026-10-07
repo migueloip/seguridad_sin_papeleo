@@ -17,6 +17,17 @@
  *   coincidir) o creando su cuenta con SU contraseña. La aceptación bloquea la
  *   fila (SELECT … FOR UPDATE): dos envíos simultáneos dejan una sola cuenta y
  *   una sola membresía.
+ * - El enlace es un TOKEN AL PORTADOR: la app no verifica el correo (no envía
+ *   correos de confirmación). Si el correo invitado ya tiene cuenta, solo esa
+ *   cuenta puede aceptar (y updateProfile no deja tomar un correo con una
+ *   invitación pendiente, ver hasOpenInvitationForEmail); si no la tiene,
+ *   quien tenga el enlace crea la cuenta de ese correo. Por eso se comparte
+ *   solo con la persona, vence en INVITATION_TTL_DAYS días, sirve una vez y
+ *   se revoca en un clic si se filtra.
+ * - La invitación vale mientras quien la envió pueda otorgar ese rol: al
+ *   quitarlo del equipo o bajarle el rol se revocan sus invitaciones abiertas
+ *   (revokeInvitationsSentBy en members.ts) y, al aceptar, se revalida con la fila bloqueada
+ *   (inviterStillAllowed); si no, se anula y no se acepta.
  *
  * Estado (calculado en SQL contra la hora de la BD, invitationStatusSql):
  * aceptada → revocada (anulada a mano antes de vencer) → vencida (pasó
@@ -77,6 +88,8 @@ const ALREADY_ACCEPTED = "Esta invitación ya fue aceptada."
 const REVOKED = "Esta invitación fue revocada. Pide a quien te invitó un enlace nuevo."
 const EXPIRED = "Esta invitación venció. Pide a quien te invitó que genere un enlace nuevo."
 const ACCOUNT_EXISTS = "Ya existe una cuenta con este correo: inicia sesión para aceptar la invitación."
+const INVITER_LOST =
+  "Esta invitación ya no es válida: quien la envió ya no puede sumar personas con ese rol. Pide un enlace nuevo al equipo de la obra."
 
 // ---------------------------------------------------------------------------
 // Token y enlace
@@ -249,6 +262,67 @@ function assertAcceptable(inv: LockedInvitation): void {
   if (inv.status === "aceptada") throw new ObraValidationError(ALREADY_ACCEPTED)
   if (inv.status === "revocada") throw new ObraValidationError(REVOKED)
   if (inv.status !== "pendiente") throw new ObraValidationError(EXPIRED)
+}
+
+/**
+ * ¿Puede quien invitó seguir otorgando ese rol? Sí si es el dueño, o un
+ * integrante ACTUAL cuyo rol cumple canAssignRole(rol, rol invitado) (que ya
+ * exige members.manage). Sin invitador (cuenta borrada) → no. Lectura simple,
+ * sin bloquear la fila del integrante: removeMember bloquea integrante →
+ * invitación y aceptar bloquea invitación → (lee) integrante; bloquear aquí
+ * podría interbloquearse.
+ */
+async function inviterStillAllowed(q: Queryable, inv: LockedInvitation): Promise<boolean> {
+  if (inv.invited_by == null) return false
+  if (inv.invited_by === inv.owner_user_id) return true
+  const s = asSql(q)
+  const rows = await s<{ role: string }[]>`
+    SELECT role FROM obra_members WHERE project_id = ${inv.project_id} AND user_id = ${inv.invited_by} LIMIT 1
+  `
+  const role = rows[0]?.role
+  if (!role || !(OBRA_ROLES as readonly string[]).includes(role)) return false
+  return canAssignRole(role as ObraRole, inv.role)
+}
+
+/** Anula (revoked_at) una invitación abierta cuyo invitador ya no puede otorgar su rol, y lo audita. */
+async function revokeForLostInviter(q: Queryable, inv: LockedInvitation): Promise<void> {
+  const s = asSql(q)
+  const upd = await s<{ id: number }[]>`
+    UPDATE obra_invitations SET revoked_at = LOCALTIMESTAMP
+    WHERE id = ${inv.id} AND accepted_at IS NULL AND revoked_at IS NULL
+    RETURNING id
+  `
+  if (!upd[0]) return
+  await writeAudit(
+    {
+      project_id: inv.project_id,
+      actor_user_id: null,
+      action: "invitation.revoked",
+      entity_type: "invitation",
+      entity_id: inv.id,
+      details: { email: inv.email, role: inv.role, invited_by: inv.invited_by, reason: "inviter_lost_permission" },
+    },
+    q,
+  )
+}
+
+/**
+ * ¿Hay una invitación pendiente (sin aceptar, revocar ni vencer) para este
+ * correo? updateProfile la usa para que nadie se ponga el correo de otra
+ * persona invitada y acepte con su propia cuenta. Si la migración 006 no está
+ * aplicada (sin tabla), no hay invitaciones.
+ */
+export async function hasOpenInvitationForEmail(email: string): Promise<boolean> {
+  const e = typeof email === "string" ? email.trim().toLowerCase() : ""
+  if (!e) return false
+  const t = await sql<{ t: string | null }[]>`SELECT to_regclass('obra_invitations')::text AS t`
+  if (!t[0]?.t) return false
+  const rows = await sql<{ n: number }[]>`
+    SELECT 1 AS n FROM obra_invitations
+    WHERE lower(email) = ${e} AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > LOCALTIMESTAMP
+    LIMIT 1
+  `
+  return Boolean(rows[0])
 }
 
 async function isInTeam(q: Queryable, inv: LockedInvitation, userId: number): Promise<boolean> {
@@ -504,8 +578,11 @@ export async function listInvitations(userId: number, projectId: number): Promis
 
 /**
  * Vista pública de una invitación (sin sesión). null si el token no tiene
- * formato válido o no existe. Devuelve el estado aunque esté aceptada,
- * revocada o vencida (la página lo explica). Sin ids internos.
+ * formato válido o no existe. Solo una invitación PENDIENTE muestra sus datos
+ * (obra, correo, nombre, rol, quién invita y vencimiento): una aceptada,
+ * revocada o vencida devuelve solo su estado, para que un enlace viejo
+ * (reenviado, en un historial o en logs) no siga exponiendo datos personales.
+ * Sin ids internos.
  */
 export async function getInvitationPreview(token: string): Promise<InvitationPreview | null> {
   if (!isInvitationToken(token)) return null
@@ -533,13 +610,15 @@ export async function getInvitationPreview(token: string): Promise<InvitationPre
   `
   const r = rows[0]
   if (!r) return null
+  const status = (INVITATION_STATUSES as readonly string[]).includes(r.status) ? (r.status as InvitationStatus) : "vencida"
+  if (status === "aceptada" || status === "revocada" || status === "vencida") return { status }
   return {
+    status,
     project_name: String(r.project_name),
     role: (OBRA_ROLES as readonly string[]).includes(r.role) ? (r.role as ObraRole) : "visita",
     email: String(r.email),
     name: r.name ?? null,
     inviter_name: r.inviter_name ?? null,
-    status: (INVITATION_STATUSES as readonly string[]).includes(r.status) ? (r.status as InvitationStatus) : "vencida",
     expires_at: toIso(r.expires_at),
   }
 }
@@ -556,7 +635,7 @@ export async function acceptInvitationAsUser(userId: number, token: string): Pro
   await ensureObraSchema()
   const tokenHash = hashInvitationToken(token)
 
-  return (await sql.begin(async (tx) => {
+  const out = (await sql.begin(async (tx) => {
     const s = asSql(tx)
     const inv = await loadInvitation(s, { tokenHash }, true)
     if (!inv) throw new ObraAccessError(404, INVALID_LINK)
@@ -570,9 +649,16 @@ export async function acceptInvitationAsUser(userId: number, token: string): Pro
     if (String(u[0].email).trim().toLowerCase() !== inv.email) {
       throw new ObraValidationError(`Esta invitación es para otro correo. Cierra sesión e ingresa con ${inv.email}.`)
     }
+    // Se anula (y se confirma la anulación) en vez de lanzar aquí, que desharía el cambio.
+    if (!(await inviterStillAllowed(s, inv))) {
+      await revokeForLostInviter(s, inv)
+      return null
+    }
     await joinTeam(s, inv, uid)
     return { project_id: inv.project_id }
-  })) as { project_id: number }
+  })) as { project_id: number } | null
+  if (!out) throw new ObraValidationError(INVITER_LOST)
+  return out
 }
 
 /**
@@ -603,14 +689,19 @@ export async function acceptInvitationWithNewAccount(
   assertAcceptable(pre)
   const exists = await sql<{ n: number }[]>`SELECT 1 AS n FROM users WHERE lower(email) = ${pre.email} LIMIT 1`
   if (exists[0]) throw new ObraValidationError(ACCOUNT_EXISTS)
-  const passwordHash = await bcrypt.hash(password, 10)
+  // Sin bcrypt si quien invitó ya no puede otorgar el rol (se anula con la fila bloqueada, abajo).
+  const passwordHash = (await inviterStillAllowed(sql, pre)) ? await bcrypt.hash(password, 10) : null
 
-  return (await sql.begin(async (tx) => {
+  const out = (await sql.begin(async (tx) => {
     const s = asSql(tx)
     // Se revalida todo con la fila bloqueada: un segundo envío simultáneo espera aquí y ve "ya aceptada".
     const inv = await loadInvitation(s, { tokenHash }, true)
     if (!inv) throw new ObraAccessError(404, INVALID_LINK)
     assertAcceptable(inv)
+    if (!passwordHash || !(await inviterStillAllowed(s, inv))) {
+      await revokeForLostInviter(s, inv)
+      return null
+    }
     const again = await s<{ n: number }[]>`SELECT 1 AS n FROM users WHERE lower(email) = ${inv.email} LIMIT 1`
     if (again[0]) throw new ObraValidationError(ACCOUNT_EXISTS)
     const ins = await s<{ id: number }[]>`
@@ -623,5 +714,7 @@ export async function acceptInvitationWithNewAccount(
     const newUserId = Number(ins[0].id)
     await joinTeam(s, inv, newUserId)
     return { user_id: newUserId, project_id: inv.project_id }
-  })) as { user_id: number; project_id: number }
+  })) as { user_id: number; project_id: number } | null
+  if (!out) throw new ObraValidationError(INVITER_LOST)
+  return out
 }

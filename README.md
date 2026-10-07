@@ -49,7 +49,8 @@ La aplicación quedará disponible en el entorno de desarrollo configurado.
 Módulo para coordinar toda la obra, no solo prevención (ruta /obra). Detalle en docs/PLAN-OBRA-INTEGRAL.md.
 
 - Equipo por roles: gerente (dueño del proyecto), jefe de obra, prevencionista, supervisor, trabajador y visita/ITO. Cada uno ve y hace solo lo que permite su rol.
-- Planos por especialidad como capas por nivel (arquitectura, alcantarillado, eléctrico, agua, gas…), desde imagen, PDF o DXF, alineables entre sí.
+- Invitaciones por enlace: quien gestiona el equipo invita por correo con un rol y comparte el enlace (/invitacion/...), que vence a los 7 días y se puede regenerar o revocar. La persona acepta con su cuenta o crea una con su propia contraseña.
+- Planos por especialidad como capas por nivel (arquitectura, alcantarillado, eléctrico, agua, gas…), desde imagen, PDF o DXF, alineables entre sí. Las láminas grandes (hasta 25 MB) se suben directo a Supabase Storage con una URL firmada.
 - Hallazgos ubicados en el plano: el sistema calcula qué redes o elementos pasan cerca (p. ej. "a 1,2 m pasa el colector Ø160") y propone tareas.
 - Toda sugerencia (de reglas o de IA) queda pendiente hasta que una persona con el rol adecuado la aprueba, la edita o la descarta. Todo queda en la auditoría.
 - Tareas, revisiones programadas y una API móvil para que el trabajador vea y cierre sus tareas en terreno.
@@ -57,11 +58,11 @@ Módulo para coordinar toda la obra, no solo prevención (ruta /obra). Detalle e
 Cómo empezar:
 
 1. Con la app corriendo, entra a "Obra integral" en el menú lateral (o en /obra). La migración 006 se aplica sola al primer uso; para aplicarla a mano usa POST /api/admin/migrate?scope=obra o scripts/006-obra-integral.sql (y define OBRA_AUTO_MIGRATE=0).
-2. Elige una obra, agrega a tu equipo en "Equipo" y sube los planos en "Planos".
+2. Elige una obra, invita a tu equipo en "Equipo" y sube los planos en "Planos". Para que los enlaces de invitación usen tu dominio público, define APP_URL (por ejemplo https://tu-app.netlify.app); si no, se usa la URL de Netlify o la del navegador.
 3. Para probar con datos de ejemplo (el correo debe ser de un usuario ya registrado):
 
    DATABASE_URL=postgres://... npm run seed:obra-demo -- --owner-email tu@correo.cl
 
-   Crea la obra "Edificio Demo Los Aromos" con planos, un hallazgo junto al colector y usuarios demo (*.demo@losaromos.test; cada cuenta recibe una clave aleatoria que el script muestra una sola vez). No borra datos existentes. Solo corre contra una BD local, salvo que agregues --allow-remote.
+   Crea la obra "Edificio Demo Los Aromos" con planos, un hallazgo junto al colector con sus sugerencias de tarea pendientes de aprobación, y usuarios demo (*.demo@losaromos.test; cada cuenta recibe una clave aleatoria que el script muestra una sola vez). No borra datos existentes. Solo corre contra una BD local, salvo que agregues --allow-remote.
 
-Pruebas del módulo: npm run test (unitarias) y npm run test:obra:int (integración; necesita un Postgres local, ver AGENTS.md).
+Pruebas del módulo: npm run test (unitarias), npm run test:obra:int (integración; necesita un Postgres local, ver AGENTS.md) y npm run typecheck (tipos; npm run build también los verifica).

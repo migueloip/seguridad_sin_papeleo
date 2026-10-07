@@ -7,10 +7,16 @@
  *   Supabase) y se sirve solo por /api/obra/layers/[id]/image con control de
  *   acceso. image_data nunca viaja en los DTO.
  * - Láminas grandes: createLayerUploadTicket firma una subida directa del
- *   navegador al bucket (obra/<proyecto>/uploads/<uuid>.<ext>) y createLayer
- *   recibe `image_upload` con esa ruta; el servidor verifica el objeto (que
- *   sea del proyecto, exista, pese ≤ 25 MB y sea PNG/JPEG/WebP real) antes de
- *   guardarla, y una misma ruta no se puede usar en dos capas.
+ *   navegador al bucket (obra/<proyecto>/uploads/<uuid>.<ext>), con cuota por
+ *   persona y por obra, y la registra en obra_layer_uploads. createLayer
+ *   recibe `image_upload` con esa ruta: exige un permiso PROPIO sin usar, y
+ *   verifica el objeto (que sea del proyecto, exista, pese ≤ 25 MB y sea
+ *   PNG/JPEG/WebP real) antes de guardarla; una misma ruta no se puede usar en
+ *   dos capas. Si la capa no se crea por un error de validación, el objeto se
+ *   borra; los de permisos vencidos que nunca quedaron en una capa los borra
+ *   sweepAbandonedLayerUploads (al pedir cada permiso nuevo).
+ * - La lámina subida directo puede traer una copia reducida (≤ 3000 px) que
+ *   es la que se envía a la IA de visión (analysis_image_path).
  * - El borrado es lógico (deleted_at): los elementos y pines quedan en la BD
  *   pero dejan de listarse.
  */
@@ -49,9 +55,11 @@ import {
   type Queryable,
 } from "./mappers"
 import {
+  AI_IMAGE_MAX_BYTES,
   createObraSignedDownloadUrl,
   decodeImageDataUrl,
   deleteObraObject,
+  deleteObraObjects,
   formatMegabytes,
   isLayerUploadPath,
   isSupabaseStorageEnabled,
@@ -61,9 +69,12 @@ import {
   PLAN_INLINE_MAX_BYTES,
   PLAN_UPLOAD_MAX_BYTES,
   readStoredImage,
+  SIGNED_UPLOAD_EXPIRES_IN_S,
   signObraUpload,
+  storeLayerAnalysisImage,
   storeLayerImage,
   verifyUploadedObraImage,
+  type DecodedImage,
   type ImageMime,
 } from "./storage"
 
@@ -91,10 +102,26 @@ const NOT_FOUND = "Capa no encontrada."
  */
 const LAYER_UPLOAD_LOCK_NS = 7262008
 
+/**
+ * Cuota de permisos de subida directa (cada uno permite subir hasta 25 MB):
+ * por persona y hora (en todas sus obras) y por obra y día. Límite blando,
+ * como assertAiQuota.
+ */
+export const LAYER_UPLOAD_QUOTA = { perUserHour: 30, perProjectDay: 150 } as const
+
+/** Permisos vencidos (2 h) que se limpian por llamada a sweepAbandonedLayerUploads. */
+const UPLOAD_SWEEP_BATCH = 20
+
+/** Mismo mensaje si el objeto no existe o la ruta no tiene un permiso propio sin usar (no revela cuál). */
+const UPLOAD_NOT_FOUND = "No se encontró la imagen subida. Vuelve a subir el archivo."
+
 export type LayerImageInput = { data_url: string; width_px: number; height_px: number }
 
-/** Lámina ya subida directo al bucket con un LayerUploadTicket. */
-export type LayerImageUploadInput = { path: string; width_px: number; height_px: number }
+/**
+ * Lámina ya subida directo al bucket con un LayerUploadTicket. `analysis_data_url`
+ * (opcional): copia reducida (data URL de ≤ AI_IMAGE_MAX_BYTES) para la IA.
+ */
+export type LayerImageUploadInput = { path: string; width_px: number; height_px: number; analysis_data_url?: string | null }
 
 export type LayerUploadTicketInput = { mime: string; size_bytes: number }
 
@@ -168,9 +195,22 @@ function normWidth(v: unknown): number {
 
 function normAspect(v: unknown): number {
   if (!finite(v) || v <= 0 || v > LAYER_LIMITS.aspectMax) {
-    throw new ObraValidationError("La proporción alto/ancho de la lámina debe ser un número mayor que 0.")
+    throw new ObraValidationError(
+      `La proporción alto/ancho de la lámina debe ser mayor que 0 y como máximo ${LAYER_LIMITS.aspectMax}.`,
+    )
   }
   return v
+}
+
+/** Proporción alto/ancho de una imagen (lámina): mismo rango que normAspect, con un mensaje sobre la imagen. */
+function imageAspect(widthPx: number, heightPx: number): number {
+  const a = heightPx / widthPx
+  if (!finite(a) || a <= 0 || a > LAYER_LIMITS.aspectMax) {
+    throw new ObraValidationError(
+      `La lámina es demasiado angosta: su alto no puede superar ${LAYER_LIMITS.aspectMax} veces su ancho. Recórtala o usa otra.`,
+    )
+  }
+  return a
 }
 
 function normOffset(v: unknown, label: string): number {
@@ -266,8 +306,10 @@ function normImage(v: unknown): NormalizedImage | null {
   return { bytes: img.bytes, mime: img.mime, ext: img.ext, width_px: width, height_px: height }
 }
 
+type NormalizedUpload = { path: string; width_px: number; height_px: number; analysis: DecodedImage | null }
+
 /** Valida la referencia a una lámina subida directo: ruta exacta del MISMO proyecto y dimensiones declaradas. */
-function normImageUpload(v: unknown, projectId: number): LayerImageUploadInput {
+function normImageUpload(v: unknown, projectId: number): NormalizedUpload {
   const o = requireObject(v, "La imagen subida de la capa no es válida.")
   if (!isSupabaseStorageEnabled()) {
     throw new ObraValidationError("La subida directa de planos requiere Supabase Storage, que no está configurado.")
@@ -278,14 +320,137 @@ function normImageUpload(v: unknown, projectId: number): LayerImageUploadInput {
   const width = normPx(o.width_px)
   const height = normPx(o.height_px)
   if (width == null || height == null) throw new ObraValidationError("Faltan las dimensiones de la imagen subida.")
-  return { path: o.path, width_px: width, height_px: height }
+  let analysis: DecodedImage | null = null
+  if (o.analysis_data_url !== undefined && o.analysis_data_url !== null) {
+    analysis = decodeImageDataUrl(o.analysis_data_url, "La copia reducida de la lámina")
+    if (analysis.bytes.length > AI_IMAGE_MAX_BYTES) {
+      throw new ObraValidationError(
+        `La copia reducida de la lámina supera el máximo de ${formatMegabytes(AI_IMAGE_MAX_BYTES)}.`,
+      )
+    }
+  }
+  return { path: o.path, width_px: width, height_px: height, analysis }
+}
+
+/** ¿Alguna capa (borrada o no) usa esta lámina subida? */
+async function isUploadUsed(q: Queryable, path: string): Promise<boolean> {
+  const s = asSql(q)
+  const rows = await s<{ id: number }[]>`SELECT id FROM obra_plan_layers WHERE image_path = ${path} LIMIT 1`
+  return Boolean(rows[0])
 }
 
 /** Una lámina subida solo puede quedar en una capa (borrada o no). */
 async function assertUploadUnused(q: Queryable, path: string): Promise<void> {
+  if (await isUploadUsed(q, path)) {
+    throw new ObraValidationError("Esa imagen subida ya se usó en otra capa. Vuelve a subir el archivo.")
+  }
+}
+
+type UploadTicketRow = { id: number; used_at: Date | null; discarded_at: Date | null }
+
+/**
+ * Permiso de subida de ESTA persona para esa ruta y obra, sin usar ni
+ * descartado (o ObraValidationError genérico). `lock` = FOR UPDATE (solo
+ * dentro de sql.begin): así la limpieza (SKIP LOCKED) no lo descarta mientras
+ * se crea la capa.
+ */
+async function requireOwnUploadTicket(
+  q: Queryable,
+  access: ProjectAccess,
+  path: string,
+  lock: boolean,
+): Promise<number> {
   const s = asSql(q)
-  const rows = await s<{ id: number }[]>`SELECT id FROM obra_plan_layers WHERE image_path = ${path} LIMIT 1`
-  if (rows[0]) throw new ObraValidationError("Esa imagen subida ya se usó en otra capa. Vuelve a subir el archivo.")
+  const rows = await s<UploadTicketRow[]>`
+    SELECT id, used_at, discarded_at FROM obra_layer_uploads
+    WHERE path = ${path} AND project_id = ${access.project_id} AND user_id = ${access.user_id}
+    ${lock ? s`FOR UPDATE` : s``}
+  `
+  const t = rows[0]
+  if (!t || t.used_at != null || t.discarded_at != null) throw new ObraValidationError(UPLOAD_NOT_FOUND)
+  return Number(t.id)
+}
+
+/**
+ * Descarta una lámina subida directo que no llegó a una capa (p.ej. la capa no
+ * se creó por un error de validación): marca SU permiso como descartado y
+ * borra el objeto. Nunca toca un permiso ajeno ni una ruta que alguna capa
+ * use (mismo advisory lock que createLayer). Mejor esfuerzo.
+ */
+async function discardOwnUpload(access: ProjectAccess, path: string): Promise<void> {
+  try {
+    const discarded = (await sql.begin(async (tx) => {
+      const s = asSql(tx)
+      await s`SELECT pg_advisory_xact_lock(${LAYER_UPLOAD_LOCK_NS}::int, ${access.project_id}::int)`
+      if (await isUploadUsed(s, path)) return false
+      const rows = await s<{ id: number }[]>`
+        UPDATE obra_layer_uploads SET discarded_at = LOCALTIMESTAMP
+        WHERE path = ${path} AND project_id = ${access.project_id} AND user_id = ${access.user_id}
+          AND used_at IS NULL AND discarded_at IS NULL
+        RETURNING id
+      `
+      return Boolean(rows[0])
+    })) as boolean
+    if (discarded) await deleteObraObject(path)
+  } catch (e) {
+    console.error("[obra/layers] no se pudo descartar la lámina subida", e)
+  }
+}
+
+/**
+ * Borra del bucket las láminas de permisos vencidos hace más de una hora que
+ * no quedaron en ninguna capa (subida abandonada, diálogo cerrado, capa que
+ * falló), de cualquier obra, de a UPLOAD_SWEEP_BATCH. Se llama al pedir un
+ * permiso nuevo; mejor esfuerzo. Devuelve cuántos objetos descartó.
+ */
+export async function sweepAbandonedLayerUploads(limit: number = UPLOAD_SWEEP_BATCH): Promise<number> {
+  if (!isSupabaseStorageEnabled()) return 0
+  const paths = (await sql.begin(async (tx) => {
+    const s = asSql(tx)
+    const rows = await s<{ id: number; path: string }[]>`
+      SELECT id, path FROM obra_layer_uploads
+      WHERE used_at IS NULL AND discarded_at IS NULL AND expires_at < LOCALTIMESTAMP - interval '1 hour'
+      ORDER BY expires_at
+      LIMIT ${Math.max(1, Math.min(100, Math.floor(limit)))}
+      FOR UPDATE SKIP LOCKED
+    `
+    if (rows.length === 0) return []
+    const used = await s<{ image_path: string }[]>`
+      SELECT image_path FROM obra_plan_layers WHERE image_path IN ${s(rows.map((r) => r.path))}
+    `
+    const usedPaths = new Set(used.map((r) => r.image_path))
+    const keep = rows.filter((r) => usedPaths.has(r.path)).map((r) => Number(r.id))
+    const drop = rows.filter((r) => !usedPaths.has(r.path))
+    if (keep.length > 0) await s`UPDATE obra_layer_uploads SET used_at = LOCALTIMESTAMP WHERE id IN ${s(keep)}`
+    if (drop.length > 0) {
+      await s`UPDATE obra_layer_uploads SET discarded_at = LOCALTIMESTAMP WHERE id IN ${s(drop.map((r) => Number(r.id)))}`
+    }
+    return drop.map((r) => r.path)
+  })) as string[]
+  if (paths.length > 0) await deleteObraObjects(paths)
+  return paths.length
+}
+
+/** Cuota de permisos de subida (LAYER_UPLOAD_QUOTA) o ObraValidationError. */
+async function assertUploadQuota(access: ProjectAccess): Promise<void> {
+  const rows = await sql<{ user_hour: number; project_day: number }[]>`
+    SELECT
+      (SELECT COUNT(*) FROM obra_layer_uploads
+        WHERE user_id = ${access.user_id} AND created_at > LOCALTIMESTAMP - interval '1 hour')::int AS user_hour,
+      (SELECT COUNT(*) FROM obra_layer_uploads
+        WHERE project_id = ${access.project_id} AND created_at > LOCALTIMESTAMP - interval '1 day')::int AS project_day
+  `
+  const r = rows[0]
+  if (Number(r?.user_hour ?? 0) >= LAYER_UPLOAD_QUOTA.perUserHour) {
+    throw new ObraValidationError(
+      `Alcanzaste el máximo de ${LAYER_UPLOAD_QUOTA.perUserHour} subidas de láminas grandes por hora. Intenta de nuevo más tarde.`,
+    )
+  }
+  if (Number(r?.project_day ?? 0) >= LAYER_UPLOAD_QUOTA.perProjectDay) {
+    throw new ObraValidationError(
+      `Esta obra alcanzó el máximo diario de ${LAYER_UPLOAD_QUOTA.perProjectDay} subidas de láminas grandes. Intenta de nuevo mañana.`,
+    )
+  }
 }
 
 /** Mensaje cuando no hay Supabase Storage: indica el tamaño que sí cabe inline. */
@@ -347,9 +512,10 @@ export async function listLayers(userId: number, projectId: number): Promise<Pla
 /**
  * Permiso firmado (plans.manage) para que el navegador suba una lámina grande
  * DIRECTO al bucket privado, sin pasar el archivo por la server action. Solo
- * con Supabase Storage configurado; PNG, JPEG o WebP de hasta 25 MB. La ruta
- * (obra/<proyecto>/uploads/<uuid>.<ext>) se usa después en
- * createLayer({ image_upload: { path, width_px, height_px } }).
+ * con Supabase Storage configurado; PNG, JPEG o WebP de hasta 25 MB; con
+ * cuota (LAYER_UPLOAD_QUOTA). La ruta (obra/<proyecto>/uploads/<uuid>.<ext>)
+ * queda registrada a nombre de quien la pidió y se usa después, por esa misma
+ * persona, en createLayer({ image_upload: { path, width_px, height_px } }).
  */
 export async function createLayerUploadTicket(
   userId: number,
@@ -370,8 +536,29 @@ export async function createLayerUploadTicket(
       `La lámina supera el máximo de ${formatMegabytes(PLAN_UPLOAD_MAX_BYTES)}. Exporta solo la lámina necesaria o con menor resolución.`,
     )
   }
+  await assertUploadQuota(access)
+  try {
+    await sweepAbandonedLayerUploads()
+  } catch (e) {
+    console.error("[obra/layers] limpieza de subidas abandonadas", e)
+  }
   const path = newLayerUploadPath(access.project_id, mime)
-  const signed = await signObraUpload(path)
+  const ins = await sql<{ id: number }[]>`
+    INSERT INTO obra_layer_uploads (project_id, user_id, path, mime_type, size_bytes, expires_at)
+    VALUES (
+      ${access.project_id}, ${userId}, ${path}, ${mime}, ${size},
+      LOCALTIMESTAMP + make_interval(secs => ${SIGNED_UPLOAD_EXPIRES_IN_S}::int)
+    )
+    RETURNING id
+  `
+  let signed: Awaited<ReturnType<typeof signObraUpload>>
+  try {
+    signed = await signObraUpload(path)
+  } catch (e) {
+    // Sin firma no hay subida posible: el permiso no cuenta para la cuota.
+    await sql`DELETE FROM obra_layer_uploads WHERE id = ${Number(ins[0].id)}`.catch(() => undefined)
+    throw e
+  }
   return {
     path,
     upload_url: signed.upload_url,
@@ -408,117 +595,148 @@ export async function createLayer(userId: number, projectId: number, input: Crea
   const cadOrigin = normCadOrigin(o.cad_origin)
 
   // Lámina subida directo: antes de tocar el objeto se comprueba que ninguna capa lo use
-  // (verifyUploadedObraImage borra los archivos inválidos y no debe borrar la imagen de otra capa).
-  let uploaded: { path: string; mime: ImageMime; size: number; width_px: number; height_px: number } | null = null
+  // (verifyUploadedObraImage borra los archivos inválidos y no debe borrar la imagen de otra capa)
+  // y que la ruta tenga un permiso de subida de ESTA persona sin usar.
   if (upload) {
     await assertUploadUnused(sql, upload.path)
-    const v = await verifyUploadedObraImage(upload.path, PLAN_UPLOAD_MAX_BYTES)
-    // Las dimensiones reales del archivo mandan sobre las declaradas.
-    uploaded = {
-      path: upload.path,
-      mime: v.mime,
-      size: v.size,
-      width_px: v.width_px ?? upload.width_px,
-      height_px: v.height_px ?? upload.height_px,
-    }
+    await requireOwnUploadTicket(sql, access, upload.path, false)
   }
-  const picture = image
-    ? { mime: image.mime, width_px: image.width_px, height_px: image.height_px, bytes: image.bytes.length }
-    : uploaded
-      ? { mime: uploaded.mime, width_px: uploaded.width_px, height_px: uploaded.height_px, bytes: uploaded.size }
-      : null
-  let aspect: number
-  if (picture) aspect = picture.height_px / picture.width_px
-  else aspect = o.aspect === undefined || o.aspect === null ? DEFAULT_FRAME.aspect : normAspect(o.aspect)
-  aspect = normAspect(aspect)
-
-  // Se reserva el id antes de subir la imagen: así la subida (red) ocurre fuera
-  // de la transacción y la ruta del objeto lleva el id de la capa.
-  const seq = await sql<{ id: number }[]>`SELECT nextval(pg_get_serial_sequence('obra_plan_layers', 'id'))::int AS id`
-  const layerId = Number(seq[0].id)
-  const stored = image
-    ? await storeLayerImage(access.project_id, layerId, image)
-    : { image_path: uploaded?.path ?? null, image_data: null }
-  // Solo se limpia el objeto que esta llamada subió: la lámina subida directo se conserva si la
-  // transacción falla (se puede reintentar con la misma ruta, y podría ser de otra capa concurrente).
-  const ownedPath = image ? stored.image_path : null
-
+  if (image) imageAspect(image.width_px, image.height_px)
   try {
-    return (await sql.begin(async (tx) => {
-      const s = asSql(tx)
-      if (uploaded) {
-        await s`SELECT pg_advisory_xact_lock(${LAYER_UPLOAD_LOCK_NS}::int, ${access.project_id}::int)`
-        await assertUploadUnused(s, uploaded.path)
+    // Con las dimensiones declaradas, antes de leer el objeto (las reales se revisan otra vez).
+    if (upload) imageAspect(upload.width_px, upload.height_px)
+    return await createLayerWithImage()
+  } catch (e) {
+    // La lámina subida no llegó a una capa por un error de validación: se descarta (la siguiente
+    // vez se sube de nuevo). Otros errores (red, BD) la dejan para reintentar con la misma ruta;
+    // si nunca se usa, la borra sweepAbandonedLayerUploads.
+    if (upload && e instanceof ObraValidationError) await discardOwnUpload(access, upload.path)
+    throw e
+  }
+
+  async function createLayerWithImage(): Promise<PlanLayer> {
+    let uploaded: { path: string; mime: ImageMime; size: number; width_px: number; height_px: number } | null = null
+    if (upload) {
+      const v = await verifyUploadedObraImage(upload.path, PLAN_UPLOAD_MAX_BYTES)
+      // Las dimensiones reales del archivo mandan sobre las declaradas.
+      uploaded = {
+        path: upload.path,
+        mime: v.mime,
+        size: v.size,
+        width_px: v.width_px ?? upload.width_px,
+        height_px: v.height_px ?? upload.height_px,
       }
-      let frame = { offset_x_m: 0, offset_y_m: 0, rotation_deg: 0 }
-      let alignedWith: number | null = null
-      if (cadOrigin) {
-        const refs = await s<
-          { id: number; width_m: number; offset_x_m: number; offset_y_m: number; rotation_deg: number; cad_origin: unknown }[]
-        >`
-          SELECT id, width_m, offset_x_m, offset_y_m, rotation_deg, cad_origin
-          FROM obra_plan_layers
-          WHERE project_id = ${access.project_id} AND level = ${level} AND deleted_at IS NULL AND cad_origin IS NOT NULL
-          ORDER BY created_at ASC, id ASC
-          LIMIT 1
-        `
-        const refCad = refs[0] ? parseCadOrigin(refs[0].cad_origin) : null
-        if (refs[0] && refCad) {
-          const aligned = alignCadFrame(cadOrigin, widthM, {
-            cad: refCad,
-            frame: {
-              width_m: Number(refs[0].width_m),
-              offset_x_m: Number(refs[0].offset_x_m),
-              offset_y_m: Number(refs[0].offset_y_m),
-              rotation_deg: Number(refs[0].rotation_deg),
-            },
-          })
-          if (aligned) {
-            frame = aligned
-            alignedWith = Number(refs[0].id)
+    }
+    const picture = image
+      ? { mime: image.mime, width_px: image.width_px, height_px: image.height_px, bytes: image.bytes.length }
+      : uploaded
+        ? { mime: uploaded.mime, width_px: uploaded.width_px, height_px: uploaded.height_px, bytes: uploaded.size }
+        : null
+    const aspect = picture
+      ? imageAspect(picture.width_px, picture.height_px)
+      : o.aspect === undefined || o.aspect === null
+        ? DEFAULT_FRAME.aspect
+        : normAspect(o.aspect)
+
+    // Se reserva el id antes de subir la imagen: así la subida (red) ocurre fuera
+    // de la transacción y la ruta del objeto lleva el id de la capa.
+    const seq = await sql<{ id: number }[]>`SELECT nextval(pg_get_serial_sequence('obra_plan_layers', 'id'))::int AS id`
+    const layerId = Number(seq[0].id)
+    const stored = image
+      ? await storeLayerImage(access.project_id, layerId, image)
+      : { image_path: uploaded?.path ?? null, image_data: null }
+    // Solo se limpian los objetos que esta llamada subió (la lámina inline y la copia para la IA):
+    // la lámina subida directo se maneja aparte (ver arriba).
+    const ownedPaths: string[] = image && stored.image_path ? [stored.image_path] : []
+    let analysisPath: string | null = null
+
+    try {
+      if (uploaded && upload?.analysis) {
+        analysisPath = await storeLayerAnalysisImage(access.project_id, layerId, upload.analysis)
+        ownedPaths.push(analysisPath)
+      }
+      return (await sql.begin(async (tx) => {
+        const s = asSql(tx)
+        let ticketId: number | null = null
+        if (uploaded) {
+          await s`SELECT pg_advisory_xact_lock(${LAYER_UPLOAD_LOCK_NS}::int, ${access.project_id}::int)`
+          await assertUploadUnused(s, uploaded.path)
+          ticketId = await requireOwnUploadTicket(s, access, uploaded.path, true)
+        }
+        let frame = { offset_x_m: 0, offset_y_m: 0, rotation_deg: 0 }
+        let alignedWith: number | null = null
+        if (cadOrigin) {
+          const refs = await s<
+            { id: number; width_m: number; offset_x_m: number; offset_y_m: number; rotation_deg: number; cad_origin: unknown }[]
+          >`
+            SELECT id, width_m, offset_x_m, offset_y_m, rotation_deg, cad_origin
+            FROM obra_plan_layers
+            WHERE project_id = ${access.project_id} AND level = ${level} AND deleted_at IS NULL AND cad_origin IS NOT NULL
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1
+          `
+          const refCad = refs[0] ? parseCadOrigin(refs[0].cad_origin) : null
+          if (refs[0] && refCad) {
+            const aligned = alignCadFrame(cadOrigin, widthM, {
+              cad: refCad,
+              frame: {
+                width_m: Number(refs[0].width_m),
+                offset_x_m: Number(refs[0].offset_x_m),
+                offset_y_m: Number(refs[0].offset_y_m),
+                rotation_deg: Number(refs[0].rotation_deg),
+              },
+            })
+            if (aligned) {
+              frame = aligned
+              alignedWith = Number(refs[0].id)
+            }
           }
         }
-      }
-      await s`
-        INSERT INTO obra_plan_layers (
-          id, project_id, name, discipline, level, level_label, image_path, image_data, mime_type,
-          width_px, height_px, width_m, aspect, offset_x_m, offset_y_m, rotation_deg, cad_origin, uploaded_by
-        ) VALUES (
-          ${layerId}, ${access.project_id}, ${name}, ${discipline}, ${level}, ${levelLabel},
-          ${stored.image_path}, ${stored.image_data}, ${picture?.mime ?? null},
-          ${picture?.width_px ?? null}, ${picture?.height_px ?? null}, ${widthM}, ${aspect},
-          ${frame.offset_x_m}, ${frame.offset_y_m}, ${frame.rotation_deg},
-          ${cadOrigin ? s.json(cadOrigin) : null}, ${userId}
-        )
-      `
-      await writeAudit(
-        {
-          project_id: access.project_id,
-          actor_user_id: userId,
-          action: "layer.created",
-          entity_type: "layer",
-          entity_id: layerId,
-          details: {
-            name,
-            discipline,
-            level,
-            has_image: Boolean(picture),
-            mime_type: picture?.mime ?? null,
-            bytes: picture?.bytes ?? 0,
-            ...(uploaded ? { direct_upload: true } : {}),
-            width_m: widthM,
-            ...(cadOrigin ? { dxf: true, aligned_with_layer_id: alignedWith } : {}),
+        await s`
+          INSERT INTO obra_plan_layers (
+            id, project_id, name, discipline, level, level_label, image_path, image_data, mime_type,
+            width_px, height_px, width_m, aspect, offset_x_m, offset_y_m, rotation_deg, cad_origin, uploaded_by,
+            analysis_image_path
+          ) VALUES (
+            ${layerId}, ${access.project_id}, ${name}, ${discipline}, ${level}, ${levelLabel},
+            ${stored.image_path}, ${stored.image_data}, ${picture?.mime ?? null},
+            ${picture?.width_px ?? null}, ${picture?.height_px ?? null}, ${widthM}, ${aspect},
+            ${frame.offset_x_m}, ${frame.offset_y_m}, ${frame.rotation_deg},
+            ${cadOrigin ? s.json(cadOrigin) : null}, ${userId}, ${analysisPath}
+          )
+        `
+        if (ticketId != null) {
+          await s`UPDATE obra_layer_uploads SET used_at = LOCALTIMESTAMP, layer_id = ${layerId} WHERE id = ${ticketId}`
+        }
+        await writeAudit(
+          {
+            project_id: access.project_id,
+            actor_user_id: userId,
+            action: "layer.created",
+            entity_type: "layer",
+            entity_id: layerId,
+            details: {
+              name,
+              discipline,
+              level,
+              has_image: Boolean(picture),
+              mime_type: picture?.mime ?? null,
+              bytes: picture?.bytes ?? 0,
+              ...(uploaded ? { direct_upload: true, analysis_copy: analysisPath != null } : {}),
+              width_m: widthM,
+              ...(cadOrigin ? { dxf: true, aligned_with_layer_id: alignedWith } : {}),
+            },
           },
-        },
-        tx,
-      )
-      const layer = await getLayerById(s, access.project_id, layerId)
-      if (!layer) throw new Error("No se pudo leer la capa recién creada")
-      return layer
-    })) as PlanLayer
-  } catch (e) {
-    if (ownedPath) await deleteObraObject(ownedPath)
-    throw e
+          tx,
+        )
+        const layer = await getLayerById(s, access.project_id, layerId)
+        if (!layer) throw new Error("No se pudo leer la capa recién creada")
+        return layer
+      })) as PlanLayer
+    } catch (e) {
+      if (ownedPaths.length > 0) await deleteObraObjects(ownedPaths)
+      throw e
+    }
   }
 }
 

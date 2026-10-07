@@ -209,7 +209,7 @@ describe.skipIf(!HAS_TEST_DB)("equipo de obra (BD real)", () => {
     expect(removed.map((r) => r.details.user_id)).toEqual([target, gerenteMiembro])
   })
 
-  it("al quitar a un integrante sus tareas abiertas quedan sin persona (con su rol) y las hechas no cambian", async () => {
+  it("al quitar a un integrante sus tareas abiertas quedan sin persona (con su rol) y las cerradas conservan a la persona", async () => {
     const { removeObraMember } = await import("@/app/actions/obra/members")
     const target = await mkUser("con_tareas")
     await addRawMember(target, "supervisor")
@@ -240,8 +240,10 @@ describe.skipIf(!HAS_TEST_DB)("equipo de obra (BD real)", () => {
     const byId = new Map(rows.map((r) => [Number(r.id), r]))
     expect(byId.get(pendienteSinRol)).toMatchObject({ assigned_user_id: null, assigned_role: "supervisor", status: "pendiente" })
     expect(byId.get(enProgresoConRol)).toMatchObject({ assigned_user_id: null, assigned_role: "trabajador", status: "en_progreso" })
+    // Las cerradas conservan a la persona (historial) y reciben su rol si no tenían: al reabrirlas
+    // quedan sin persona pero visibles para ese rol (setTaskStatus).
     expect(byId.get(hecha)).toMatchObject({ assigned_user_id: target, assigned_role: "supervisor" })
-    expect(byId.get(cancelada)).toMatchObject({ assigned_user_id: target, assigned_role: null })
+    expect(byId.get(cancelada)).toMatchObject({ assigned_user_id: target, assigned_role: "supervisor" })
     expect(byId.get(ajena)).toMatchObject({ assigned_user_id: db.users.trabajador })
     expect(byId.get(Number(otraObra[0].id))).toMatchObject({ assigned_user_id: target })
 

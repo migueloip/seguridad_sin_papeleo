@@ -742,8 +742,9 @@ function InvitationLinkDialog({
             <p className="flex items-start gap-2 rounded-[10px] bg-warning-tint px-3 py-2.5 text-[13px] text-foreground">
               <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden />
               <span>
-                El enlace vence en {INVITATION_TTL_DAYS} días y se muestra solo ahora; si lo pierdes, regenéralo desde la
-                lista de invitaciones.{shown?.regenerated ? " El enlace anterior ya no sirve." : ""}
+                Envíalo solo a esa persona: quien tenga el enlace puede usarlo (si se filtra, revócalo). Vence en{" "}
+                {INVITATION_TTL_DAYS} días y se muestra solo ahora; si lo pierdes, regenéralo desde la lista de
+                invitaciones.{shown?.regenerated ? " El enlace anterior ya no sirve." : ""}
               </span>
             </p>
           </div>

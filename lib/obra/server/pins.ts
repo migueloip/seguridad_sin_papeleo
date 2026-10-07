@@ -85,6 +85,7 @@ import {
 import {
   decodeImageDataUrl,
   deleteObraObject,
+  findingPhotoRefProjectId,
   OBRA_STORAGE_PREFIX,
   readObraStorageRef,
   storeFindingPhoto,
@@ -904,7 +905,7 @@ export async function getFindingContext(userId: number, findingId: number): Prom
       ) WITH ORDINALITY AS e(v, ord)
       WHERE f.id = ${id} AND f.project_id = ${access.project_id}
         AND e.ord <= ${MAX_FINDING_PHOTOS}
-        AND (e.v LIKE ${`${OBRA_STORAGE_PREFIX}%`} OR e.v LIKE 'data:image/%')
+        AND (e.v LIKE ${`${OBRA_STORAGE_PREFIX}obra/${access.project_id}/hallazgos/%`} OR e.v LIKE 'data:image/%')
       ORDER BY e.ord
     `,
   ])
@@ -939,6 +940,10 @@ export async function readFindingPhoto(
   const list = parseJson(rows[0]?.photos)
   const ref: unknown = Array.isArray(list) ? list[index] : null
   if (typeof ref !== "string" || !(ref.startsWith(OBRA_STORAGE_PREFIX) || ref.startsWith("data:"))) {
+    throw new ObraAccessError(404, "Foto no encontrada.")
+  }
+  // Una referencia al bucket solo vale si es una foto de hallazgo de ESTE proyecto.
+  if (ref.startsWith(OBRA_STORAGE_PREFIX) && findingPhotoRefProjectId(ref) !== access.project_id) {
     throw new ObraAccessError(404, "Foto no encontrada.")
   }
   try {

@@ -7,6 +7,7 @@ import { PlanWorkspace } from "@/components/obra/plan-workspace"
 import { getSession } from "@/lib/auth"
 import { todayISO } from "@/lib/obra/metrics"
 import { can } from "@/lib/obra/permissions"
+import { isSupabaseStorageEnabled } from "@/lib/obra/server/storage"
 import { parseIntId } from "@/lib/route"
 
 export const metadata = { title: "Planos de la obra" }
@@ -65,6 +66,7 @@ export default async function ObraPlanosPage({
         initialFindingId={idParam(sp.finding)}
         initialTaskId={idParam(sp.task)}
         initialLayerId={idParam(sp.layer)}
+        directUpload={isSupabaseStorageEnabled()}
       />
     </DashboardLayout>
   )

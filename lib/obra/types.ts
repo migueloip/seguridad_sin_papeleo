@@ -573,17 +573,20 @@ export type ObraInvitation = {
 
 /**
  * Vista pública de una invitación (página /invitacion/[token]). Solo la ve
- * quien tiene el enlace; no revela si el correo ya tiene cuenta.
+ * quien tiene el enlace; no revela si el correo ya tiene cuenta. Solo una
+ * pendiente trae datos: aceptada, revocada o vencida devuelve únicamente su
+ * estado (un enlace viejo no expone correo, nombre, obra ni quién invitó).
  */
-export type InvitationPreview = {
+export type PendingInvitationPreview = {
+  status: "pendiente"
   project_name: string
   role: ObraRole
   email: string
   name: string | null
   inviter_name: string | null
-  status: InvitationStatus
   expires_at: string
 }
+export type InvitationPreview = PendingInvitationPreview | { status: "aceptada" } | { status: "revocada" } | { status: "vencida" }
 
 /** Resultado de crear o regenerar una invitación: el enlace se muestra una sola vez. */
 export type InvitationLink = {

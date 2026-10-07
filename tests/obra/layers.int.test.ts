@@ -410,9 +410,10 @@ describe.skipIf(!HAS_TEST_DB)("capas de plano, imágenes y elementos (BD real)",
     expect(res.headers.get("location")).toBe(
       `https://proyecto-prueba.supabase.co/storage/v1/object/sign/obra-planos/${rows[0].image_path}?token=firma-de-prueba`,
     )
-    expect(res.headers.get("cache-control")).toBe("private, max-age=600")
+    // Vigencia corta (la URL firmada no depende de la sesión ni del equipo) y caché aún más corta.
+    expect(res.headers.get("cache-control")).toBe("private, max-age=60")
     const signCall = calls.find((c) => c.method === "POST" && c.url.includes("/object/sign/"))!
-    expect(JSON.parse(signCall.body!)).toEqual({ expiresIn: 900 })
+    expect(JSON.parse(signCall.body!)).toEqual({ expiresIn: 120 })
     actAs(db.users.extrano)
     expect((await imageRoute(a.id)).status).toBe(404)
     // Lectura autenticada de los bytes (respaldo de la ruta y extracción con IA).

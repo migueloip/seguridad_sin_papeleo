@@ -32,7 +32,13 @@ import { logout } from "@/app/actions/auth"
 import { acceptObraInvitation, acceptObraInvitationWithNewAccount } from "@/app/actions/obra/invitations"
 import { BrandMark } from "@/components/easysecure/brand-mark"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { OBRA_ROLE_DESCRIPTIONS, OBRA_ROLE_LABELS, type ActionResult, type InvitationPreview } from "@/lib/obra/types"
+import {
+  OBRA_ROLE_DESCRIPTIONS,
+  OBRA_ROLE_LABELS,
+  type ActionResult,
+  type InvitationPreview,
+  type PendingInvitationPreview,
+} from "@/lib/obra/types"
 
 const inputClass =
   "h-[46px] w-full rounded-[11px] border border-border bg-card px-3.5 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/15"
@@ -126,7 +132,7 @@ function StatusCard({
   )
 }
 
-function Summary({ preview }: { preview: InvitationPreview }) {
+function Summary({ preview }: { preview: PendingInvitationPreview }) {
   return (
     <dl className="mb-6 divide-y divide-border overflow-hidden rounded-[14px] border border-border bg-card text-sm">
       <div className="flex flex-col gap-0.5 p-3.5">
@@ -209,8 +215,7 @@ export function InvitationAccept({
     )
   }
 
-  const inviter = preview.inviter_name || "quien te invitó"
-
+  // Una invitación que ya no está pendiente llega sin datos (obra, correo, quién invitó): solo su estado.
   if (preview.status === "vencida") {
     return (
       <StatusCard
@@ -218,10 +223,7 @@ export function InvitationAccept({
         title="La invitación venció"
         action={{ href: "/", label: "Ir al inicio" }}
       >
-        <p>
-          La invitación a «{preview.project_name}» venció el {formatChile(preview.expires_at)}. Pide a {inviter} que
-          genere un enlace nuevo desde el equipo de la obra.
-        </p>
+        <p>Este enlace de invitación venció. Pide a quien te invitó que genere un enlace nuevo desde el equipo de la obra.</p>
       </StatusCard>
     )
   }
@@ -233,10 +235,7 @@ export function InvitationAccept({
         title="La invitación fue anulada"
         action={{ href: "/", label: "Ir al inicio" }}
       >
-        <p>
-          {preview.inviter_name ? `${preview.inviter_name} anuló` : "Se anuló"} la invitación a «{preview.project_name}». Si
-          crees que es un error, pide un enlace nuevo.
-        </p>
+        <p>Esta invitación se anuló y su enlace ya no sirve. Si crees que es un error, pide un enlace nuevo.</p>
       </StatusCard>
     )
   }
@@ -252,10 +251,7 @@ export function InvitationAccept({
             : { href: `/auth/login?next=${encodeURIComponent("/obra")}`, label: "Iniciar sesión" }
         }
       >
-        <p>
-          La invitación a «{preview.project_name}» ya se usó. Si fuiste tú, entra con tu cuenta ({preview.email}) para ver
-          la obra.
-        </p>
+        <p>Este enlace ya se usó. Si fuiste tú, entra con tu cuenta para ver la obra.</p>
       </StatusCard>
     )
   }
@@ -269,7 +265,7 @@ function PendingInvitation({
   viewer,
 }: {
   token: string
-  preview: InvitationPreview
+  preview: PendingInvitationPreview
   viewer: { email: string; name: string | null } | null
 }) {
   const subtitle = `${preview.inviter_name ? `${preview.inviter_name} te invitó` : "Te invitaron"} a sumarte al equipo de la obra en Easysecure. Revisa los datos y acepta para entrar.`
@@ -302,6 +298,9 @@ function AcceptWithSession({ token, viewer }: { token: string; viewer: { email: 
       const res = await call(() => acceptObraInvitation(token))
       if (res.ok === false) {
         setError(res.error)
+        // Si la invitación cambió (anulada, vencida o ya usada), el servidor vuelve a resolver
+        // la vista previa y muestra su estado final en vez de dejar el botón activo.
+        if (res.error !== NETWORK_ERROR) router.refresh()
         return
       }
       setDone(true)
@@ -333,7 +332,7 @@ function AcceptWithSession({ token, viewer }: { token: string; viewer: { email: 
   )
 }
 
-function WrongAccount({ preview, viewer }: { preview: InvitationPreview; viewer: { email: string } }) {
+function WrongAccount({ preview, viewer }: { preview: PendingInvitationPreview; viewer: { email: string } }) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
   const [error, setError] = useState<string | null>(null)
@@ -371,7 +370,7 @@ function WrongAccount({ preview, viewer }: { preview: InvitationPreview; viewer:
   )
 }
 
-function NoSession({ token, preview }: { token: string; preview: InvitationPreview }) {
+function NoSession({ token, preview }: { token: string; preview: PendingInvitationPreview }) {
   const [tab, setTab] = useState<"crear" | "ingresar">("crear")
   const loginHref = `/auth/login?next=${encodeURIComponent(`/invitacion/${token}`)}`
   return (
@@ -407,7 +406,7 @@ function CreateAccountForm({
   loginHref,
 }: {
   token: string
-  preview: InvitationPreview
+  preview: PendingInvitationPreview
   loginHref: string
 }) {
   const id = useId()
@@ -442,6 +441,8 @@ function CreateAccountForm({
       if (res.ok === false) {
         setError(res.error)
         setAccountExists(res.error.startsWith("Ya existe una cuenta"))
+        // Ver AcceptWithSession: si la invitación ya no está pendiente, se muestra su estado final.
+        if (res.error !== NETWORK_ERROR) router.refresh()
         return
       }
       setDone(true)

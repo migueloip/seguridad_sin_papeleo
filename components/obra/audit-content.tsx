@@ -141,6 +141,7 @@ export function describeAuditEntry(e: AuditEntry): { text: string; detail: strin
       if (from && toLabel) parts.push(`${from} → ${toLabel}`)
       const notes = str(d.notes)
       if (notes) parts.push(`Notas: ${notes}`)
+      if (num(d.unassigned_user_id) != null) parts.push("quedó sin persona asignada (ya no está en el equipo)")
       break
     }
     case "task.checklist_toggled": {
@@ -200,6 +201,14 @@ export function describeAuditEntry(e: AuditEntry): { text: string; detail: strin
       if (e.action === "invitation.created" && num(d.replaced_invitation_id) != null) {
         parts.push("reemplaza una invitación anterior")
       }
+      if (e.action === "invitation.revoked") {
+        if (d.reason === "inviter_removed") parts.push("porque quien la envió salió del equipo")
+        else if (d.reason === "inviter_role_changed") parts.push("porque el nuevo rol de quien la envió no puede otorgarlo")
+        else if (d.reason === "inviter_lost_permission") {
+          text = "anuló una invitación"
+          parts.push("al intentar aceptarla: quien la envió ya no puede otorgar ese rol")
+        }
+      }
       break
     }
     case "member.role_changed": {
@@ -208,6 +217,10 @@ export function describeAuditEntry(e: AuditEntry): { text: string; detail: strin
       const to = roleLabel(d.to)
       if (email) parts.push(email)
       if (from && to) parts.push(`${from} → ${to}`)
+      const revoked = num(d.revoked_invitations)
+      if (revoked && revoked > 0) {
+        parts.push(revoked === 1 ? "se revocó 1 invitación que envió" : `se revocaron ${revoked} invitaciones que envió`)
+      }
       break
     }
     case "member.removed": {
@@ -220,6 +233,10 @@ export function describeAuditEntry(e: AuditEntry): { text: string; detail: strin
             ? "1 tarea abierta quedó sin persona asignada"
             : `${unassigned} tareas abiertas quedaron sin persona asignada`,
         )
+      }
+      const revoked = num(d.revoked_invitations)
+      if (revoked && revoked > 0) {
+        parts.push(revoked === 1 ? "se revocó 1 invitación que envió" : `se revocaron ${revoked} invitaciones que envió`)
       }
       break
     }

@@ -7,6 +7,7 @@ import { generateText } from "ai"
 import type { LanguageModel } from "ai"
 import { getAiSettings } from "@/lib/settings"
 import { getModel } from "@/lib/ai"
+import { OBRA_STORAGE_PREFIX } from "@/lib/obra/server/storage"
 
 export type FindingRow = {
   id: number
@@ -1034,7 +1035,8 @@ export async function createFinding(data: {
         const uploaded = await uploadBase64ToSupabase("img", path, p)
         if (uploaded) out.push(uploaded)
         else out.push(p)
-      } else if (typeof p === "string") {
+      } else if (typeof p === "string" && !p.startsWith(OBRA_STORAGE_PREFIX)) {
+        // Las referencias "obra-storage:" (bucket privado de Obra) solo las crea el servidor.
         out.push(p)
       }
     }

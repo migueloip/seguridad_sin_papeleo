@@ -47,8 +47,11 @@ export async function createObraLayer(
     level: number
     level_label?: string | null
     image?: { data_url: string; width_px: number; height_px: number } | null
-    /** Lámina ya subida con createObraLayerUploadTicket (alternativa a `image`). */
-    image_upload?: { path: string; width_px: number; height_px: number } | null
+    /**
+     * Lámina ya subida con createObraLayerUploadTicket por esta misma persona (alternativa a
+     * `image`). `analysis_data_url`: copia reducida (≤ 3000 px) que usará la detección con IA.
+     */
+    image_upload?: { path: string; width_px: number; height_px: number; analysis_data_url?: string | null } | null
     width_m?: number
     aspect?: number
     /** Solo DXF: origen CAD de la lámina, para alinearla con las otras capas DXF del nivel. */

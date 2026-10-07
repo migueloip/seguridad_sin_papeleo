@@ -154,6 +154,8 @@ export type PlanWorkspaceProps = {
   initialFindingId?: number | null
   initialTaskId?: number | null
   initialLayerId?: number | null
+  /** ¿Hay subida directa de láminas a Supabase Storage? (si no, el diálogo las reduce al elegirlas). */
+  directUpload?: boolean
 }
 
 export function PlanWorkspace({
@@ -166,6 +168,7 @@ export function PlanWorkspace({
   initialFindingId = null,
   initialTaskId = null,
   initialLayerId = null,
+  directUpload = true,
 }: PlanWorkspaceProps) {
   const today = todayProp ?? todayISO()
   const isDesktop = useIsDesktop()
@@ -676,6 +679,7 @@ export function PlanWorkspace({
             projectId={projectId}
             defaultLevel={0}
             layers={layersList}
+            directUpload={directUpload}
             onCreated={(layer) => void afterLayerCreated(layer)}
           />
         ) : null}
@@ -1030,6 +1034,7 @@ export function PlanWorkspace({
             projectId={projectId}
             defaultLevel={level}
             layers={layersList}
+            directUpload={directUpload}
             onCreated={(layer) => void afterLayerCreated(layer)}
           />
           <LayerFrameDialog

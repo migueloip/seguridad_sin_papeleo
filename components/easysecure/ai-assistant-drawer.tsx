@@ -5,6 +5,7 @@ import { DefaultChatTransport } from "ai"
 import { useEffect, useRef, useState } from "react"
 import { usePathname } from "next/navigation"
 import { Sparkles, X, Send, Loader2 } from "lucide-react"
+import { chatErrorMessage } from "@/lib/ai-chat-errors"
 import { cn } from "@/lib/utils"
 
 const SUGGESTIONS = [
@@ -110,8 +111,7 @@ export function AiAssistantDrawer({ open, onClose }: { open: boolean; onClose: (
 
           {error && (
             <div className="rounded-[14px] bg-danger-tint px-4 py-3 text-sm text-[var(--danger)]">
-              No pude conectar con la IA. Revisa que tu API Key de Google AI esté configurada en
-              Configuración.
+              {chatErrorMessage(error)}
             </div>
           )}
 

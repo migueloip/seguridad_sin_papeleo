@@ -45,7 +45,7 @@ import {
   type ElementRow,
   type Queryable,
 } from "./mappers"
-import { readStoredImage } from "./storage"
+import { readStoredImageForAnalysis } from "./storage"
 
 export const ELEMENT_LIMITS = {
   perCall: 5000,
@@ -452,8 +452,10 @@ export async function requestLayerExtraction(
   layerId: number,
 ): Promise<{ suggestion_id: number; element_count: number; project_id: number }> {
   const { access, layerId: id } = await authorizeLayer(userId, layerId, "ai.request")
-  const rows = await sql<{ name: string; discipline: string; image_path: string | null; image_data: string | null }[]>`
-    SELECT name, discipline, image_path, image_data FROM obra_plan_layers
+  const rows = await sql<
+    { name: string; discipline: string; image_path: string | null; image_data: string | null; analysis_image_path: string | null }[]
+  >`
+    SELECT name, discipline, image_path, image_data, analysis_image_path FROM obra_plan_layers
     WHERE id = ${id} AND project_id = ${access.project_id} AND deleted_at IS NULL
   `
   const layer = rows[0]
@@ -466,7 +468,12 @@ export async function requestLayerExtraction(
   if (!settings.ready) throw new ObraValidationError(AI_NOT_CONFIGURED)
   await assertAiQuota(access, "layer_extraction")
 
-  const image = await readStoredImage({ image_path: layer.image_path, image_data: layer.image_data })
+  // La copia reducida (o la lámina si pesa poco): nunca los 25 MB de una lámina subida directo.
+  const image = await readStoredImageForAnalysis({
+    image_path: layer.image_path,
+    image_data: layer.image_data,
+    analysis_image_path: layer.analysis_image_path,
+  })
   let extracted: { elements: PlanElementDraft[]; model: string }
   try {
     extracted = await extractElementsFromImage(settings, image, { discipline, layerName: layer.name })

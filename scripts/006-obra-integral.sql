@@ -51,6 +51,30 @@ CREATE INDEX IF NOT EXISTS idx_obra_layers_project_level ON obra_plan_layers(pro
 
 ALTER TABLE obra_plan_layers ADD COLUMN IF NOT EXISTS cad_origin JSONB;
 
+ALTER TABLE obra_plan_layers ADD COLUMN IF NOT EXISTS analysis_image_path TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_obra_layers_image_path ON obra_plan_layers(image_path) WHERE image_path IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS obra_layer_uploads (
+  id SERIAL PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  path VARCHAR(160) NOT NULL UNIQUE,
+  mime_type VARCHAR(40) NOT NULL,
+  size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at TIMESTAMP NOT NULL,
+  used_at TIMESTAMP,
+  layer_id INTEGER REFERENCES obra_plan_layers(id) ON DELETE SET NULL,
+  discarded_at TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_obra_layer_uploads_project ON obra_layer_uploads(project_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_obra_layer_uploads_user ON obra_layer_uploads(user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_obra_layer_uploads_open ON obra_layer_uploads(expires_at) WHERE used_at IS NULL AND discarded_at IS NULL;
+
 CREATE TABLE IF NOT EXISTS obra_ai_suggestions (
   id SERIAL PRIMARY KEY,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

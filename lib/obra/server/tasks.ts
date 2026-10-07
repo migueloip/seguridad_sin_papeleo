@@ -473,6 +473,17 @@ async function lockTask(q: Queryable, projectId: number, taskId: number): Promis
   return rows[0]
 }
 
+/** ¿Es dueño o integrante actual del proyecto? (versión booleana de assertProjectUser). */
+async function isProjectUser(q: Queryable, projectId: number, userId: number): Promise<boolean> {
+  try {
+    await assertProjectUser(q, projectId, userId, "La persona asignada")
+    return true
+  } catch (e) {
+    if (e instanceof ObraValidationError) return false
+    throw e
+  }
+}
+
 /** 404 si no la puede ver; 403 si la ve pero no puede trabajarla. */
 function assertCanWork(task: LockedTask, access: ProjectAccess) {
   if (!canViewTask(task, access)) throw new ObraAccessError(404, NOT_FOUND)
@@ -602,6 +613,10 @@ export async function updateTask(userId: number, taskId: number, patch: Partial<
  * sobre cualquier tarea; tasks.complete_own solo sobre las propias. Cancelar
  * o reabrir una tarea cancelada exige tasks.manage. Pasar a "hecha" registra
  * completed_by/at y las notas; salir de "hecha" las limpia.
+ * Si la tarea queda abierta (pendiente / en progreso) y su persona asignada ya
+ * no es del equipo (p.ej. se reabre una hecha de alguien que salió), queda sin
+ * persona, con su rol asignado (removeMember se lo dejó), como las que
+ * removeMember libera; el audit lo registra en unassigned_user_id.
  */
 export async function setTaskStatus(userId: number, taskId: number, status: TaskStatus, notes?: string): Promise<ObraTask> {
   const { access, taskId: id } = await resolveTaskAccess(userId, taskId)
@@ -632,6 +647,7 @@ export async function setTaskStatus(userId: number, taskId: number, status: Task
         )
       }
     } else {
+      let unassignedUserId: number | null = null
       if (st === "hecha") {
         await s`
           UPDATE obra_tasks
@@ -640,9 +656,14 @@ export async function setTaskStatus(userId: number, taskId: number, status: Task
           WHERE id = ${id}
         `
       } else {
+        if ((st === "pendiente" || st === "en_progreso") && cur.assigned_user_id != null) {
+          const assigned = Number(cur.assigned_user_id)
+          if (!(await isProjectUser(s, access.project_id, assigned))) unassignedUserId = assigned
+        }
         await s`
           UPDATE obra_tasks
           SET status = ${st}, completed_by = NULL, completed_at = NULL, completion_notes = NULL,
+              ${unassignedUserId != null ? s`assigned_user_id = NULL,` : s``}
               updated_at = CURRENT_TIMESTAMP
           WHERE id = ${id}
         `
@@ -654,7 +675,12 @@ export async function setTaskStatus(userId: number, taskId: number, status: Task
           action: "task.status_changed",
           entity_type: "task",
           entity_id: id,
-          details: { from: cur.status, to: st, notes: note },
+          details: {
+            from: cur.status,
+            to: st,
+            notes: note,
+            ...(unassignedUserId != null ? { unassigned_user_id: unassignedUserId } : {}),
+          },
         },
         tx,
       )

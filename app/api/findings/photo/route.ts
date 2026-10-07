@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { sql } from "@/lib/db"
 import { getCurrentUserId } from "@/lib/auth"
-import { OBRA_STORAGE_PREFIX, readObraStorageRef } from "@/lib/obra/server/storage"
+import { findingPhotoRefProjectId, OBRA_STORAGE_PREFIX, readObraStorageRef } from "@/lib/obra/server/storage"
 
 /** Tiempo máximo para descargar una foto desde Storage. */
 const FETCH_TIMEOUT_MS = 10_000
@@ -56,7 +56,7 @@ export async function GET(request: Request) {
     if (!userId) {
       return new NextResponse("unauthorized", { status: 401 })
     }
-    const rows = await sql<{ photos?: unknown }[]>`SELECT photos FROM findings WHERE id = ${id} AND user_id = ${userId} LIMIT 1`
+    const rows = await sql<{ photos?: unknown; project_id?: number | null }[]>`SELECT photos, project_id FROM findings WHERE id = ${id} AND user_id = ${userId} LIMIT 1`
     const row = rows[0]
     if (!row || row.photos === null || row.photos === undefined) {
       return new NextResponse("not found", { status: 404 })
@@ -75,7 +75,15 @@ export async function GET(request: Request) {
       return new NextResponse(buf, { headers: photoHeaders(mime) })
     }
     if (item.startsWith(OBRA_STORAGE_PREFIX)) {
-      // Foto subida desde Obra integral al bucket privado (lectura con la service key).
+      // Foto subida desde Obra integral al bucket privado (lectura con la service key). La ruta
+      // no es secreta (viaja en URL firmadas): solo se sirve una foto de hallazgo
+      // (obra/<p>/hallazgos/…) del MISMO proyecto del hallazgo y de un proyecto del usuario.
+      const refProject = findingPhotoRefProjectId(item)
+      if (refProject == null || refProject !== Number(row.project_id)) {
+        return new NextResponse("not found", { status: 404 })
+      }
+      const owned = await sql<{ n: number }[]>`SELECT 1 AS n FROM projects WHERE id = ${refProject} AND user_id = ${userId} LIMIT 1`
+      if (!owned[0]) return new NextResponse("not found", { status: 404 })
       const img = await readObraStorageRef(item)
       return new NextResponse(new Uint8Array(img.bytes), { headers: photoHeaders(img.mime) })
     }

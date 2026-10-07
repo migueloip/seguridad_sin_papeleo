@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { sql } from "@/lib/db"
 import { getMobileSessionFromRequest } from "@/lib/mobile-auth"
 import { MOBILE_CORS_HEADERS, mobileOptions } from "@/lib/mobile-api"
+import { dropClientObraStorageRefs } from "@/lib/obra/server/storage"
 
 export function OPTIONS() {
   return mobileOptions()
@@ -35,6 +36,16 @@ function safeJsonParse(s: string) {
   } catch {
     return null
   }
+}
+
+/** findings.photos tal como venga de la BD (jsonb ya parseado o texto JSON) como lista. */
+function parsePhotoList(v: unknown): unknown[] {
+  if (Array.isArray(v)) return v
+  if (typeof v === "string") {
+    const parsed: unknown = safeJsonParse(v)
+    return Array.isArray(parsed) ? parsed : []
+  }
+  return []
 }
 
 function asNullableString(v: unknown): string | null {
@@ -278,6 +289,8 @@ export async function POST(req: Request) {
           } else if (typeof photosRaw === "string" && photosRaw) {
             photosJson = [photosRaw]
           }
+          // Las referencias "obra-storage:" (bucket privado de Obra) solo las crea el servidor.
+          if (photosJson) photosJson = dropClientObraStorageRefs(photosJson)
           const rows = await sql<{ id: number }>`
             INSERT INTO findings (
               user_id, project_id, title, description, severity, location, responsible_person, due_date, resolution_notes, status, photos
@@ -332,6 +345,13 @@ export async function POST(req: Request) {
             if (arr.length > 0) photosJson = arr
           } else if (typeof photosRaw === "string" && photosRaw) {
             photosJson = [photosRaw]
+          }
+          if (photosJson) {
+            // Solo se conservan las referencias "obra-storage:" que el hallazgo ya tenía.
+            const current = await sql<{ photos: unknown }[]>`
+              SELECT photos FROM findings WHERE id = ${remoteId} AND user_id = ${userId} LIMIT 1
+            `
+            photosJson = dropClientObraStorageRefs(photosJson, parsePhotoList(current[0]?.photos))
           }
           await sql`
             UPDATE findings

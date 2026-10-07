@@ -347,13 +347,15 @@ function RiskPanel({ dashboard }: { dashboard: ObraDashboard }) {
   const { risk, findings_by_severity: fbs, counts, access } = dashboard
   const c = RISK_COLORS[risk.level] ?? RISK_COLORS.medio
   const score = Math.max(0, Math.min(100, Math.round(risk.score)))
+  const showsOverdue = can(access.role, "tasks.view_all")
+  const showsCritical = can(access.role, "ai.review")
+  // El índice se calcula con los datos de toda la obra; los factores que este rol no ve igual cuentan.
+  const subtitle =
+    showsOverdue && showsCritical
+      ? "De 0 a 100, según hallazgos abiertos, tareas vencidas y aprobaciones críticas pendientes."
+      : "De 0 a 100, según hallazgos abiertos, tareas vencidas y aprobaciones críticas pendientes de toda la obra (abajo, solo los factores que gestiona tu rol)."
   return (
-    <Panel
-      labelId="dash-risk"
-      title="Índice de riesgo"
-      icon={Gauge}
-      subtitle="De 0 a 100, según hallazgos abiertos, tareas vencidas y aprobaciones críticas pendientes."
-    >
+    <Panel labelId="dash-risk" title="Índice de riesgo" icon={Gauge} subtitle={subtitle}>
       <div className="flex flex-wrap items-end gap-3">
         <div className="font-display text-[46px] font-bold leading-none tracking-[-0.03em]" style={{ color: c.color }}>
           {score}
@@ -378,10 +380,10 @@ function RiskPanel({ dashboard }: { dashboard: ObraDashboard }) {
       <ul className="mt-4 grid grid-cols-2 gap-2 text-[13px]">
         <RiskFactor label="Hallazgos críticos" value={fbs.critical} danger={fbs.critical > 0} />
         <RiskFactor label="Hallazgos altos" value={fbs.high} danger={fbs.high > 0} />
-        {can(access.role, "tasks.view_all") ? (
+        {showsOverdue ? (
           <RiskFactor label="Tareas vencidas" value={counts.overdue_tasks} danger={counts.overdue_tasks > 0} />
         ) : null}
-        {can(access.role, "ai.review") ? (
+        {showsCritical ? (
           <RiskFactor
             label="Aprobaciones críticas"
             value={counts.pending_critical_suggestions}

@@ -8,9 +8,11 @@
  * - PDF: se elige la página y se dibuja en el navegador (pdf.js);
  * - si la lámina cabe en el límite inline (≈ 3,2 MB) viaja como data URL en
  *   la server action; si no, se pide un permiso firmado y el navegador la sube
- *   DIRECTO a Supabase Storage (PUT con progreso), y la capa se crea con esa
- *   ruta. Sin Supabase (o si falla la subida) se muestra el motivo y se ofrece
- *   reducirla para enviarla inline;
+ *   DIRECTO a Supabase Storage (PUT con progreso, cancelable con «Cancelar
+ *   subida»), y la capa se crea con esa ruta y una copia reducida para la
+ *   detección con IA. Si el servidor no tiene Supabase (`directUpload`
+ *   false), la lámina se prepara reducida desde el principio (inline); si la
+ *   subida directa falla, se muestra el motivo y se ofrece reducirla;
  * - DXF (ASCII): se leen las entidades vectoriales, se asigna un tipo a cada
  *   capa CAD (sugerido por su nombre, editable), se revisa la vista previa y
  *   se crea una capa sin imagen con sus elementos (en lotes, con progreso);
@@ -181,6 +183,11 @@ export type LayerUploadDialogProps = {
   defaultLevel?: number | null
   /** Capas existentes (para proponer la etiqueta del nivel). */
   layers?: PlanLayer[]
+  /**
+   * ¿El servidor tiene Supabase Storage para la subida directa? (isSupabaseStorageEnabled,
+   * desde la página). Si es false, las láminas se reducen al límite inline al elegirlas.
+   */
+  directUpload?: boolean
   onCreated: (layer: PlanLayer, info: { elements: number }) => void
 }
 
@@ -207,6 +214,7 @@ function UploadForm({
   projectId,
   defaultLevel,
   layers = [],
+  directUpload = true,
   onOpenChange,
   onCreated,
   onBusyChange,
@@ -240,9 +248,17 @@ function UploadForm({
   const [fallback, setFallback] = useState<string | null>(null)
   /** Última lámina subida directo (para reintentar createObraLayer sin volver a subirla). */
   const uploadedRef = useRef<{ blob: Blob; path: string } | null>(null)
+  /** Copia reducida para la IA de la última lámina subida directo (se calcula una vez por archivo). */
+  const analysisRef = useRef<{ blob: Blob; dataUrl: string | null } | null>(null)
+  /** PUT en curso a Storage (para «Cancelar subida»). */
+  const abortRef = useRef<AbortController | null>(null)
+  const [uploading, setUploading] = useState(false)
 
   const saving = progress !== null
   const working = saving || fileBusy !== null
+
+  // Si el formulario se desmonta con una subida en curso, se corta.
+  useEffect(() => () => abortRef.current?.abort(), [])
 
   // Libera la URL de la vista previa al cambiar de lámina o cerrar el diálogo.
   useEffect(
@@ -302,12 +318,13 @@ function UploadForm({
     onBusyChange(true)
     try {
       if (k === "image") {
-        setImage(fromPrepared(await readImageFileForUpload(f)))
+        // Sin subida directa, se reduce al límite inline desde el principio (un solo paso).
+        setImage(directUpload ? fromPrepared(await readImageFileForUpload(f)) : fromEncoded(await readImageFileAsDataUrl(f)))
       } else if (k === "pdf") {
         const pages = await getPdfPageCount(f)
         setPdf({ pages, page: 1 })
         setFileBusy("Dibujando la página 1 del PDF…")
-        setImage(fromPrepared(await renderPdfPageForUpload(f, 1)))
+        setImage(await renderPdfPage(f, 1))
       } else if (k === "dxf") {
         const text = await readTextFile(f)
         setFileBusy("Interpretando el DXF…")
@@ -331,13 +348,18 @@ function UploadForm({
     }
   }
 
+  /** Página de un PDF: con resolución alta para subida directa, o reducida si no hay subida directa. */
+  async function renderPdfPage(f: File, page: number): Promise<PlanImage> {
+    return directUpload ? fromPrepared(await renderPdfPageForUpload(f, page)) : fromEncoded(await renderPdfPageToDataUrl(f, page))
+  }
+
   async function changePdfPage(page: number) {
     if (!file || !pdf) return
     setPdf({ ...pdf, page })
     setFileBusy(`Dibujando la página ${page} del PDF…`)
     onBusyChange(true)
     try {
-      setImage(fromPrepared(await renderPdfPageForUpload(file, page)))
+      setImage(await renderPdfPage(file, page))
       setFileError(null)
     } catch (err) {
       setFileError(err instanceof Error && err.message ? err.message : "No se pudo dibujar la página.")
@@ -361,8 +383,9 @@ function UploadForm({
 
   /**
    * Sube la lámina directo a Supabase Storage: permiso firmado → PUT con
-   * progreso. Devuelve la ruta o null (con el motivo en `fallback`). Si el
-   * permiso venció o la ruta ya existía, reintenta una vez con otro permiso.
+   * progreso (cancelable). Devuelve la ruta o null (con el motivo en
+   * `fallback`, salvo si la persona canceló). Si el permiso venció o la ruta
+   * ya existía, reintenta una vez con otro permiso.
    */
   async function uploadDirect(img: PlanImage, blob: Blob): Promise<string | null> {
     const cached = uploadedRef.current
@@ -375,8 +398,12 @@ function UploadForm({
         return null
       }
       const total = formatMegabytes(blob.size)
+      const controller = new AbortController()
+      abortRef.current = controller
+      setUploading(true)
       try {
         await uploadToSignedUrl(ticket.data.upload_url, blob, ticket.data.mime, {
+          signal: controller.signal,
           onProgress: (f) =>
             setProgress({ label: `Subiendo la lámina (${Math.round(f * 100)} % de ${total})…`, value: 5 + Math.round(f * 80) }),
         })
@@ -384,12 +411,39 @@ function UploadForm({
         return ticket.data.path
       } catch (err) {
         const e = err instanceof PlanUploadError ? err : new PlanUploadError(UPLOAD_NETWORK_ERROR, "network", 0)
+        if (e.kind === "aborted") {
+          toast.info("Se canceló la subida de la lámina.")
+          return null
+        }
         if ((e.kind === "expired" || e.kind === "conflict") && attempt === 0) continue
         setFallback(e.message)
         return null
+      } finally {
+        if (abortRef.current === controller) abortRef.current = null
+        setUploading(false)
       }
     }
     return null
+  }
+
+  /**
+   * Copia reducida (≤ 3000 px, data URL bajo el límite inline) de una lámina
+   * subida directo: es la que usa «Detectar con IA», que no acepta láminas de
+   * 25 MB. Si no se puede preparar, la capa se crea igual (sin copia).
+   */
+  async function analysisCopy(img: PlanImage): Promise<string | null> {
+    const blob = img.blob
+    if (!blob) return null
+    if (analysisRef.current?.blob === blob) return analysisRef.current.dataUrl
+    let dataUrl: string | null = null
+    try {
+      const ext = img.mime === "image/png" ? "png" : img.mime === "image/webp" ? "webp" : "jpg"
+      dataUrl = (await readImageFileAsDataUrl(new File([blob], `lamina.${ext}`, { type: img.mime }))).dataUrl
+    } catch {
+      dataUrl = null
+    }
+    analysisRef.current = { blob, dataUrl }
+    return dataUrl
   }
 
   function submit(e: FormEvent) {
@@ -444,7 +498,7 @@ function UploadForm({
     }
     let picture: {
       image?: { data_url: string; width_px: number; height_px: number }
-      image_upload?: { path: string; width_px: number; height_px: number }
+      image_upload?: { path: string; width_px: number; height_px: number; analysis_data_url?: string }
     } = {}
     if (img) {
       if (sendsInline(img)) {
@@ -460,7 +514,16 @@ function UploadForm({
       } else {
         const path = await uploadDirect(img, img.blob as Blob)
         if (!path) return stop()
-        picture = { image_upload: { path, width_px: img.width, height_px: img.height } }
+        setProgress({ label: "Preparando una copia reducida para la detección con IA…", value: 86 })
+        const analysis = await analysisCopy(img)
+        picture = {
+          image_upload: {
+            path,
+            width_px: img.width,
+            height_px: img.height,
+            ...(analysis ? { analysis_data_url: analysis } : {}),
+          },
+        }
         setProgress({ label: "Creando la capa…", value: 88 })
       }
     }
@@ -602,7 +665,9 @@ function UploadForm({
             <figcaption className="text-[12px] text-muted-foreground">
               {image.width} × {image.height} px · {formatMegabytes(image.bytes)} · proporción alto/ancho{" "}
               {formatNumberCL(image.height / image.width, 2)}
-              {sendsInline(image) ? "" : " · se subirá directo al almacenamiento de archivos, con su resolución completa"}
+              {sendsInline(image) || !directUpload
+                ? ""
+                : " · se subirá directo al almacenamiento de archivos, con su resolución completa"}
             </figcaption>
           </figure>
         ) : null}
@@ -836,9 +901,16 @@ function UploadForm({
       ) : null}
 
       <DialogFooter>
-        <Button type="button" variant="outline" className="h-10" disabled={working} onClick={() => onOpenChange(false)}>
-          Cancelar
-        </Button>
+        {uploading ? (
+          // Durante el PUT a Storage (hasta 25 MB) se puede cortar la subida; luego el diálogo se cierra normal.
+          <Button type="button" variant="outline" className="h-10" onClick={() => abortRef.current?.abort()}>
+            Cancelar subida
+          </Button>
+        ) : (
+          <Button type="button" variant="outline" className="h-10" disabled={working} onClick={() => onOpenChange(false)}>
+            Cancelar
+          </Button>
+        )}
         <Button type="submit" className="h-10" disabled={working || (!image && !dxf)}>
           {saving ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Upload className="h-4 w-4" aria-hidden />}
           {dxf ? `Crear capa e importar ${dxf.result.drafts.length} elementos` : "Crear capa"}

@@ -4,6 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 const state = vi.hoisted(() => ({
   userId: 1 as number | null,
   photos: [] as unknown,
+  projectId: 7 as number | null,
+  /** Proyectos del usuario (para la consulta de propiedad de una ruta "obra-storage:"). */
+  ownedProjects: [7] as number[],
   sql: vi.fn(),
 }))
 
@@ -18,6 +21,7 @@ vi.mock("@/lib/db", () => ({
 import { GET } from "./route"
 
 const SUPABASE = "https://abcd.supabase.co"
+const HEX24 = "0123456789abcdef01234567"
 const fetchMock = vi.fn()
 const originalSupabaseUrl = process.env.SUPABASE_URL
 
@@ -27,8 +31,16 @@ function req(query = "id=5&index=0") {
 
 beforeEach(() => {
   state.userId = 1
+  state.projectId = 7
+  state.ownedProjects = [7]
   state.sql.mockReset()
-  state.sql.mockImplementation(async () => [{ photos: state.photos }])
+  state.sql.mockImplementation(async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    if (strings.join("?").includes("FROM projects")) {
+      const [pid, uid] = values as [number, number]
+      return uid === state.userId && state.ownedProjects.includes(pid) ? [{ n: 1 }] : []
+    }
+    return [{ photos: state.photos, project_id: state.projectId }]
+  })
   fetchMock.mockReset()
   vi.stubGlobal("fetch", fetchMock)
   process.env.SUPABASE_URL = SUPABASE
@@ -120,16 +132,52 @@ describe("GET /api/findings/photo", () => {
     const prevKey = process.env.SUPABASE_SERVICE_KEY
     process.env.SUPABASE_SERVICE_KEY = "service-key"
     try {
-      state.photos = ["obra-storage:obra/7/hallazgos/abc123.png"]
+      state.photos = [`obra-storage:obra/7/hallazgos/${HEX24}.png`]
       fetchMock.mockResolvedValue(new Response(new Uint8Array(png), { status: 200, headers: { "content-type": "image/png" } }))
       const res = await GET(req())
       expect(res.status).toBe(200)
       const [calledUrl, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-      expect(calledUrl).toBe(`${SUPABASE}/storage/v1/object/authenticated/obra-planos/obra/7/hallazgos/abc123.png`)
+      expect(calledUrl).toBe(`${SUPABASE}/storage/v1/object/authenticated/obra-planos/obra/7/hallazgos/${HEX24}.png`)
       expect((init.headers as Record<string, string>).Authorization).toBe("Bearer service-key")
       expect(init.redirect).toBe("error")
       expect(res.headers.get("content-type")).toBe("image/png")
       expect(res.headers.get("x-content-type-options")).toBe("nosniff")
+    } finally {
+      if (prevKey === undefined) delete process.env.SUPABASE_SERVICE_KEY
+      else process.env.SUPABASE_SERVICE_KEY = prevKey
+    }
+  })
+
+  it.each([
+    ["una lámina de capa (no es foto de hallazgo)", `obra-storage:obra/7/12-${HEX24}.png`],
+    ["una lámina subida directo", "obra-storage:obra/7/uploads/0f8fad5b-d9cb-469f-a165-70867728950e.png"],
+    ["una foto de OTRO proyecto", `obra-storage:obra/8/hallazgos/${HEX24}.png`],
+    ["una ruta con ..", `obra-storage:obra/7/hallazgos/../../8/hallazgos/${HEX24}.png`],
+    ["una ruta con otro formato", "obra-storage:obra/7/hallazgos/abc123.png"],
+  ])("no sirve %s aunque esté en photos del hallazgo propio (404, sin leer Storage)", async (_label, ref) => {
+    const prevKey = process.env.SUPABASE_SERVICE_KEY
+    process.env.SUPABASE_SERVICE_KEY = "service-key"
+    try {
+      state.photos = [ref]
+      const res = await GET(req())
+      expect(res.status).toBe(404)
+      expect(fetchMock).not.toHaveBeenCalled()
+    } finally {
+      if (prevKey === undefined) delete process.env.SUPABASE_SERVICE_KEY
+      else process.env.SUPABASE_SERVICE_KEY = prevKey
+    }
+  })
+
+  it("no sirve una foto de Obra si el proyecto del hallazgo no es del usuario (hallazgo heredado con project_id ajeno)", async () => {
+    const prevKey = process.env.SUPABASE_SERVICE_KEY
+    process.env.SUPABASE_SERVICE_KEY = "service-key"
+    try {
+      state.projectId = 8
+      state.ownedProjects = [7]
+      state.photos = [`obra-storage:obra/8/hallazgos/${HEX24}.png`]
+      const res = await GET(req())
+      expect(res.status).toBe(404)
+      expect(fetchMock).not.toHaveBeenCalled()
     } finally {
       if (prevKey === undefined) delete process.env.SUPABASE_SERVICE_KEY
       else process.env.SUPABASE_SERVICE_KEY = prevKey

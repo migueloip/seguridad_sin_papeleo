@@ -97,6 +97,31 @@ export const OBRA_SCHEMA_STATEMENTS: readonly string[] = [
   // Origen CAD de una capa importada de DXF ({min_x, max_y, width_units} en unidades del dibujo):
   // permite alinear sola otra capa DXF del mismo nivel y sistema de coordenadas.
   `ALTER TABLE obra_plan_layers ADD COLUMN IF NOT EXISTS cad_origin JSONB`,
+  // Copia reducida de una lámina subida directo (≤ 3000 px, del tamaño que acepta la IA): la
+  // detección con IA usa esta en vez de la lámina completa (hasta 25 MB).
+  `ALTER TABLE obra_plan_layers ADD COLUMN IF NOT EXISTS analysis_image_path TEXT`,
+  // "¿Alguna capa usa esta lámina subida?" (createLayer y la limpieza de subidas abandonadas).
+  `CREATE INDEX IF NOT EXISTS idx_obra_layers_image_path ON obra_plan_layers(image_path) WHERE image_path IS NOT NULL`,
+
+  // Permisos de subida directa de láminas (createLayerUploadTicket): cuota por persona y obra,
+  // createLayer solo acepta una ruta con permiso propio vigente, y los objetos de permisos
+  // vencidos que no quedaron en ninguna capa se borran del bucket (discarded_at).
+  `CREATE TABLE IF NOT EXISTS obra_layer_uploads (
+  id SERIAL PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  path VARCHAR(160) NOT NULL UNIQUE,
+  mime_type VARCHAR(40) NOT NULL,
+  size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at TIMESTAMP NOT NULL,
+  used_at TIMESTAMP,
+  layer_id INTEGER REFERENCES obra_plan_layers(id) ON DELETE SET NULL,
+  discarded_at TIMESTAMP
+)`,
+  `CREATE INDEX IF NOT EXISTS idx_obra_layer_uploads_project ON obra_layer_uploads(project_id, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_obra_layer_uploads_user ON obra_layer_uploads(user_id, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_obra_layer_uploads_open ON obra_layer_uploads(expires_at) WHERE used_at IS NULL AND discarded_at IS NULL`,
 
   `CREATE TABLE IF NOT EXISTS obra_ai_suggestions (
   id SERIAL PRIMARY KEY,

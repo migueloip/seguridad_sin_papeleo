@@ -51,6 +51,14 @@ export const PLAN_INLINE_DATA_URL_MAX_CHARS = 4_500_000
 /** Peso máximo (bytes) de una lámina que cabe inline en ese data URL. */
 export const PLAN_INLINE_MAX_BYTES = Math.floor((PLAN_INLINE_DATA_URL_MAX_CHARS - "data:image/jpeg;base64,".length) / 4) * 3
 
+/**
+ * Peso máximo (bytes) de la imagen que se envía a la IA de visión: en base64
+ * queda bajo los 5 MB por imagen de Anthropic (Gemini y OpenAI aceptan más).
+ * Las láminas subidas directo (hasta 25 MB) guardan aparte una copia reducida
+ * para esto (analysis_image_path).
+ */
+export const AI_IMAGE_MAX_BYTES = 3_900_000
+
 /** Vigencia de las URL firmadas de subida: Supabase la fija en 2 horas (uploadSignedUrlExpirationTime). */
 export const SIGNED_UPLOAD_EXPIRES_IN_S = 7200
 
@@ -476,6 +484,26 @@ export async function deleteObraObject(path: string): Promise<void> {
   }
 }
 
+/** Borra varios objetos en una llamada (mejor esfuerzo, como deleteObraObject). Las rutas inválidas se omiten. */
+export async function deleteObraObjects(paths: readonly string[]): Promise<void> {
+  const cfg = getSupabaseStorageConfig()
+  const valid = paths.filter((p) => typeof p === "string" && OBJECT_PATH_RE.test(p))
+  if (!cfg || valid.length === 0) return
+  try {
+    const res = await fetch(`${cfg.baseUrl}/storage/v1/object/${OBRA_BUCKET}`, {
+      method: "DELETE",
+      headers: { ...authHeaders(cfg), "Content-Type": "application/json" },
+      body: JSON.stringify({ prefixes: valid }),
+      redirect: "error",
+      signal: timeout(),
+    })
+    if (!res.ok) console.error(`[obra/storage] no se pudieron borrar ${valid.length} objetos (HTTP ${res.status})`)
+    await res.body?.cancel().catch(() => undefined)
+  } catch (e) {
+    console.error("[obra/storage] no se pudieron borrar objetos", e)
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Subida directa (URL firmada) y verificación del objeto subido
 // ---------------------------------------------------------------------------
@@ -672,6 +700,17 @@ export async function storeLayerImage(projectId: number, layerId: number, img: D
 }
 
 /**
+ * Guarda la copia reducida para la IA de una lámina subida directo
+ * (obra/{projectId}/{layerId}-{aleatorio}-ia.{ext}). Solo con Supabase.
+ */
+export async function storeLayerAnalysisImage(projectId: number, layerId: number, img: DecodedImage): Promise<string> {
+  const cfg = requireConfig()
+  const path = `obra/${projectId}/${layerId}-${randomName()}-ia.${img.ext}`
+  await uploadObject(cfg, path, img)
+  return path
+}
+
+/**
  * Guarda la foto de un hallazgo y devuelve la referencia para findings.photos:
  * "obra-storage:obra/{projectId}/hallazgos/{aleatorio}.{ext}" con Supabase, o la
  * data URL canónica sin Supabase.
@@ -698,9 +737,69 @@ export async function readStoredImage(stored: StoredLayerImage): Promise<{ bytes
 }
 
 /**
+ * Imagen de una capa para la IA de visión: la copia reducida si existe; si
+ * no, la lámina, siempre que pese ≤ AI_IMAGE_MAX_BYTES (las del bucket se
+ * miden con HEAD antes de descargarlas). Si pesa más, ObraValidationError con
+ * un mensaje claro ANTES de llamar al proveedor (que la rechazaría).
+ */
+export async function readStoredImageForAnalysis(
+  stored: StoredLayerImage & { analysis_image_path: string | null },
+): Promise<{ bytes: Buffer; mime: ImageMime }> {
+  const tooBig = (bytes: number) =>
+    new ObraValidationError(
+      `La lámina pesa ${formatMegabytes(bytes)} y la detección con IA acepta imágenes de hasta ${formatMegabytes(AI_IMAGE_MAX_BYTES)}. ` +
+        "Vuelve a subirla desde «Subir capa» (guarda una copia reducida para la IA) o sube una versión más liviana.",
+    )
+  if (stored.analysis_image_path) return downloadObraObject(stored.analysis_image_path, AI_IMAGE_MAX_BYTES)
+  if (stored.image_path) {
+    const stat = await statObraObject(stored.image_path)
+    if (!stat) throw new Error("La imagen de la capa no está en el almacenamiento")
+    if (stat.size > AI_IMAGE_MAX_BYTES) throw tooBig(stat.size)
+    return downloadObraObject(stored.image_path, AI_IMAGE_MAX_BYTES)
+  }
+  const img = await readStoredImage(stored)
+  if (img.bytes.length > AI_IMAGE_MAX_BYTES) throw tooBig(img.bytes.length)
+  return img
+}
+
+const FINDING_PHOTO_PATH_RE = /^obra\/(\d{1,10})\/hallazgos\/[0-9a-f]{24}\.(?:png|jpg|webp)$/
+
+/**
+ * Proyecto de una referencia de foto de hallazgo creada por storeFindingPhoto
+ * ("obra-storage:obra/<proyecto>/hallazgos/<aleatorio>.<ext>"), o null si la
+ * referencia no tiene exactamente esa forma (láminas, subidas, "..", etc.).
+ * Quien sirve la foto debe comprobar que ese proyecto es el del hallazgo y
+ * que el usuario tiene acceso a él: la ruta de un objeto NO es secreta (viaja
+ * en las URL firmadas) y por sí sola no da acceso.
+ */
+export function findingPhotoRefProjectId(ref: unknown): number | null {
+  if (typeof ref !== "string" || !ref.startsWith(OBRA_STORAGE_PREFIX)) return null
+  const m = FINDING_PHOTO_PATH_RE.exec(ref.slice(OBRA_STORAGE_PREFIX.length))
+  if (!m) return null
+  const id = Number(m[1])
+  return Number.isSafeInteger(id) && id > 0 ? id : null
+}
+
+/**
+ * Filtra las fotos de un hallazgo que llegan del CLIENTE (createFinding,
+ * /api/mobile/sync): las referencias "obra-storage:" solo las crea el servidor,
+ * así que se descartan salvo las que el hallazgo ya tenía (`existing`, para
+ * que una app que reenvía la lista completa al editar no las pierda).
+ */
+export function dropClientObraStorageRefs(photos: readonly string[], existing: unknown = []): string[] {
+  const kept = new Set(
+    (Array.isArray(existing) ? existing : []).filter(
+      (p): p is string => typeof p === "string" && p.startsWith(OBRA_STORAGE_PREFIX),
+    ),
+  )
+  return photos.filter((p) => !p.startsWith(OBRA_STORAGE_PREFIX) || kept.has(p))
+}
+
+/**
  * Lee una referencia de findings.photos creada por este módulo
  * ("obra-storage:<ruta>" o data URL). Para que /api/findings/photo pueda
- * servir las fotos subidas al bucket privado.
+ * servir las fotos subidas al bucket privado (después de comprobar el
+ * proyecto con findingPhotoRefProjectId).
  */
 export async function readObraStorageRef(ref: string): Promise<{ bytes: Buffer; mime: ImageMime }> {
   if (ref.startsWith(OBRA_STORAGE_PREFIX)) return downloadObraObject(ref.slice(OBRA_STORAGE_PREFIX.length))

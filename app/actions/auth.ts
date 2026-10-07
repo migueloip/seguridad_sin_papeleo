@@ -7,6 +7,7 @@ import { redirect } from "next/navigation"
 import bcrypt from "bcryptjs"
 import { createSession, destroySession } from "@/lib/auth"
 import { safeNextPath } from "@/lib/safe-redirect"
+import { isAdminEmail } from "@/lib/admin-emails"
 
 // Retry wrapper for database operations (handles Neon connection drops)
 async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, delayMs = 1000): Promise<T> {
@@ -96,8 +97,7 @@ export async function registerAction(_prev: AuthFormState, formData: FormData): 
   }
 
   const passwordHash = await bcrypt.hash(password, 10)
-  const adminEmails = (process.env.ADMIN_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean)
-  const role = adminEmails.includes(email) ? "admin" : "user"
+  const role = isAdminEmail(email) ? "admin" : "user"
   let result: { id: number; role: string | null }[]
   try {
     result = await withRetry(async () => await sql<{ id: number; role: string | null }>`
@@ -145,8 +145,9 @@ export async function loginAction(_prev: AuthFormState, formData: FormData): Pro
     return fail("Credenciales inválidas")
   }
 
-  const adminEmails = (process.env.ADMIN_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean)
-  if (adminEmails.includes(email) && u.role !== "admin") {
+  // Un correo de ADMIN_EMAILS solo llega a una cuenta al registrarse con él (o por un admin):
+  // updateProfile no deja ponérselo después (lib/admin-emails.ts).
+  if (isAdminEmail(email) && u.role !== "admin") {
     await withRetry(async () => await sql`UPDATE users SET role = 'admin' WHERE id = ${u.id}`)
     u.role = "admin"
   }
