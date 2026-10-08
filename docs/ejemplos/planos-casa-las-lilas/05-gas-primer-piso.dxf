@@ -1,0 +1,158 @@
+  0
+SECTION
+  2
+HEADER
+  9
+$ACADVER
+  1
+AC1015
+  9
+$INSUNITS
+ 70
+4
+  0
+ENDSEC
+  0
+SECTION
+  2
+TABLES
+  0
+TABLE
+  2
+LAYER
+ 70
+2
+  0
+LAYER
+  2
+GAS-RED
+ 70
+0
+ 62
+1
+  6
+CONTINUOUS
+  0
+LAYER
+  2
+GAS-MEDIDOR
+ 70
+0
+ 62
+1
+  6
+CONTINUOUS
+  0
+ENDTAB
+  0
+ENDSEC
+  0
+SECTION
+  2
+ENTITIES
+  0
+INSERT
+  8
+GAS-MEDIDOR
+  2
+MED
+ 10
+15500
+ 20
+800
+ 30
+0
+  0
+TEXT
+  8
+GAS-MEDIDOR
+ 10
+15540
+ 20
+830
+ 30
+0
+ 40
+200
+  1
+Medidor gas
+  0
+LWPOLYLINE
+100
+AcDbEntity
+  8
+GAS-RED
+100
+AcDbPolyline
+ 90
+3
+ 70
+0
+ 43
+0
+ 10
+15500
+ 20
+800
+ 10
+15500
+ 20
+3200
+ 10
+12200
+ 20
+3200
+  0
+TEXT
+  8
+GAS-RED
+ 10
+12600
+ 20
+3240
+ 30
+0
+ 40
+200
+  1
+Red gas Cu 1/2"
+  0
+LWPOLYLINE
+100
+AcDbEntity
+  8
+GAS-RED
+100
+AcDbPolyline
+ 90
+2
+ 70
+0
+ 43
+0
+ 10
+15500
+ 20
+2600
+ 10
+14600
+ 20
+2600
+  0
+TEXT
+  8
+GAS-RED
+ 10
+14700
+ 20
+2640
+ 30
+0
+ 40
+160
+  1
+Calefón
+  0
+ENDSEC
+  0
+EOF

@@ -1,0 +1,1028 @@
+  0
+SECTION
+  2
+HEADER
+  9
+$ACADVER
+  1
+AC1015
+  9
+$INSUNITS
+ 70
+4
+  0
+ENDSEC
+  0
+SECTION
+  2
+TABLES
+  0
+TABLE
+  2
+LAYER
+ 70
+6
+  0
+LAYER
+  2
+A-MUROS
+ 70
+0
+ 62
+7
+  6
+CONTINUOUS
+  0
+LAYER
+  2
+EST-PILARES
+ 70
+0
+ 62
+1
+  6
+CONTINUOUS
+  0
+LAYER
+  2
+A-PUERTAS
+ 70
+0
+ 62
+3
+  6
+CONTINUOUS
+  0
+LAYER
+  2
+A-TEXTOS
+ 70
+0
+ 62
+2
+  6
+CONTINUOUS
+  0
+LAYER
+  2
+COTAS
+ 70
+0
+ 62
+8
+  6
+CONTINUOUS
+  0
+LAYER
+  2
+A-DESLINDE
+ 70
+0
+ 62
+9
+  6
+CONTINUOUS
+  0
+ENDTAB
+  0
+ENDSEC
+  0
+SECTION
+  2
+ENTITIES
+  0
+LWPOLYLINE
+100
+AcDbEntity
+  8
+A-DESLINDE
+100
+AcDbPolyline
+ 90
+4
+ 70
+1
+ 43
+0
+ 10
+0
+ 20
+-500
+ 10
+19000
+ 20
+-500
+ 10
+19000
+ 20
+14000
+ 10
+0
+ 20
+14000
+  0
+LWPOLYLINE
+100
+AcDbEntity
+  8
+A-MUROS
+100
+AcDbPolyline
+ 90
+6
+ 70
+0
+ 43
+0
+ 10
+8000
+ 20
+2000
+ 10
+2000
+ 20
+2000
+ 10
+2000
+ 20
+12000
+ 10
+16000
+ 20
+12000
+ 10
+16000
+ 20
+2000
+ 10
+9000
+ 20
+2000
+  0
+LINE
+100
+AcDbEntity
+  8
+A-MUROS
+100
+AcDbLine
+ 10
+9500
+ 20
+2000
+ 30
+0
+ 11
+9500
+ 21
+5800
+ 31
+0
+  0
+LINE
+100
+AcDbEntity
+  8
+A-MUROS
+100
+AcDbLine
+ 10
+13000
+ 20
+2000
+ 30
+0
+ 11
+13000
+ 21
+6100
+ 31
+0
+  0
+LINE
+100
+AcDbEntity
+  8
+A-MUROS
+100
+AcDbLine
+ 10
+2000
+ 20
+7000
+ 30
+0
+ 11
+6000
+ 21
+7000
+ 31
+0
+  0
+LINE
+100
+AcDbEntity
+  8
+A-MUROS
+100
+AcDbLine
+ 10
+9500
+ 20
+7000
+ 30
+0
+ 11
+13100
+ 21
+7000
+ 31
+0
+  0
+LINE
+100
+AcDbEntity
+  8
+A-MUROS
+100
+AcDbLine
+ 10
+13900
+ 20
+7000
+ 30
+0
+ 11
+16000
+ 21
+7000
+ 31
+0
+  0
+LINE
+100
+AcDbEntity
+  8
+A-MUROS
+100
+AcDbLine
+ 10
+6000
+ 20
+7000
+ 30
+0
+ 11
+6000
+ 21
+7200
+ 31
+0
+  0
+LINE
+100
+AcDbEntity
+  8
+A-MUROS
+100
+AcDbLine
+ 10
+6000
+ 20
+8100
+ 30
+0
+ 11
+6000
+ 21
+12000
+ 31
+0
+  0
+LINE
+100
+AcDbEntity
+  8
+A-MUROS
+100
+AcDbLine
+ 10
+6000
+ 20
+8500
+ 30
+0
+ 11
+7000
+ 21
+8500
+ 31
+0
+  0
+LINE
+100
+AcDbEntity
+  8
+A-MUROS
+100
+AcDbLine
+ 10
+7800
+ 20
+8500
+ 30
+0
+ 11
+10000
+ 21
+8500
+ 31
+0
+  0
+LINE
+100
+AcDbEntity
+  8
+A-MUROS
+100
+AcDbLine
+ 10
+10900
+ 20
+8500
+ 30
+0
+ 11
+13500
+ 21
+8500
+ 31
+0
+  0
+LINE
+100
+AcDbEntity
+  8
+A-MUROS
+100
+AcDbLine
+ 10
+14400
+ 20
+8500
+ 30
+0
+ 11
+16000
+ 21
+8500
+ 31
+0
+  0
+LINE
+100
+AcDbEntity
+  8
+A-MUROS
+100
+AcDbLine
+ 10
+9000
+ 20
+8500
+ 30
+0
+ 11
+9000
+ 21
+12000
+ 31
+0
+  0
+LINE
+100
+AcDbEntity
+  8
+A-MUROS
+100
+AcDbLine
+ 10
+12500
+ 20
+8500
+ 30
+0
+ 11
+12500
+ 21
+12000
+ 31
+0
+  0
+LWPOLYLINE
+100
+AcDbEntity
+  8
+EST-PILARES
+100
+AcDbPolyline
+ 90
+4
+ 70
+1
+ 43
+0
+ 10
+1900
+ 20
+1900
+ 10
+2100
+ 20
+1900
+ 10
+2100
+ 20
+2100
+ 10
+1900
+ 20
+2100
+  0
+LWPOLYLINE
+100
+AcDbEntity
+  8
+EST-PILARES
+100
+AcDbPolyline
+ 90
+4
+ 70
+1
+ 43
+0
+ 10
+9400
+ 20
+1900
+ 10
+9600
+ 20
+1900
+ 10
+9600
+ 20
+2100
+ 10
+9400
+ 20
+2100
+  0
+LWPOLYLINE
+100
+AcDbEntity
+  8
+EST-PILARES
+100
+AcDbPolyline
+ 90
+4
+ 70
+1
+ 43
+0
+ 10
+12900
+ 20
+1900
+ 10
+13100
+ 20
+1900
+ 10
+13100
+ 20
+2100
+ 10
+12900
+ 20
+2100
+  0
+LWPOLYLINE
+100
+AcDbEntity
+  8
+EST-PILARES
+100
+AcDbPolyline
+ 90
+4
+ 70
+1
+ 43
+0
+ 10
+15900
+ 20
+1900
+ 10
+16100
+ 20
+1900
+ 10
+16100
+ 20
+2100
+ 10
+15900
+ 20
+2100
+  0
+LWPOLYLINE
+100
+AcDbEntity
+  8
+EST-PILARES
+100
+AcDbPolyline
+ 90
+4
+ 70
+1
+ 43
+0
+ 10
+1900
+ 20
+6900
+ 10
+2100
+ 20
+6900
+ 10
+2100
+ 20
+7100
+ 10
+1900
+ 20
+7100
+  0
+LWPOLYLINE
+100
+AcDbEntity
+  8
+EST-PILARES
+100
+AcDbPolyline
+ 90
+4
+ 70
+1
+ 43
+0
+ 10
+5900
+ 20
+6900
+ 10
+6100
+ 20
+6900
+ 10
+6100
+ 20
+7100
+ 10
+5900
+ 20
+7100
+  0
+LWPOLYLINE
+100
+AcDbEntity
+  8
+EST-PILARES
+100
+AcDbPolyline
+ 90
+4
+ 70
+1
+ 43
+0
+ 10
+15900
+ 20
+6900
+ 10
+16100
+ 20
+6900
+ 10
+16100
+ 20
+7100
+ 10
+15900
+ 20
+7100
+  0
+LWPOLYLINE
+100
+AcDbEntity
+  8
+EST-PILARES
+100
+AcDbPolyline
+ 90
+4
+ 70
+1
+ 43
+0
+ 10
+1900
+ 20
+11900
+ 10
+2100
+ 20
+11900
+ 10
+2100
+ 20
+12100
+ 10
+1900
+ 20
+12100
+  0
+LWPOLYLINE
+100
+AcDbEntity
+  8
+EST-PILARES
+100
+AcDbPolyline
+ 90
+4
+ 70
+1
+ 43
+0
+ 10
+5900
+ 20
+11900
+ 10
+6100
+ 20
+11900
+ 10
+6100
+ 20
+12100
+ 10
+5900
+ 20
+12100
+  0
+LWPOLYLINE
+100
+AcDbEntity
+  8
+EST-PILARES
+100
+AcDbPolyline
+ 90
+4
+ 70
+1
+ 43
+0
+ 10
+8900
+ 20
+11900
+ 10
+9100
+ 20
+11900
+ 10
+9100
+ 20
+12100
+ 10
+8900
+ 20
+12100
+  0
+LWPOLYLINE
+100
+AcDbEntity
+  8
+EST-PILARES
+100
+AcDbPolyline
+ 90
+4
+ 70
+1
+ 43
+0
+ 10
+12400
+ 20
+11900
+ 10
+12600
+ 20
+11900
+ 10
+12600
+ 20
+12100
+ 10
+12400
+ 20
+12100
+  0
+LWPOLYLINE
+100
+AcDbEntity
+  8
+EST-PILARES
+100
+AcDbPolyline
+ 90
+4
+ 70
+1
+ 43
+0
+ 10
+15900
+ 20
+11900
+ 10
+16100
+ 20
+11900
+ 10
+16100
+ 20
+12100
+ 10
+15900
+ 20
+12100
+  0
+ARC
+  8
+A-PUERTAS
+ 10
+8000
+ 20
+2000
+ 30
+0
+ 40
+1000
+ 50
+0
+ 51
+90
+  0
+ARC
+  8
+A-PUERTAS
+ 10
+7000
+ 20
+8500
+ 30
+0
+ 40
+800
+ 50
+0
+ 51
+90
+  0
+ARC
+  8
+A-PUERTAS
+ 10
+10000
+ 20
+8500
+ 30
+0
+ 40
+900
+ 50
+0
+ 51
+90
+  0
+ARC
+  8
+A-PUERTAS
+ 10
+13500
+ 20
+8500
+ 30
+0
+ 40
+900
+ 50
+0
+ 51
+90
+  0
+TEXT
+  8
+A-TEXTOS
+ 10
+4200
+ 20
+4500
+ 30
+0
+ 40
+300
+  1
+LIVING-COMEDOR
+  0
+TEXT
+  8
+A-TEXTOS
+ 10
+10600
+ 20
+4500
+ 30
+0
+ 40
+300
+  1
+COCINA
+  0
+TEXT
+  8
+A-TEXTOS
+ 10
+13800
+ 20
+4500
+ 30
+0
+ 40
+300
+  1
+LOGIA
+  0
+TEXT
+  8
+A-TEXTOS
+ 10
+10500
+ 20
+7600
+ 30
+0
+ 40
+250
+  1
+PASILLO
+  0
+TEXT
+  8
+A-TEXTOS
+ 10
+3200
+ 20
+9800
+ 30
+0
+ 40
+300
+  1
+DORM. 1
+  0
+TEXT
+  8
+A-TEXTOS
+ 10
+7000
+ 20
+10200
+ 30
+0
+ 40
+300
+  1
+BANO
+  0
+TEXT
+  8
+A-TEXTOS
+ 10
+9900
+ 20
+10200
+ 30
+0
+ 40
+300
+  1
+DORM. 2
+  0
+TEXT
+  8
+A-TEXTOS
+ 10
+13000
+ 20
+10200
+ 30
+0
+ 40
+300
+  1
+DORM. PRINCIPAL
+  0
+LINE
+100
+AcDbEntity
+  8
+COTAS
+100
+AcDbLine
+ 10
+2000
+ 20
+13000
+ 30
+0
+ 11
+16000
+ 21
+13000
+ 31
+0
+  0
+TEXT
+  8
+COTAS
+ 10
+8600
+ 20
+13150
+ 30
+0
+ 40
+250
+  1
+14.00
+  0
+LINE
+100
+AcDbEntity
+  8
+COTAS
+100
+AcDbLine
+ 10
+17500
+ 20
+2000
+ 30
+0
+ 11
+17500
+ 21
+12000
+ 31
+0
+  0
+TEXT
+  8
+COTAS
+ 10
+17650
+ 20
+6900
+ 30
+0
+ 40
+250
+  1
+10.00
+  0
+ENDSEC
+  0
+EOF

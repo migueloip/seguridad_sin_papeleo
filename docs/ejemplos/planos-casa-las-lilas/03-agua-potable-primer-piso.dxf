@@ -1,0 +1,138 @@
+  0
+SECTION
+  2
+HEADER
+  9
+$ACADVER
+  1
+AC1015
+  9
+$INSUNITS
+ 70
+4
+  0
+ENDSEC
+  0
+SECTION
+  2
+TABLES
+  0
+TABLE
+  2
+LAYER
+ 70
+1
+  0
+LAYER
+  2
+AP-RED
+ 70
+0
+ 62
+5
+  6
+CONTINUOUS
+  0
+ENDTAB
+  0
+ENDSEC
+  0
+SECTION
+  2
+ENTITIES
+  0
+LWPOLYLINE
+100
+AcDbEntity
+  8
+AP-RED
+100
+AcDbPolyline
+ 90
+6
+ 70
+0
+ 43
+0
+ 10
+3000
+ 20
+-500
+ 10
+3000
+ 20
+1500
+ 10
+11800
+ 20
+1500
+ 10
+11800
+ 20
+7300
+ 10
+7800
+ 20
+7300
+ 10
+7800
+ 20
+10400
+  0
+TEXT
+  8
+AP-RED
+ 10
+4200
+ 20
+1600
+ 30
+0
+ 40
+200
+  1
+Matriz AP PPR %%c25
+  0
+LWPOLYLINE
+100
+AcDbEntity
+  8
+AP-RED
+100
+AcDbPolyline
+ 90
+3
+ 70
+0
+ 43
+0
+ 10
+11800
+ 20
+7300
+ 10
+14800
+ 20
+7300
+ 10
+14800
+ 20
+4500
+  0
+TEXT
+  8
+AP-RED
+ 10
+13000
+ 20
+7400
+ 30
+0
+ 40
+180
+  1
+AP %%c20 logia
+  0
+ENDSEC
+  0
+EOF

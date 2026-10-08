@@ -1,0 +1,296 @@
+  0
+SECTION
+  2
+HEADER
+  9
+$ACADVER
+  1
+AC1015
+  9
+$INSUNITS
+ 70
+4
+  0
+ENDSEC
+  0
+SECTION
+  2
+TABLES
+  0
+TABLE
+  2
+LAYER
+ 70
+3
+  0
+LAYER
+  2
+ALC-COLECTOR
+ 70
+0
+ 62
+6
+  6
+CONTINUOUS
+  0
+LAYER
+  2
+ALC-CAMARAS
+ 70
+0
+ 62
+6
+  6
+CONTINUOUS
+  0
+LAYER
+  2
+ALC-UD
+ 70
+0
+ 62
+6
+  6
+CONTINUOUS
+  0
+ENDTAB
+  0
+ENDSEC
+  0
+SECTION
+  2
+ENTITIES
+  0
+LWPOLYLINE
+100
+AcDbEntity
+  8
+ALC-COLECTOR
+100
+AcDbPolyline
+ 90
+4
+ 70
+0
+ 43
+0
+ 10
+7500
+ 20
+10000
+ 10
+7500
+ 20
+7750
+ 10
+17200
+ 20
+7750
+ 10
+17200
+ 20
+1200
+  0
+TEXT
+  8
+ALC-COLECTOR
+ 10
+11400
+ 20
+7850
+ 30
+0
+ 40
+200
+  1
+Colector PVC %%c110
+  0
+LWPOLYLINE
+100
+AcDbEntity
+  8
+ALC-COLECTOR
+100
+AcDbPolyline
+ 90
+2
+ 70
+0
+ 43
+0
+ 10
+11200
+ 20
+5200
+ 10
+11200
+ 20
+7750
+  0
+TEXT
+  8
+ALC-COLECTOR
+ 10
+11300
+ 20
+5400
+ 30
+0
+ 40
+200
+  1
+Descarga cocina %%c75
+  0
+LWPOLYLINE
+100
+AcDbEntity
+  8
+ALC-COLECTOR
+100
+AcDbPolyline
+ 90
+2
+ 70
+0
+ 43
+0
+ 10
+14600
+ 20
+4200
+ 10
+17200
+ 20
+4200
+  0
+TEXT
+  8
+ALC-COLECTOR
+ 10
+14700
+ 20
+4300
+ 30
+0
+ 40
+200
+  1
+Descarga logia %%c75
+  0
+CIRCLE
+  8
+ALC-CAMARAS
+ 10
+17200
+ 20
+7750
+ 30
+0
+ 40
+300
+  0
+TEXT
+  8
+ALC-CAMARAS
+ 10
+17300
+ 20
+7650
+ 30
+0
+ 40
+220
+  1
+C.I. 1
+  0
+CIRCLE
+  8
+ALC-CAMARAS
+ 10
+17200
+ 20
+4200
+ 30
+0
+ 40
+300
+  0
+TEXT
+  8
+ALC-CAMARAS
+ 10
+17300
+ 20
+4100
+ 30
+0
+ 40
+220
+  1
+C.I. 2
+  0
+CIRCLE
+  8
+ALC-CAMARAS
+ 10
+17200
+ 20
+1200
+ 30
+0
+ 40
+300
+  0
+TEXT
+  8
+ALC-CAMARAS
+ 10
+17300
+ 20
+1100
+ 30
+0
+ 40
+220
+  1
+C.I. 3
+  0
+LWPOLYLINE
+100
+AcDbEntity
+  8
+ALC-UD
+100
+AcDbPolyline
+ 90
+2
+ 70
+0
+ 43
+0
+ 10
+17200
+ 20
+1200
+ 10
+17200
+ 20
+-500
+  0
+TEXT
+  8
+ALC-UD
+ 10
+17300
+ 20
+300
+ 30
+0
+ 40
+200
+  1
+UD PVC %%c160
+  0
+ENDSEC
+  0
+EOF
