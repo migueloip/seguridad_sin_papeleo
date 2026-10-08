@@ -160,6 +160,8 @@ function syncViewInUrl(view: PlanView, heat: boolean) {
   if (typeof window === "undefined") return
   try {
     const url = new URL(window.location.href)
+    // ?reportar, ?task y ?layer son de entrada: no deben volver a aplicarse al recargar otra vista.
+    for (const k of ["reportar", "task", "layer"]) url.searchParams.delete(k)
     if (view === "3d") url.searchParams.set("vista", "3d")
     else url.searchParams.delete("vista")
     if (heat) url.searchParams.set("calor", "1")
@@ -243,7 +245,8 @@ export function PlanWorkspace({
   const [showLabels, setShowLabels] = useState(true)
   const [allLevelsFindings, setAllLevelsFindings] = useState(false)
   const [showHeat, setShowHeat] = useState(initialHeat)
-  const [view, setView] = useState<PlanView>(initialView)
+  // Reportar se hace en el plano 2D: ?reportar=1 manda sobre ?vista=3d.
+  const [view, setView] = useState<PlanView>(initialReport ? "2d" : initialView)
   const [allLevels3d, setAllLevels3d] = useState(false)
   const [heatFilter, setHeatFilter] = useState<HeatFilter>(DEFAULT_HEAT_FILTER)
   const [mode, setMode] = useState<PlanMode>("navegar")
@@ -462,6 +465,8 @@ export function PlanWorkspace({
     [heatOn, view, pins, heatFilter, today, allLevels3d, level],
   )
   const needLevels = useCallback((lvls: number[]) => lvls.forEach((l) => void loadLevel(l)), [loadLevel])
+  // Objeto estable: si cambiara en cada render, la vista 3D recalcularía y subiría el calor a la GPU cada vez.
+  const heat3d = useMemo(() => (heatOn ? { filter: heatFilter, today } : null), [heatOn, heatFilter, today])
   const selectedPin = pins.find((p) => p.finding_id === selectedFindingId) ?? null
   const selectedElement = selectedElementId != null ? elementIndex.get(selectedElementId) ?? null : null
   const selectedElementLayer = selectedElement ? layersList.find((l) => l.id === selectedElement.layer_id) ?? null : null
@@ -499,6 +504,7 @@ export function PlanWorkspace({
 
   function changeLevel(l: number, keepFinding = false) {
     setLevel(l)
+    setFocus(null)
     setActiveLayerId(defaultActiveLayer(layersList, l))
     setSelectedElementId(null)
     setTaskMarker(null)
@@ -539,6 +545,8 @@ export function PlanWorkspace({
   function changeView(v: PlanView) {
     if (v === view) return
     if (v === "3d" && mode !== "navegar") exitMode()
+    // El 2D se vuelve a montar al volver: sin esto aplicaría un centrado viejo (quizá de otro nivel).
+    setFocus(null)
     setView(v)
     setSelectedElementId(null)
     syncViewInUrl(v, heatOn)
@@ -1039,9 +1047,10 @@ export function PlanWorkspace({
                 hiddenDisciplines={hiddenDisciplines}
                 showPins={showPins}
                 selectedFindingId={selectedFindingId}
-                heat={heatOn ? { filter: heatFilter, today } : null}
+                heat={heat3d}
                 onSelectFinding={(id) => selectFinding(id, false)}
                 onNeedLevels={needLevels}
+                loadingLevels={loadingLevels}
                 controlsBottomOffset={isDesktop ? 0 : MOBILE_SHEET_PX}
                 ariaLabel={`Vista 3D de ${allLevels3d ? "todos los niveles" : currentLevelText}`}
                 overlayEnd={
@@ -1090,14 +1099,15 @@ export function PlanWorkspace({
                     Todas las capas de este nivel están ocultas. Actívalas en la pestaña Capas.
                   </p>
                 ) : null}
-                {heatOn ? (
+                {/* En el celular la ficha del elemento y el mapa de calor ocupan la misma esquina: manda la ficha. */}
+                {heatOn && (isDesktop || !selectedElement) ? (
                   <HeatmapCard
                     filter={heatFilter}
                     onFilterChange={setHeatFilter}
                     count={heat.count}
                     scopeText="en este nivel"
                     pins={pins}
-                    className="absolute right-3 top-3 z-10 w-[min(280px,calc(100%-24px))]"
+                    className="absolute right-3 top-3 z-20 max-h-[calc(100%-24px)] w-[min(280px,calc(100%-24px))] overflow-y-auto"
                   />
                 ) : null}
                 {level != null && loadingLevels.includes(level) ? (

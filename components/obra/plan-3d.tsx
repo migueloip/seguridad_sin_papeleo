@@ -14,16 +14,9 @@ import { Component, useCallback, useEffect, useLayoutEffect, useMemo, useRef, us
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber"
 import * as THREE from "three"
 import { OrbitControls as OrbitControlsImpl } from "three/examples/jsm/controls/OrbitControls.js"
-import { Box, ChevronDown, Layers, Maximize, Square, TriangleAlert, X } from "lucide-react"
+import { Box, ChevronDown, Layers, Maximize, Minus, Plus, Square, TriangleAlert, X } from "lucide-react"
 import { Switch } from "@/components/ui/switch"
-import {
-  computeHeatGrid,
-  heatGridToRgba,
-  heatPointsFor,
-  heatScaleMax,
-  type HeatFilter,
-  type HeatGrid,
-} from "@/lib/obra/heatmap"
+import { computeHeatGrid, heatGridToRgba, heatPointsFor, heatScaleMax, type HeatFilter, type HeatGrid } from "@/lib/obra/heatmap"
 import {
   buildScene3D,
   levelElevation,
@@ -47,7 +40,7 @@ import {
   type Severity,
 } from "@/lib/obra/types"
 import { cn } from "@/lib/utils"
-import { boundsOfLayers, elementDetails, layerFrameOf, levelLabel, levelsOf } from "./plan-canvas"
+import { elementDetails, layerFrameOf, levelLabel, levelsOf } from "./plan-canvas"
 
 /** Colores de severidad (mismos tonos que los tokens --sev-* de app/globals.css). */
 const SEVERITY_HEX: Record<Severity, string> = {
@@ -82,6 +75,8 @@ export type Plan3DProps = {
   onSelectFinding?: (findingId: number) => void
   /** Pide al padre cargar los elementos de otros niveles («Todos los niveles»). */
   onNeedLevels?: (levels: number[]) => void
+  /** Niveles cuyos elementos se están cargando. */
+  loadingLevels?: number[]
   /** Espacio (px) reservado abajo: en el celular la hoja inferior fija tapa el borde del lienzo. */
   controlsBottomOffset?: number
   /** Tarjeta para la esquina superior derecha (p.ej. el mapa de calor); en el celular baja a otra fila. */
@@ -243,7 +238,7 @@ function gridStep(size: number): number {
 // Piezas de la escena (dentro del <Canvas>)
 // ---------------------------------------------------------------------------
 
-type CameraCommand = { kind: ViewKind; nonce: number }
+type CameraCommand = { kind: ViewKind; nonce: number; zoom?: number }
 
 function CameraRig({ bounds, command, reducedMotion }: { bounds: Bounds3 | null; command: CameraCommand; reducedMotion: boolean }) {
   const camera = useThree((s) => s.camera)
@@ -252,6 +247,7 @@ function CameraRig({ bounds, command, reducedMotion }: { bounds: Bounds3 | null;
   const size = useThree((s) => s.size)
   const controlsRef = useRef<OrbitControlsImpl | null>(null)
   const anim = useRef<{ from: CameraPose; to: CameraPose; t0: number } | null>(null)
+  const lastNonce = useRef(-1)
 
   useEffect(() => {
     const c = new OrbitControlsImpl(camera, gl.domElement)
@@ -282,8 +278,24 @@ function CameraRig({ bounds, command, reducedMotion }: { bounds: Bounds3 | null;
   useEffect(() => {
     const c = controlsRef.current
     if (!c || !bounds) return
-    const to = poseFor(command.kind, bounds, size.width / Math.max(size.height, 1))
     const cam = camera as THREE.PerspectiveCamera
+    const isNew = command.nonce !== lastNonce.current
+    lastNonce.current = command.nonce
+    // Un zoom solo se aplica una vez; si después cambia el encuadre (otro nivel), se vuelve a encajar.
+    if (command.zoom && isNew) {
+      // Acercar/alejar: la cámara se mueve hacia el punto que mira (sirve también con teclado).
+      const offset = cam.position.clone().sub(c.target).multiplyScalar(command.zoom)
+      const to = { position: c.target.clone().add(offset), target: c.target.clone() }
+      if (reducedMotion) {
+        cam.position.copy(to.position)
+        c.update()
+      } else {
+        anim.current = { from: { position: cam.position.clone(), target: c.target.clone() }, to, t0: performance.now() }
+      }
+      invalidate()
+      return
+    }
+    const to = poseFor(command.kind, bounds, size.width / Math.max(size.height, 1))
     cam.near = 0.05
     cam.far = Math.max(5000, to.position.distanceTo(to.target) * 20)
     cam.updateProjectionMatrix()
@@ -346,7 +358,8 @@ function InstancedBatch({
         args={[geometry, undefined, batch.matrices.length]}
         renderOrder={ghost ? 2 : 0}
         onClick={(e: ThreeEvent<MouseEvent>) => {
-          if (e.delta > 6 || e.instanceId == null) return
+          // Con rayos X lo translúcido no atrapa el clic: pasa a lo que está detrás (tubos enterrados).
+          if (ghost || e.delta > 6 || e.instanceId == null) return
           e.stopPropagation()
           onPick(batch.elementIds[e.instanceId])
         }}
@@ -406,7 +419,7 @@ function PrismMesh({ prism, ghost, onPick }: { prism: ScenePrism; ghost: boolean
       geometry={geometry}
       renderOrder={translucent ? 2 : 0}
       onClick={(e: ThreeEvent<MouseEvent>) => {
-        if (e.delta > 6) return
+        if (ghost || e.delta > 6) return
         e.stopPropagation()
         onPick(prism.element_id)
       }}
@@ -538,6 +551,7 @@ function PinMarker({
       <mesh position={[0, height, 0]}>
         <sphereGeometry args={[r, 24, 16]} />
         <meshStandardMaterial
+          key={muted ? "resuelto" : "abierto"}
           color={color}
           roughness={0.35}
           emissive={color}
@@ -578,6 +592,7 @@ export function Plan3D({
   heat = null,
   onSelectFinding,
   onNeedLevels,
+  loadingLevels,
   controlsBottomOffset = 0,
   overlayEnd,
   ariaLabel = "Vista 3D del plano",
@@ -612,17 +627,23 @@ export function Plan3D({
 
   const elements = useMemo(() => shownLevels.flatMap((l) => elementsByLevel[l] ?? []), [shownLevels, elementsByLevel])
   const scene = useMemo(
-    () =>
-      buildScene3D({
-        layers,
-        elements,
-        pins: showPins ? pins : [],
-        levels: shownLevels,
-        hiddenLayerIds,
-        hiddenDisciplines,
-        hiddenGroups,
-      }),
-    [layers, elements, pins, showPins, shownLevels, hiddenLayerIds, hiddenDisciplines, hiddenGroups],
+    () => buildScene3D({ layers, elements, levels: shownLevels, hiddenLayerIds, hiddenDisciplines, hiddenGroups }),
+    [layers, elements, shownLevels, hiddenLayerIds, hiddenDisciplines, hiddenGroups],
+  )
+  // Los pines van aparte: recargar hallazgos no reconstruye muros ni redes.
+  const scenePins = useMemo(
+    () => (showPins ? buildScene3D({ layers, elements: [], pins, levels: shownLevels }).pins : []),
+    [layers, pins, showPins, shownLevels],
+  )
+  useEffect(
+    () => () => {
+      // Las geometrías unitarias se comparten entre montajes: liberarlas suelta el renderer anterior
+      // (three.js las vuelve a subir a la GPU si se usan otra vez).
+      UNIT_BOX.dispose()
+      UNIT_CYLINDER.dispose()
+      UNIT_SPHERE.dispose()
+    },
+    [],
   )
   const { batches, prisms } = useMemo(() => buildBatches(scene.primitives), [scene])
   const elementById = useMemo(() => {
@@ -647,23 +668,24 @@ export function Plan3D({
     }
   }, [layers, shownLevels])
 
+  const heatFilter = heat?.filter ?? null
+  const heatToday = heat?.today ?? null
   const heatLayers = useMemo(() => {
-    if (!heat) return []
+    if (!heatFilter || !heatToday) return []
     const frameOf = (id: number) => {
       const l = layerById.get(id)
       return l ? layerFrameOf(l) : null
     }
     const grids = shownLevels
       .map((lv) => {
-        const b = boundsOfLayers(layers.filter((l) => l.level === lv))
-        const pts = b ? heatPointsFor(pins, frameOf, heat.filter, heat.today, lv) : []
-        return { level: lv, grid: b && pts.length > 0 ? computeHeatGrid(pts, b) : null }
+        const pts = heatPointsFor(pins, frameOf, heatFilter, heatToday, lv)
+        return { level: lv, grid: pts.length > 0 ? computeHeatGrid(pts) : null }
       })
       .filter((x): x is { level: number; grid: HeatGrid } => x.grid != null)
     // Una sola escala para todos los niveles: el mismo color significa lo mismo en cada piso.
     const scale = heatScaleMax(...grids.map((g) => g.grid))
     return grids.map((g) => ({ ...g, rgba: heatGridToRgba(g.grid, scale) }))
-  }, [heat, shownLevels, layers, layerById, pins])
+  }, [heatFilter, heatToday, shownLevels, layerById, pins])
 
   const pinScale = useMemo(() => {
     const b = frameBounds
@@ -678,6 +700,9 @@ export function Plan3D({
   const onlyWalls = presentGroups.some((g) => WALL_GROUPS.includes(g))
     ? () => setHiddenGroups(presentGroups.filter((g) => !WALL_GROUPS.includes(g)))
     : null
+
+  // Si el pin bajo el mouse desaparece (filtro, nivel), r3f no avisa: el tooltip se deriva de los pines vigentes.
+  const hover = hoverPin && scenePins.some((p) => p.finding_id === hoverPin.pin.finding_id) ? hoverPin : null
 
   const onHover = useCallback((pin: ScenePin | null, e?: ThreeEvent<PointerEvent>) => {
     if (!pin || !e) {
@@ -696,13 +721,13 @@ export function Plan3D({
   const selectedLayer = selectedElement ? layerById.get(selectedElement.layer_id) ?? null : null
   const visibleGroupCount = scene.groups.filter((g) => !hiddenGroups.includes(g.group)).length
   const levelLayersCount = layers.filter((l) => shownLevels.includes(l.level)).length
-  const loading = missingLevels.length > 0
+  const loading = shownLevels.some((l) => loadingLevels?.includes(l))
   const bottom = 12 + Math.max(0, controlsBottomOffset)
 
   const summary = [
     `${scene.element_count} elemento${scene.element_count === 1 ? "" : "s"} en 3D`,
     ...scene.groups.filter((g) => !hiddenGroups.includes(g.group)).map((g) => `${g.label}: ${g.count}`),
-    `${scene.pins.length} hallazgo${scene.pins.length === 1 ? "" : "s"}`,
+    `${scenePins.length} hallazgo${scenePins.length === 1 ? "" : "s"}`,
     xray ? "rayos X activados" : null,
     heat ? "mapa de calor sobre el piso" : null,
   ]
@@ -725,7 +750,7 @@ export function Plan3D({
         "relative h-full w-full overflow-hidden rounded-[14px] border border-border bg-[#fbfaf6] dark:bg-[#1a160f]",
         className,
       )}
-      style={{ cursor: hoverPin ? "pointer" : undefined }}
+      style={{ cursor: hover ? "pointer" : undefined }}
     >
       <section role="region" aria-label={ariaLabel} className="absolute inset-0">
         <p className="sr-only">{summary}.</p>
@@ -737,7 +762,9 @@ export function Plan3D({
               frameloop="demand"
               dpr={[1, 2]}
               camera={{ fov: FOV, near: 0.05, far: 5000, position: [20, 20, 20] }}
-              gl={{ antialias: true, alpha: true }}
+              // Búfer de profundidad logarítmico: el piso, el calor y los anillos de los pines están a
+              // milímetros de las losas y, sin él, parpadean al alejarse en obras grandes.
+              gl={{ antialias: true, alpha: true, logarithmicDepthBuffer: true }}
               onPointerMissed={() => setSelectedElementId(null)}
               className="touch-none"
               aria-hidden
@@ -758,9 +785,9 @@ export function Plan3D({
                   onPick={setSelectedElementId}
                 />
               ))}
-              {prisms.map((p, i) => (
+              {prisms.map((p) => (
                 <PrismMesh
-                  key={`${p.element_id}-${i}`}
+                  key={p.element_id}
                   prism={p}
                   ghost={xray && SOLID_GROUPS.includes(p.group)}
                   onPick={setSelectedElementId}
@@ -769,7 +796,7 @@ export function Plan3D({
               {heatLayers.map((h) => (
                 <HeatPlane key={h.level} grid={h.grid} rgba={h.rgba} elevation={levelElevation(h.level)} />
               ))}
-              {scene.pins.map((p) => (
+              {scenePins.map((p) => (
                 <PinMarker
                   key={p.finding_id}
                   pin={p}
@@ -785,7 +812,7 @@ export function Plan3D({
       </section>
 
       {/* Fila superior: capas 3D a la izquierda; tarjeta del padre (mapa de calor) a la derecha */}
-      <div className="pointer-events-none absolute inset-x-3 top-3 z-10 flex flex-wrap items-start justify-between gap-2">
+      <div className="pointer-events-none absolute inset-x-3 top-3 z-20 flex max-h-[calc(100%-24px)] flex-wrap items-start justify-between gap-2 overflow-y-auto">
         <div className="flex w-[min(300px,100%)] flex-col gap-2">
           <section
             aria-label="Capas de la vista 3D"
@@ -952,14 +979,14 @@ export function Plan3D({
       ) : null}
 
       {/* Tooltip del hallazgo bajo el mouse */}
-      {hoverPin ? (
+      {hover ? (
         <div
           role="tooltip"
-          className="pointer-events-none absolute z-20 max-w-[240px] rounded-[10px] border border-border bg-card px-3 py-2 text-[12px] shadow-md"
-          style={{ left: hoverPin.x + 14, top: Math.max(8, hoverPin.y - 10) }}
+          className="pointer-events-none absolute z-30 max-w-[240px] rounded-[10px] border border-border bg-card px-3 py-2 text-[12px] shadow-md"
+          style={{ left: hover.x + 14, top: Math.max(8, hover.y - 10) }}
         >
-          <p className="font-semibold">{hoverPin.pin.title}</p>
-          <p className="text-muted-foreground">Gravedad {SEVERITY_LABELS[hoverPin.pin.severity].toLowerCase()}</p>
+          <p className="font-semibold">{hover.pin.title}</p>
+          <p className="text-muted-foreground">Gravedad {SEVERITY_LABELS[hover.pin.severity].toLowerCase()}</p>
         </div>
       ) : null}
 
@@ -987,6 +1014,23 @@ export function Plan3D({
                 i > 0 && "border-t border-border",
                 command.kind === kind && "text-[#b8841a]",
               )}
+            >
+              <Icon className="h-4 w-4" aria-hidden />
+            </button>
+          ))}
+          {(
+            [
+              [0.7, "Acercar", Plus],
+              [1 / 0.7, "Alejar", Minus],
+            ] as const
+          ).map(([zoom, label, Icon]) => (
+            <button
+              key={label}
+              type="button"
+              onClick={() => setCommand((c) => ({ kind: c.kind, nonce: c.nonce + 1, zoom }))}
+              aria-label={label}
+              title={label}
+              className="flex size-10 items-center justify-center border-t border-border outline-none hover:bg-secondary focus-visible:bg-secondary focus-visible:ring-[3px] focus-visible:ring-inset focus-visible:ring-ring/50"
             >
               <Icon className="h-4 w-4" aria-hidden />
             </button>

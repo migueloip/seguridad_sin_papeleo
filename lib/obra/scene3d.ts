@@ -36,8 +36,11 @@ import {
 export const LEVEL_HEIGHT_M = 2.8
 /** Altura de muros, tabiques y columnas (m). */
 export const WALL_HEIGHT_M = 2.5
-/** Máximo de primitivas por escena (protege al navegador con planos enormes). */
-export const MAX_PRIMITIVES = 20_000
+/**
+ * Máximo de piezas dibujadas por escena (protege al navegador con planos enormes). Un tubo cuenta
+ * por sus tramos y uniones (2 piezas por tramo), el resto 1.
+ */
+export const MAX_PRIMITIVES = 30_000
 /** Máximo de puntos por elemento (se diezma el resto). */
 export const MAX_POINTS_PER_ELEMENT = 400
 
@@ -441,6 +444,11 @@ export function elementPrimitives(el: PlanElement, layer: PlanLayer, frame: Laye
   return out
 }
 
+/** Piezas que dibuja una primitiva (un tubo: un cilindro por tramo y una unión por vértice). */
+export function primitiveCost(p: ScenePrimitive): number {
+  return p.kind === "tube" ? Math.max(1, 2 * (p.points.length - 1)) : 1
+}
+
 /** Arma la escena 3D de los niveles pedidos con los filtros del visor. */
 export function buildScene3D(input: BuildScene3DInput): Scene3D {
   const maxPrimitives = Math.max(1, input.maxPrimitives ?? MAX_PRIMITIVES)
@@ -474,6 +482,7 @@ export function buildScene3D(input: BuildScene3DInput): Scene3D {
 
   const counts = new Map<SceneGroup, number>()
   const primitives: ScenePrimitive[] = []
+  let used = 0
   let truncated = false
   let elementCount = 0
   for (const el of input.elements) {
@@ -482,7 +491,7 @@ export function buildScene3D(input: BuildScene3DInput): Scene3D {
     const group = sceneGroupOf(el, layer)
     counts.set(group, (counts.get(group) ?? 0) + 1)
     if (hiddenGroups.has(group)) continue
-    if (primitives.length >= maxPrimitives) {
+    if (used >= maxPrimitives) {
       truncated = true
       continue
     }
@@ -494,13 +503,18 @@ export function buildScene3D(input: BuildScene3DInput): Scene3D {
       prims = []
     }
     if (prims.length === 0) continue
-    const room = maxPrimitives - primitives.length
-    if (prims.length > room) {
-      prims = prims.slice(0, room)
-      truncated = true
+    let added = 0
+    for (const p of prims) {
+      const cost = primitiveCost(p)
+      if (used + cost > maxPrimitives) {
+        truncated = true
+        break
+      }
+      primitives.push(p)
+      used += cost
+      added += 1
     }
-    primitives.push(...prims)
-    elementCount += 1
+    if (added > 0) elementCount += 1
   }
 
   const groups: SceneGroupCount[] = SCENE_GROUPS.filter((g) => counts.has(g)).map((g) => ({

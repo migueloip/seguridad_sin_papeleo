@@ -675,8 +675,9 @@ describe.skipIf(!HAS_TEST_DB)("caso estrella: grieta junto al colector de alcant
   it("ubicar hallazgos existentes: solo del proyecto, sin pin previo y con findings.view", async () => {
     const { listUnpinnedObraFindings, pinExistingObraFinding } = await import("@/app/actions/obra/pins")
     const legacy = await db.sql<{ id: number }[]>`
-      INSERT INTO findings (project_id, user_id, title, description, severity, status)
-      VALUES (${db.projectId}, ${db.users.gerente}, 'Humedad en muro del baño', 'Mancha con eflorescencia', 'medium', 'open')
+      INSERT INTO findings (project_id, user_id, title, description, severity, status, created_at)
+      VALUES (${db.projectId}, ${db.users.gerente}, 'Humedad en muro del baño', 'Mancha con eflorescencia', 'medium', 'open',
+              now() - interval '90 days')
       RETURNING id`
     const legacyId = Number(legacy[0].id)
 
@@ -701,6 +702,10 @@ describe.skipIf(!HAS_TEST_DB)("caso estrella: grieta junto al colector de alcant
     )
     const pin = unwrap(await pinExistingObraFinding(db.projectId, { finding_id: legacyId, layer_id: ids.arq, x: 0.1, y: 0.2 }))
     expect(pin).toMatchObject({ finding_id: legacyId, category: "humedad_filtracion", reported_by: db.users.supervisor, x: 0.1, y: 0.2 })
+    // Se ubicó hoy, pero se reportó hace 90 días: el mapa de calor filtra por la fecha del reporte.
+    const daysBetween = (Date.parse(pin.created_at) - Date.parse(pin.reported_at)) / 86_400_000
+    expect(daysBetween).toBeGreaterThan(89)
+    expect(daysBetween).toBeLessThan(91)
     expectError(
       await pinExistingObraFinding(db.projectId, { finding_id: legacyId, layer_id: ids.arq, x: 0.3, y: 0.3 }),
       /ya está ubicado/,

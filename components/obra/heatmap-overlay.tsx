@@ -20,7 +20,7 @@ import {
 } from "@/lib/obra/heatmap"
 import { FINDING_CATEGORIES, FINDING_CATEGORY_LABELS, type FindingCategory, type FindingPin, type PlanLayer } from "@/lib/obra/types"
 import { cn } from "@/lib/utils"
-import { boundsOfLayers, layerFrameOf } from "./plan-canvas"
+import { layerFrameOf } from "./plan-canvas"
 
 /** Imagen del mapa ubicada en metros del nivel (para un <image> del SVG del plano). */
 export type HeatOverlay = { href: string; x: number; y: number; width: number; height: number }
@@ -59,16 +59,14 @@ export function useHeatOverlay({
   )
   const grid = useMemo(() => {
     if (!enabled || level == null || count === 0) return null
-    const levelLayers = layers.filter((l) => l.level === level)
-    const bounds = boundsOfLayers(levelLayers)
-    if (!bounds) return null
     const byId = new Map(layers.map((l) => [l.id, l]))
     const frameOf = (id: number) => {
       const l = byId.get(id)
       return l ? layerFrameOf(l) : null
     }
     const points = heatPointsFor(pins, frameOf, filter, today, level)
-    return points.length > 0 ? computeHeatGrid(points, bounds) : null
+    // La grilla cubre solo la zona con hallazgos (y su halo): en niveles enormes la celda no crece de más.
+    return points.length > 0 ? computeHeatGrid(points) : null
   }, [enabled, count, pins, layers, level, filter, today])
 
   const overlay = useMemo((): HeatOverlay | null => {

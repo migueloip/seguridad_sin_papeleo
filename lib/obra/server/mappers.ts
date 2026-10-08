@@ -876,6 +876,8 @@ export type PinRow = {
   category: string
   reported_by: number | string | null
   created_at: Date | string
+  /** Fecha del reporte (findings.created_at); puede ser anterior a la ubicación en el plano. */
+  reported_at?: Date | string | null
   title: string
   description: string | null
   severity: string
@@ -895,6 +897,7 @@ export function mapPin(r: PinRow): FindingPin {
     category: oneOf(r.category, FINDING_CATEGORIES, "otro"),
     reported_by: toNumOrNull(r.reported_by),
     created_at: toIso(r.created_at),
+    reported_at: toIso(r.reported_at ?? r.created_at),
     title: toStr(r.title),
     description: toStrOrNull(r.description),
     severity: oneOf(r.severity, SEVERITIES, "medium"),
@@ -908,7 +911,7 @@ export function pinSelect(q: Queryable) {
   return s`
     SELECT
       p.finding_id, p.project_id, p.layer_id, p.level, p.x, p.y, p.category, p.reported_by,
-      p.created_at, f.title, f.description, f.severity, f.status
+      p.created_at, f.created_at AS reported_at, f.title, f.description, f.severity, f.status
     FROM obra_finding_pins p
     JOIN findings f ON f.id = p.finding_id
   `

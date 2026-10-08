@@ -29,6 +29,7 @@ function pin(over: Partial<FindingPin> = {}): FindingPin {
     category: "grieta",
     reported_by: 1,
     created_at: "2026-10-01T15:00:00.000Z",
+    reported_at: "2026-10-01T15:00:00.000Z",
     title: "Grieta",
     description: null,
     severity: "high",
@@ -64,12 +65,19 @@ describe("findingHeatWeight", () => {
   it("el período cuenta en días de Chile e incluye hoy", () => {
     const f: HeatFilter = { ...ALL, period_days: 30 }
     // 2026-09-09 es el primer día de los últimos 30 (con hoy incluido).
-    expect(findingHeatWeight(pin({ created_at: "2026-09-09T12:00:00.000Z" }), f, TODAY)).toBe(4)
-    expect(findingHeatWeight(pin({ created_at: "2026-09-08T12:00:00.000Z" }), f, TODAY)).toBe(0)
+    expect(findingHeatWeight(pin({ reported_at: "2026-09-09T12:00:00.000Z" }), f, TODAY)).toBe(4)
+    expect(findingHeatWeight(pin({ reported_at: "2026-09-08T12:00:00.000Z" }), f, TODAY)).toBe(0)
     // 02:00 UTC del 9 de septiembre todavía es el 8 en Chile.
-    expect(findingHeatWeight(pin({ created_at: "2026-09-09T02:00:00.000Z" }), f, TODAY)).toBe(0)
-    expect(findingHeatWeight(pin({ created_at: "fecha rota" }), f, TODAY)).toBe(0)
-    expect(findingHeatWeight(pin({ created_at: "fecha rota" }), ALL, TODAY)).toBe(4)
+    expect(findingHeatWeight(pin({ reported_at: "2026-09-09T02:00:00.000Z" }), f, TODAY)).toBe(0)
+    expect(findingHeatWeight(pin({ created_at: "fecha rota", reported_at: "fecha rota" }), f, TODAY)).toBe(0)
+    expect(findingHeatWeight(pin({ created_at: "fecha rota", reported_at: "fecha rota" }), ALL, TODAY)).toBe(4)
+  })
+
+  it("el período usa la fecha del reporte, no la de su ubicación en el plano", () => {
+    const f: HeatFilter = { ...ALL, period_days: 30 }
+    const viejoUbicadoHoy = pin({ reported_at: "2026-05-01T12:00:00.000Z", created_at: "2026-10-08T12:00:00.000Z" })
+    expect(findingHeatWeight(viejoUbicadoHoy, f, TODAY)).toBe(0)
+    expect(findingHeatWeight(viejoUbicadoHoy, ALL, TODAY)).toBe(4)
   })
 })
 
@@ -107,6 +115,24 @@ describe("computeHeatGrid", () => {
     expect(g.cols).toBe(80)
     expect(g.rows).toBe(40)
     expect(hottestCell(g)).toBeNull()
+    expect(computeHeatGrid([]).max).toBe(0)
+  })
+
+  it("sin límites, la grilla cubre solo los puntos y su halo", () => {
+    const g = computeHeatGrid([
+      { x: 100, y: 50, weight: 1 },
+      { x: 104, y: 52, weight: 1 },
+    ])
+    expect(g.minX).toBeCloseTo(100 - 3.75)
+    expect(g.minY).toBeCloseTo(50 - 3.75)
+    expect(g.cell).toBeCloseTo(0.25)
+    expect(g.cols * g.cell).toBeGreaterThanOrEqual(4 + 7.5 - 1e-9)
+  })
+
+  it("en un nivel enorme la celda crece y el radio con ella: el hallazgo no se pierde", () => {
+    const g = computeHeatGrid([{ x: 2501.3, y: 1777.7, weight: 8 }], { minX: 0, minY: 0, maxX: 5000, maxY: 5000 })
+    expect(g.cell).toBeGreaterThan(10)
+    expect(g.max / 8).toBeGreaterThan(0.5)
   })
 
   it("el máximo queda en el hallazgo y vale ~su peso; cae con la distancia", () => {
@@ -164,7 +190,7 @@ describe("escala y colores", () => {
   })
 
   it("rampa transparente → amarillo → rojo, con opacidad creciente", () => {
-    expect(heatColor(0)).toEqual([0, 0, 0, 0])
+    expect(heatColor(0)).toEqual([250, 204, 21, 0])
     expect(heatColor(HEAT_MIN_INTENSITY / 2)[3]).toBe(0)
     const low = heatColor(0.12)
     const high = heatColor(1)

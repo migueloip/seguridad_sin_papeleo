@@ -253,7 +253,10 @@ Plan y contratos completos: `docs/PLAN-OBRA-INTEGRAL.md`. Resumen para agentes:
   hoy incluido) y categoría. Solo se ofrece con `findings.view` (quien solo ve
   sus propios reportes no lo tiene). En 2D es un `<image>` en el SVG del plano
   (`heatOverlay` de `plan-canvas.tsx`); en 3D, una textura sobre el piso de
-  cada nivel con escala común. `?calor=1` lo enciende.
+  cada nivel con escala común. `?calor=1` lo enciende. La grilla cubre solo la
+  zona con hallazgos (celda 0,25 m; si crece, el radio crece con ella). El
+  período usa `FindingPin.reported_at` (fecha del reporte), no la del pin.
+  Cuenta los pines que trae `listPins` (`LIMIT 2000`, los más recientes).
 - Vista 3D (`components/obra/plan-3d.tsx`, cargada con `next/dynamic` sin SSR;
   `?vista=3d`): levanta solo elementos vectoriales (DXF o dibujados) con
   `buildScene3D` (puro, probado): X = x, Z = y del plano, Y = altura; niveles
@@ -264,7 +267,9 @@ Plan y contratos completos: `docs/PLAN-OBRA-INTEGRAL.md`. Resumen para agentes:
   todos los niveles, planta/perspectiva. Respeta capas y disciplinas ocultas
   del panel. Reportar y dibujar siguen siendo en 2D (cambiar de modo vuelve al
   2D). Sin WebGL muestra un aviso. Al cambiar `transparent` de un material de
-  three.js hay que recrearlo (`key`), no basta con el prop.
+  three.js hay que recrearlo (`key`), no basta con el prop. Con rayos X lo
+  translúcido no atrapa clics (pasan a los tubos de atrás). Un tubo cuenta 2
+  piezas por tramo en el tope `MAX_PRIMITIVES`.
 
 ### Planos y Supabase Storage
 - Bucket privado `obra-planos` (`lib/obra/server/storage.ts`): se crea o se

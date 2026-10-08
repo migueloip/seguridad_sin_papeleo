@@ -236,6 +236,7 @@ describe("buildScene3D", () => {
     category: "grieta",
     reported_by: 1,
     created_at: "2026-10-01T00:00:00.000Z",
+    reported_at: "2026-10-01T00:00:00.000Z",
     title: "Grieta",
     description: null,
     severity: "high",
@@ -278,6 +279,18 @@ describe("buildScene3D", () => {
     expect(sinCapa.groups.map((g) => g.group)).toEqual(["muros", "estructura"])
     const sinDisciplina = buildScene3D({ layers: [arq, alc], elements, hiddenDisciplines: ["arquitectura"] })
     expect(sinDisciplina.primitives.every((p) => p.group === "alcantarillado")).toBe(true)
+  })
+
+  it("un tubo cuenta por sus tramos en el presupuesto de piezas", () => {
+    const longPipe = el(
+      "tuberia_agua",
+      { type: "polyline", points: Array.from({ length: 11 }, (_, i) => m(i, 5)) },
+      { layer_id: 1 },
+    )
+    expect(buildScene3D({ layers: [arq], elements: [longPipe], maxPrimitives: 20 }).primitives).toHaveLength(1)
+    const s = buildScene3D({ layers: [arq], elements: [longPipe], maxPrimitives: 19 })
+    expect(s.primitives).toHaveLength(0)
+    expect(s.truncated).toBe(true)
   })
 
   it("recorta escenas enormes y lo informa", () => {

@@ -77,7 +77,7 @@ function dayOf(iso: string): string | null {
  * `today` es "YYYY-MM-DD" (día de Chile): el período cuenta hacia atrás desde él, incluido.
  */
 export function findingHeatWeight(
-  pin: Pick<FindingPin, "severity" | "status" | "category" | "created_at">,
+  pin: Pick<FindingPin, "severity" | "status" | "category" | "created_at"> & { reported_at?: string | null },
   filter: HeatFilter,
   today: string = todayISO(),
 ): number {
@@ -85,7 +85,8 @@ export function findingHeatWeight(
   if (!open && filter.status === "abiertos") return 0
   if (filter.categories && filter.categories.length > 0 && !filter.categories.includes(pin.category)) return 0
   if (filter.period_days != null) {
-    const day = dayOf(pin.created_at)
+    // Cuenta la fecha del reporte, no la de su ubicación en el plano (puede ubicarse meses después).
+    const day = dayOf(pin.reported_at || pin.created_at)
     if (!day || day < addDaysISO(today, -(filter.period_days - 1))) return 0
   }
   const base = HEAT_SEVERITY_WEIGHT[pin.severity] ?? HEAT_SEVERITY_WEIGHT.medium
@@ -129,17 +130,23 @@ export function countHeatFindings(
 }
 
 /**
- * Grilla de calor sobre `bounds` (se amplía para que quepa el halo de cada punto).
- * Núcleo gaussiano con σ = radius_m / 2, recortado a 1,5 × radius_m.
+ * Grilla de calor sobre `bounds` (si falta, sobre los puntos) ampliada para que quepa el halo de
+ * cada punto. Núcleo gaussiano con σ = radius_m / 2, recortado a 1,5 × radius_m. Si la grilla es
+ * tan grande que la celda supera el radio, el radio crece con ella (un hallazgo nunca desaparece
+ * entre centros de celda).
  */
-export function computeHeatGrid(points: readonly HeatPoint[], bounds: HeatBounds, opts: HeatGridOptions = {}): HeatGrid {
-  const radius = Math.max(0.1, opts.radius_m ?? HEAT_DEFAULTS.radius_m)
+export function computeHeatGrid(points: readonly HeatPoint[], bounds?: HeatBounds | null, opts: HeatGridOptions = {}): HeatGrid {
+  let radius = Math.max(0.1, opts.radius_m ?? HEAT_DEFAULTS.radius_m)
   const maxSide = Math.max(8, Math.floor(opts.max_side ?? HEAT_DEFAULTS.max_side))
   const pad = radius * 1.5
-  let minX = Math.min(bounds.minX, bounds.maxX)
-  let minY = Math.min(bounds.minY, bounds.maxY)
-  let maxX = Math.max(bounds.minX, bounds.maxX)
-  let maxY = Math.max(bounds.minY, bounds.maxY)
+  let minX = bounds ? Math.min(bounds.minX, bounds.maxX) : Infinity
+  let minY = bounds ? Math.min(bounds.minY, bounds.maxY) : Infinity
+  let maxX = bounds ? Math.max(bounds.minX, bounds.maxX) : -Infinity
+  let maxY = bounds ? Math.max(bounds.minY, bounds.maxY) : -Infinity
+  if (!bounds && points.length === 0) {
+    minX = minY = 0
+    maxX = maxY = 1
+  }
   for (const p of points) {
     if (p.x - pad < minX) minX = p.x - pad
     if (p.y - pad < minY) minY = p.y - pad
@@ -153,6 +160,7 @@ export function computeHeatGrid(points: readonly HeatPoint[], bounds: HeatBounds
   const rows = Math.max(1, Math.ceil(h / cell))
   const values = new Float32Array(cols * rows)
 
+  radius = Math.max(radius, cell * 1.5)
   const sigma = radius / 2
   const inv2s2 = 1 / (2 * sigma * sigma)
   const cutoff = radius * 1.5
@@ -203,7 +211,8 @@ const RAMP: [number, number, number, number, number][] = [
 
 /** Color (RGBA 0–255) de una intensidad 0–1 en la rampa del mapa. */
 export function heatColor(t: number): [number, number, number, number] {
-  if (!(t > HEAT_MIN_INTENSITY)) return [0, 0, 0, 0]
+  // Transparente pero con el color de la rampa: al filtrar la textura no aparece un borde oscuro.
+  if (!(t > HEAT_MIN_INTENSITY)) return [RAMP[0][1], RAMP[0][2], RAMP[0][3], 0]
   const x = Math.min(1, t)
   for (let i = 1; i < RAMP.length; i++) {
     const [t1, r1, g1, b1, a1] = RAMP[i]
@@ -228,9 +237,7 @@ export function heatGridToRgba(grid: HeatGrid, scaleMax: number = heatScaleMax(g
   const k = scaleMax > 0 ? 1 / scaleMax : 0
   const a = Math.max(0, Math.min(1, alpha))
   for (let i = 0; i < grid.values.length; i++) {
-    const v = grid.values[i]
-    if (v <= 0) continue
-    const [r, g, b, al] = heatColor(v * k)
+    const [r, g, b, al] = heatColor(grid.values[i] * k)
     const o = i * 4
     out[o] = r
     out[o + 1] = g

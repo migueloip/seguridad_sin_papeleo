@@ -291,8 +291,11 @@ export type FindingPin = {
   y: number
   category: FindingCategory
   reported_by: number | null
+  /** Cuándo se ubicó en el plano. */
   created_at: string
   // Datos del hallazgo (tabla findings)
+  /** Cuándo se reportó el hallazgo (puede ser anterior a su ubicación en el plano). */
+  reported_at: string
   title: string
   description: string | null
   severity: Severity
