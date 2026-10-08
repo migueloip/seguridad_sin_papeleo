@@ -123,7 +123,8 @@ Plan y contratos completos: `docs/PLAN-OBRA-INTEGRAL.md`. Resumen para agentes:
   cercanos), `classify.ts`, `metrics.ts`, `suggestions.ts` (esquemas zod de
   payloads y transiciones), `dxf.ts` (importación DXF ASCII),
   `client-files.ts` (imagen/PDF → data URL o archivo para subida directa, y
-  PUT a la URL firmada con progreso, en el navegador).
+  PUT a la URL firmada con progreso, en el navegador), `heatmap.ts` (mapa de
+  calor de hallazgos) y `scene3d.ts` (escena de la vista 3D).
 - Solo servidor: `lib/obra/access.ts` (sesión → acceso, errores, auditoría),
   `lib/obra/schema.ts` (DDL 006) y `lib/obra/server/*.ts` (lógica sin
   `"use server"`; cada función recibe `actorUserId` explícito y se reutiliza
@@ -243,6 +244,27 @@ Plan y contratos completos: `docs/PLAN-OBRA-INTEGRAL.md`. Resumen para agentes:
 - La IA usa la configuración de IA del dueño del proyecto (`/configuracion`),
   con límite de uso por persona/hora y obra/día (`assertAiQuota`). Una URL base
   de IA propia solo se combina con la key propia (`lib/ai-settings.ts`).
+
+### Mapa de calor y vista 3D (`/obra/<id>/planos`)
+- Mapa de calor (`lib/obra/heatmap.ts`): núcleo gaussiano en metros del nivel
+  (σ = 1,25 m), peso por gravedad (crítica 8, alta 4, media 2, baja 1;
+  resueltos/cerrados ×0,25 con el filtro «Todos»); escala absoluta hasta que una
+  zona supera a un hallazgo crítico. Filtros: estado, período (días de Chile,
+  hoy incluido) y categoría. Solo se ofrece con `findings.view` (quien solo ve
+  sus propios reportes no lo tiene). En 2D es un `<image>` en el SVG del plano
+  (`heatOverlay` de `plan-canvas.tsx`); en 3D, una textura sobre el piso de
+  cada nivel con escala común. `?calor=1` lo enciende.
+- Vista 3D (`components/obra/plan-3d.tsx`, cargada con `next/dynamic` sin SSR;
+  `?vista=3d`): levanta solo elementos vectoriales (DXF o dibujados) con
+  `buildScene3D` (puro, probado): X = x, Z = y del plano, Y = altura; niveles
+  cada `LEVEL_HEIGHT_M` (2,8 m). Alturas convencionales por tipo (muros 2,5 m,
+  alcantarillado −0,6 m, agua/electricidad por el cielo, gas 0,3 m);
+  `attributes.depth_m` manda; el Ø sale del atributo o de la etiqueta ("Ø110").
+  Grupos «Capas 3D» (muros, estructura y cada red; «Solo muros»), rayos X,
+  todos los niveles, planta/perspectiva. Respeta capas y disciplinas ocultas
+  del panel. Reportar y dibujar siguen siendo en 2D (cambiar de modo vuelve al
+  2D). Sin WebGL muestra un aviso. Al cambiar `transparent` de un material de
+  three.js hay que recrearlo (`key`), no basta con el prop.
 
 ### Planos y Supabase Storage
 - Bucket privado `obra-planos` (`lib/obra/server/storage.ts`): se crea o se

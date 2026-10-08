@@ -9,17 +9,22 @@
  * Carga sus datos con las acciones de app/actions/obra/* (layers, elements,
  * pins). Lee de la URL (vía props del servidor): ?reportar=1 entra en modo
  * reportar, ?finding=<id> selecciona y centra un hallazgo, ?task=<id> muestra
- * la ubicación de una tarea y ?layer=<id> abre el nivel de una capa.
+ * la ubicación de una tarea, ?layer=<id> abre el nivel de una capa, ?vista=3d
+ * abre la vista 3D y ?calor=1 enciende el mapa de calor de hallazgos.
  *
  * En escritorio el panel va a la derecha; en el celular es una hoja inferior.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
+import dynamic from "next/dynamic"
 import { toast } from "sonner"
 import {
+  Box,
   ChevronUp,
+  Flame,
   Hand,
   Layers,
   Loader2,
+  Map as MapIcon,
   MapPinned,
   MapPinPlus,
   PenLine,
@@ -38,6 +43,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { clamp01, toLevelMeters } from "@/lib/obra/geometry"
+import { countHeatFindings, DEFAULT_HEAT_FILTER, type HeatFilter } from "@/lib/obra/heatmap"
 import { todayISO } from "@/lib/obra/metrics"
 import { can } from "@/lib/obra/permissions"
 import {
@@ -55,6 +61,7 @@ import { cn } from "@/lib/utils"
 import { SeverityBadge } from "./badges"
 import { ElementDrawToolbar, newElementDraft, SelectedElementCard, type ElementDraftState } from "./element-tools"
 import { FindingContextPanel, FINDING_STATUS_LABELS, useFindingContext } from "./finding-context-panel"
+import { HeatmapCard, useHeatOverlay } from "./heatmap-overlay"
 import { LayerFrameDialog } from "./layer-frame-dialog"
 import { LayerPanel } from "./layer-panel"
 import { LayerUploadDialog } from "./layer-upload-dialog"
@@ -76,11 +83,26 @@ import { ReportFindingDialog, type ReportFindingResult } from "./report-finding-
 import { callAction, TimeAgo } from "./task-card"
 
 type PanelTab = "capas" | "hallazgos" | "detalle"
+export type PlanView = "2d" | "3d"
 type UnpinnedFinding = { id: number; title: string; severity: Severity; status: string; created_at: string }
 
 const EMPTY_LAYERS: PlanLayer[] = []
 const EMPTY_ELEMENTS: PlanElement[] = []
 const SEVERITY_RANK: Record<Severity, number> = { critical: 3, high: 2, medium: 1, low: 0 }
+
+// La vista 3D (three.js) se descarga solo al abrirla y nunca se renderiza en el servidor.
+const Plan3D = dynamic(() => import("./plan-3d").then((m) => m.Plan3D), {
+  ssr: false,
+  loading: () => (
+    <div
+      className="flex h-full w-full items-center justify-center gap-2 rounded-[14px] border border-border bg-[#fbfaf6] text-sm text-muted-foreground dark:bg-[#1a160f]"
+      role="status"
+    >
+      <Loader2 className="h-5 w-5 animate-spin" aria-hidden />
+      Cargando la vista 3D…
+    </div>
+  ),
+})
 
 // ---------------------------------------------------------------------------
 // Utilidades
@@ -133,6 +155,21 @@ function syncFindingInUrl(findingId: number | null) {
   }
 }
 
+/** Guarda ?vista=3d y ?calor=1 en la URL (para recargar o compartir la misma vista). */
+function syncViewInUrl(view: PlanView, heat: boolean) {
+  if (typeof window === "undefined") return
+  try {
+    const url = new URL(window.location.href)
+    if (view === "3d") url.searchParams.set("vista", "3d")
+    else url.searchParams.delete("vista")
+    if (heat) url.searchParams.set("calor", "1")
+    else url.searchParams.delete("calor")
+    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`)
+  } catch {
+    // Sin acceso a la URL la vista sigue funcionando igual.
+  }
+}
+
 function pinMeters(pin: Pick<FindingPin, "layer_id" | "x" | "y">, layers: PlanLayer[]): Vec2 | null {
   const layer = layers.find((l) => l.id === pin.layer_id)
   return layer ? toLevelMeters({ x: pin.x, y: pin.y }, layerFrameOf(layer)) : null
@@ -154,6 +191,10 @@ export type PlanWorkspaceProps = {
   initialFindingId?: number | null
   initialTaskId?: number | null
   initialLayerId?: number | null
+  /** Vista inicial del plano (?vista=3d). */
+  initialView?: PlanView
+  /** Mapa de calor encendido al entrar (?calor=1). */
+  initialHeat?: boolean
   /** ¿Hay subida directa de láminas a Supabase Storage? (si no, el diálogo las reduce al elegirlas). */
   directUpload?: boolean
 }
@@ -168,6 +209,8 @@ export function PlanWorkspace({
   initialFindingId = null,
   initialTaskId = null,
   initialLayerId = null,
+  initialView = "2d",
+  initialHeat = false,
   directUpload = true,
 }: PlanWorkspaceProps) {
   const today = todayProp ?? todayISO()
@@ -199,6 +242,10 @@ export function PlanWorkspace({
   const [showPins, setShowPins] = useState(true)
   const [showLabels, setShowLabels] = useState(true)
   const [allLevelsFindings, setAllLevelsFindings] = useState(false)
+  const [showHeat, setShowHeat] = useState(initialHeat)
+  const [view, setView] = useState<PlanView>(initialView)
+  const [allLevels3d, setAllLevels3d] = useState(false)
+  const [heatFilter, setHeatFilter] = useState<HeatFilter>(DEFAULT_HEAT_FILTER)
   const [mode, setMode] = useState<PlanMode>("navegar")
   const canvasWrapRef = useRef<HTMLDivElement>(null)
   const [selectedFindingId, setSelectedFindingId] = useState<number | null>(null)
@@ -406,6 +453,15 @@ export function PlanWorkspace({
     return m
   }, [elementsByLevel])
   const levelPins = useMemo(() => pins.filter((p) => p.level === level), [pins, level])
+  // El mapa de calor solo tiene sentido para quien ve todos los hallazgos (no solo los propios).
+  const heatAvailable = canViewFindings && pins.length > 0
+  const heatOn = showHeat && heatAvailable
+  const heat = useHeatOverlay({ enabled: heatOn && view === "2d", pins, layers: layersList, level, filter: heatFilter, today })
+  const heat3dCount = useMemo(
+    () => (heatOn && view === "3d" ? countHeatFindings(pins, heatFilter, today, allLevels3d ? null : level) : 0),
+    [heatOn, view, pins, heatFilter, today, allLevels3d, level],
+  )
+  const needLevels = useCallback((lvls: number[]) => lvls.forEach((l) => void loadLevel(l)), [loadLevel])
   const selectedPin = pins.find((p) => p.finding_id === selectedFindingId) ?? null
   const selectedElement = selectedElementId != null ? elementIndex.get(selectedElementId) ?? null : null
   const selectedElementLayer = selectedElement ? layersList.find((l) => l.id === selectedElement.layer_id) ?? null : null
@@ -470,12 +526,28 @@ export function PlanWorkspace({
     }
     if (m === "reportar" && !canReport) return
     if (m === "dibujar" && !canManagePlans) return
+    // Reportar y dibujar se hacen sobre el plano 2D.
+    if (view === "3d") changeView("2d")
     setPlacing(null)
     setReportPoint(null)
     setSelectedElementId(null)
     setDraft(m === "dibujar" ? newElementDraft(activeLayer) : null)
     setMode(m)
     if (!isDesktop) setSheetOpen(false)
+  }
+
+  function changeView(v: PlanView) {
+    if (v === view) return
+    if (v === "3d" && mode !== "navegar") exitMode()
+    setView(v)
+    setSelectedElementId(null)
+    syncViewInUrl(v, heatOn)
+  }
+
+  function toggleHeat() {
+    const next = !showHeat
+    setShowHeat(next)
+    syncViewInUrl(view, next && heatAvailable)
   }
 
   function changeActiveLayer(id: number) {
@@ -560,6 +632,7 @@ export function PlanWorkspace({
     }
     setDraft(null)
     setSelectedElementId(null)
+    if (view === "3d") changeView("2d")
     setPlacing({ id: f.id, title: f.title })
     setMode("reportar")
     if (!isDesktop) setSheetOpen(false)
@@ -812,6 +885,33 @@ export function PlanWorkspace({
             </SelectContent>
           </Select>
         </div>
+        <div role="radiogroup" aria-label="Vista del plano" className="flex rounded-[12px] bg-secondary p-1">
+          {(
+            [
+              ["2d", "Plano 2D", "2D", MapIcon],
+              ["3d", "Vista 3D", "3D", Box],
+            ] as const
+          ).map(([value, label, short, Icon]) => {
+            const on = view === value
+            return (
+              <button
+                key={value}
+                type="button"
+                role="radio"
+                aria-checked={on}
+                aria-label={label}
+                onClick={() => changeView(value)}
+                className={cn(
+                  "inline-flex min-h-10 items-center gap-1.5 rounded-[9px] px-3 text-[13px] font-medium outline-none transition-colors focus-visible:ring-[3px] focus-visible:ring-ring/50",
+                  on ? "bg-card shadow-sm" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <Icon className="h-4 w-4" aria-hidden />
+                {short}
+              </button>
+            )
+          })}
+        </div>
         {visibleModes.length > 1 ? (
           <div role="radiogroup" aria-label="Qué hacer en el plano" className="flex rounded-[12px] bg-secondary p-1">
             {visibleModes.map((m) => {
@@ -839,6 +939,22 @@ export function PlanWorkspace({
               )
             })}
           </div>
+        ) : null}
+        {heatAvailable ? (
+          <button
+            type="button"
+            aria-pressed={heatOn}
+            onClick={toggleHeat}
+            className={cn(
+              "inline-flex min-h-10 items-center gap-1.5 rounded-[12px] border px-3 text-[13px] font-medium outline-none transition-colors focus-visible:ring-[3px] focus-visible:ring-ring/50",
+              heatOn
+                ? "border-[#dc2626]/50 bg-[#dc2626]/10 text-foreground"
+                : "border-border bg-card text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <Flame className={cn("h-4 w-4", heatOn && "text-[#dc2626]")} aria-hidden />
+            Mapa de calor
+          </button>
         ) : null}
         {canManagePlans ? (
           <Button type="button" variant="outline" className="h-10 rounded-[10px] lg:ml-auto" onClick={() => setUploadOpen(true)}>
@@ -911,63 +1027,105 @@ export function PlanWorkspace({
             ref={canvasWrapRef}
             className="relative h-[58dvh] min-h-[340px] scroll-mt-2 lg:h-[calc(100dvh-240px)] lg:min-h-[520px]"
           >
-            <PlanCanvas
-              layers={visibleLayers}
-              elements={levelElements}
-              frameLayers={layersList}
-              layerOpacity={opacity}
-              activeLayerId={activeLayer?.id ?? null}
-              pins={levelPins}
-              showPins={showPins}
-              showLabels={showLabels}
-              selectedFindingId={selectedFindingId}
-              correlations={selectedPin && selectedPin.level === level ? correlations : null}
-              elementIndex={elementIndex}
-              selectedElementId={selectedElementId}
-              draft={canvasDraft}
-              marker={marker}
-              mode={mode}
-              focus={focus}
-              fitKey={level ?? "sin-nivel"}
-              onPlanClick={handlePlanClick}
-              onPlanDoubleClick={() => {
-                if (mode === "dibujar") setFinishSignal((n) => n + 1)
-              }}
-              onSelectFinding={(id) => selectFinding(id, false)}
-              onSelectElement={setSelectedElementId}
-              controlsBottomOffset={isDesktop ? 0 : MOBILE_SHEET_PX}
-              ariaLabel={`Plano de ${currentLevelText}: ${visibleLayers.length} capa${visibleLayers.length === 1 ? "" : "s"} visible${visibleLayers.length === 1 ? "" : "s"} y ${levelPins.length} hallazgo${levelPins.length === 1 ? "" : "s"}`}
-            >
-              {visibleLayers.length === 0 ? (
-                <p className="pointer-events-none absolute inset-x-3 top-3 rounded-[10px] bg-card/95 px-3 py-2 text-center text-[13px] text-muted-foreground shadow-sm">
-                  Todas las capas de este nivel están ocultas. Actívalas en la pestaña Capas.
-                </p>
-              ) : null}
-              {level != null && loadingLevels.includes(level) ? (
-                <p
-                  className="pointer-events-none absolute right-3 top-3 flex items-center gap-1.5 rounded-full bg-card/95 px-2.5 py-1 text-[12px] text-muted-foreground shadow-sm"
-                  role="status"
-                >
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
-                  Cargando elementos…
-                </p>
-              ) : null}
-              {selectedElement ? (
-                <SelectedElementCard
-                  key={selectedElement.id}
-                  element={selectedElement}
-                  layer={selectedElementLayer}
-                  canManage={canManagePlans}
-                  onClose={() => setSelectedElementId(null)}
-                  onUpdated={() => afterElementsChanged(selectedElement.layer_id)}
-                  onDeleted={(_id, layerId) => {
-                    setSelectedElementId(null)
-                    afterElementsChanged(layerId)
-                  }}
-                  className="absolute left-3 top-3 z-10 w-[min(320px,calc(100%-24px))]"
-                />
-              ) : null}
-            </PlanCanvas>
+            {view === "3d" ? (
+              <Plan3D
+                layers={layersList}
+                elementsByLevel={elementsByLevel}
+                pins={pins}
+                level={level}
+                allLevels={allLevels3d}
+                onAllLevelsChange={setAllLevels3d}
+                hiddenLayerIds={hiddenLayerIds}
+                hiddenDisciplines={hiddenDisciplines}
+                showPins={showPins}
+                selectedFindingId={selectedFindingId}
+                heat={heatOn ? { filter: heatFilter, today } : null}
+                onSelectFinding={(id) => selectFinding(id, false)}
+                onNeedLevels={needLevels}
+                controlsBottomOffset={isDesktop ? 0 : MOBILE_SHEET_PX}
+                ariaLabel={`Vista 3D de ${allLevels3d ? "todos los niveles" : currentLevelText}`}
+                overlayEnd={
+                  heatOn ? (
+                    <HeatmapCard
+                      filter={heatFilter}
+                      onFilterChange={setHeatFilter}
+                      count={heat3dCount}
+                      scopeText={allLevels3d ? "en todos los niveles" : "en este nivel"}
+                      pins={pins}
+                    />
+                  ) : null
+                }
+              />
+            ) : (
+              <PlanCanvas
+                layers={visibleLayers}
+                elements={levelElements}
+                frameLayers={layersList}
+                layerOpacity={opacity}
+                activeLayerId={activeLayer?.id ?? null}
+                pins={levelPins}
+                showPins={showPins}
+                showLabels={showLabels}
+                heatOverlay={heat.overlay}
+                selectedFindingId={selectedFindingId}
+                correlations={selectedPin && selectedPin.level === level ? correlations : null}
+                elementIndex={elementIndex}
+                selectedElementId={selectedElementId}
+                draft={canvasDraft}
+                marker={marker}
+                mode={mode}
+                focus={focus}
+                fitKey={level ?? "sin-nivel"}
+                onPlanClick={handlePlanClick}
+                onPlanDoubleClick={() => {
+                  if (mode === "dibujar") setFinishSignal((n) => n + 1)
+                }}
+                onSelectFinding={(id) => selectFinding(id, false)}
+                onSelectElement={setSelectedElementId}
+                controlsBottomOffset={isDesktop ? 0 : MOBILE_SHEET_PX}
+                ariaLabel={`Plano de ${currentLevelText}: ${visibleLayers.length} capa${visibleLayers.length === 1 ? "" : "s"} visible${visibleLayers.length === 1 ? "" : "s"} y ${levelPins.length} hallazgo${levelPins.length === 1 ? "" : "s"}${heatOn ? `, con mapa de calor de ${heat.count} hallazgo${heat.count === 1 ? "" : "s"}` : ""}`}
+              >
+                {visibleLayers.length === 0 ? (
+                  <p className="pointer-events-none absolute inset-x-3 top-3 rounded-[10px] bg-card/95 px-3 py-2 text-center text-[13px] text-muted-foreground shadow-sm">
+                    Todas las capas de este nivel están ocultas. Actívalas en la pestaña Capas.
+                  </p>
+                ) : null}
+                {heatOn ? (
+                  <HeatmapCard
+                    filter={heatFilter}
+                    onFilterChange={setHeatFilter}
+                    count={heat.count}
+                    scopeText="en este nivel"
+                    pins={pins}
+                    className="absolute right-3 top-3 z-10 w-[min(280px,calc(100%-24px))]"
+                  />
+                ) : null}
+                {level != null && loadingLevels.includes(level) ? (
+                  <p
+                    className="pointer-events-none absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-card/95 px-2.5 py-1 text-[12px] text-muted-foreground shadow-sm"
+                    role="status"
+                  >
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                    Cargando elementos…
+                  </p>
+                ) : null}
+                {selectedElement ? (
+                  <SelectedElementCard
+                    key={selectedElement.id}
+                    element={selectedElement}
+                    layer={selectedElementLayer}
+                    canManage={canManagePlans}
+                    onClose={() => setSelectedElementId(null)}
+                    onUpdated={() => afterElementsChanged(selectedElement.layer_id)}
+                    onDeleted={(_id, layerId) => {
+                      setSelectedElementId(null)
+                      afterElementsChanged(layerId)
+                    }}
+                    className="absolute left-3 top-3 z-10 w-[min(320px,calc(100%-24px))]"
+                  />
+                ) : null}
+              </PlanCanvas>
+            )}
           </div>
           <Legend layers={visibleLayers} />
         </div>

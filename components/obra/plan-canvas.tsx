@@ -481,6 +481,8 @@ export type PlanCanvasProps = {
   fitKey?: string | number
   showLabels?: boolean
   showPins?: boolean
+  /** Mapa de calor de hallazgos (imagen en metros del nivel), sobre las capas y bajo los pines. */
+  heatOverlay?: { href: string; x: number; y: number; width: number; height: number } | null
   /** false = solo vista (sin seleccionar elementos ni pines). */
   selectable?: boolean
   /** Marca el contorno de la capa activa (por defecto solo en los modos reportar y dibujar). */
@@ -519,6 +521,7 @@ export function PlanCanvas({
   fitKey,
   showLabels = true,
   showPins = true,
+  heatOverlay = null,
   selectable = true,
   outlineActive,
   ariaLabel = "Plano de la obra",
@@ -970,6 +973,18 @@ export function PlanCanvas({
                   selectable={selectable && mode === "navegar"}
                 />
               ))}
+              {heatOverlay ? (
+                <image
+                  href={heatOverlay.href}
+                  x={heatOverlay.x}
+                  y={heatOverlay.y}
+                  width={heatOverlay.width}
+                  height={heatOverlay.height}
+                  preserveAspectRatio="none"
+                  pointerEvents="none"
+                  data-heatmap=""
+                />
+              ) : null}
             </g>
 
             {/* Correlaciones del hallazgo seleccionado: elemento resaltado + línea con distancia */}

@@ -401,7 +401,8 @@ Segunda ronda (cierre de pendientes de la fase 1):
 | 1 | Roles y equipo, planos por especialidad (imagen/PDF/DXF), elementos, hallazgos en plano, motor de correlación, sugerencias con aprobación, tareas, revisiones, auditoría, dashboards por rol, API móvil de tareas, correcciones de seguridad | **Hecho** |
 | 1.1 | Pendientes de la fase 1: invitaciones con enlace (y página `/invitacion`), retorno seguro tras login, desasignar tareas al quitar miembros, subida directa de planos grandes a Storage con URL firmada, origen `reglas` en tareas, contadores de aprobaciones por permiso, seed con sugerencias pendientes, build con verificación de tipos (`npm run typecheck`), lista blanca de configuración, proveedores de IA alineados con `ai` 5 | **Hecho** |
 | 2 | Abrir módulos heredados (documentos, personal, checklists) a los miembros según rol; notificaciones por correo/push de aprobaciones y tareas | Pendiente |
-| 3 | Vista 3D por niveles (react-three/fiber ya instalado) con capas apiladas; cortes por eje | Pendiente |
+| 3 | Vista 3D por niveles con capas apiladas (muros, estructura y redes a su altura, rayos X, «solo muros», pines de hallazgos) y mapa de calor de hallazgos en 2D y 3D con filtros por estado, período y categoría | **Hecho** |
+| 3.1 | Cortes por eje en 3D; lámina de imagen como textura del piso; alturas reales por elemento (cota de clave/radier) | Pendiente |
 | 4 | IA proactiva: comparar fotos sucesivas del mismo pin (evolución de grieta), predicción de vencimientos y riesgos por cuadrilla, siempre como sugerencias | Pendiente |
 | 5 | Offline completo en la app de terreno (IndexedDB) para reportar hallazgos sin señal | Pendiente |
 

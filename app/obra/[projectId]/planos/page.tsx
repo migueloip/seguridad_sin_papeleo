@@ -25,7 +25,8 @@ function idParam(v: string | string[] | undefined): number | null {
 
 /**
  * Planos de la obra: visor multi-capa con hallazgos, su contexto y las
- * sugerencias. Parámetros: ?reportar=1, ?finding=<id>, ?task=<id>, ?layer=<id>.
+ * sugerencias. Parámetros: ?reportar=1, ?finding=<id>, ?task=<id>, ?layer=<id>,
+ * ?vista=3d (abre la vista 3D) y ?calor=1 (enciende el mapa de calor).
  */
 export default async function ObraPlanosPage({
   params,
@@ -45,6 +46,7 @@ export default async function ObraPlanosPage({
 
   const sp = await searchParams
   const reportar = first(sp.reportar)
+  const calor = first(sp.calor)
   const pending = await countObraPendingApprovals(id)
   const pendingApprovals = pending.ok ? pending.data : 0
 
@@ -66,6 +68,8 @@ export default async function ObraPlanosPage({
         initialFindingId={idParam(sp.finding)}
         initialTaskId={idParam(sp.task)}
         initialLayerId={idParam(sp.layer)}
+        initialView={first(sp.vista) === "3d" ? "3d" : "2d"}
+        initialHeat={calor === "1" || calor === "true"}
         directUpload={isSupabaseStorageEnabled()}
       />
     </DashboardLayout>
